@@ -1,0 +1,21 @@
+name: wcrp-cmip6-tests
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - numpy
+  - setuptools
+  - xarray
+  - cf_xarray
+  - cftime
+  - netCDF4
+  - cdo
+  - python-cdo
+  - pooch
+  - compliance-checker>=5.1.2
+# Fot testing
+  - pytest
+  - pytest-cov
+  - pytest-env
+

@@ -1,0 +1,40 @@
+
+[build-system]
+requires = ["setuptools>=42", "wheel", "setuptools_scm[toml]>=3.4"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wcrp_plugins"
+description = "This IOO Compliance-Checker plugins checks compliance with WCRP Projects specifications "
+readme = "README.md"
+keywords = ["compliance checker", "plugin", "wcrp", "cmip6"]
+license = {file = "LICENSE"}
+authors = [
+  { name = "Ayoub Nachite", email = "anachite@ipsl.fr" },
+  { name = "Martin Schupfner", email = "schupfner@dkrz.de" },
+  { name = "Javier Diez-Sierra", email = "javier.diez@unican.es" },
+  { name = "GHAZALI Iliana", email = "liana.ghazali@meteo.fr" },
+  { name = "Joakim Low", email = "joakim.low@smhi.se" }
+]
+maintainers = [{name = "Ayoub Nachite", email = "anachite@ipsl.fr"}]
+requires-python = ">=3.10"
+dependencies = [
+  "compliance-checker>=5.1.2",
+  "netCDF4",
+  "xarray",
+  "pandas",
+  "cftime",
+  "toml"
+]
+dynamic = ["version"]
+
+
+entry-points."compliance_checker.suites"."plugin_cmip6" = "wcrp_plugins.wcrp_cmip6.wcrp_cmip6:Cmip6ProjectCheck"
+
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
+write_to = "wcrp_plugins/_version.py"
+
+
+

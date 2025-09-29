@@ -1,0 +1,283 @@
+# ==============================================================================
+# ESGF-QC CMIP6 Configuration FILE 
+# ==============================================================================
+project_name = "wcrp_cmip6"
+project_version = "1.0"
+
+#------------------------------------------------------------------------------
+# DRS Checks
+# ------------------------------------------------------------------------------
+
+[drs_checks]
+severity = "H"
+
+[drs_consistency_checks]
+severity = "H"
+
+#------------------------------------------------------------------------------
+# Global Attributes to check 
+# This section lists required  NetCDF global attributes for CMIP6 QC.
+# Each entry defines:
+#   - severity: "H" (High) (Mandatory) , "M" (Medium) (Warning), or "L" (Low) (Optional) priority
+#   - expected_type: expected value type ("str", "int", "float")
+# The 'constraint' key provides intelligent control over value validation:
+#   - If 'constraint' is MISSING: A controlled vocabulary (ESG-VOC) check is performed by default (ATTR004).
+#   - If 'constraint' HAS A VALUE (e.g., ".*@.*"): A regular expression pattern match is performed instead (ATTR005).
+#   - If 'constraint' is PRESENT but EMPTY (e.g., constraint = ""): All value checks (vocabulary and pattern) are DISABLED for that attribute.
+# ------------------------------------------------------------------------------
+
+[global_attributes.activity_id]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.creation_date]
+severity = "M"
+expected_type = "str"
+
+[global_attributes.data_specs_version]
+severity = "M"
+expected_type = "str"
+
+[global_attributes.description]
+severity = "M"
+expected_type = "str"
+constraint = " "
+[global_attributes.experiment_id]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.experiment]
+severity = "M"
+expected_type = "str"
+constraint = " "
+[global_attributes.frequency]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.further_info_url]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.grid_label]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.grid]
+severity = "M"
+expected_type = "str"
+constraint = " "  
+
+[global_attributes.institution_id]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.institution]
+severity = "H"
+expected_type = "str"
+constraint = " " 
+
+[global_attributes.license]
+severity = "H"
+expected_type = "str"
+constraint = " " 
+[global_attributes.nominal_resolution]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.initialization_index]
+severity = "H"
+expected_type = "int"
+
+[global_attributes.mip_era]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.source_id]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.table_id]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.tracking_id]
+severity = "L"
+expected_type = "str"
+
+[global_attributes.variable_id]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.variant_label]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.product]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.branch_method]
+severity = "M"
+expected_type = "str"
+constraint = " " 
+
+[global_attributes.branch_time]
+severity = "M"
+expected_type = "float"
+constraint = " " 
+
+[global_attributes.branch_time_in_parent]
+severity = "M"
+expected_type = "float"
+constraint = " " 
+[global_attributes.branch_time_in_child]
+severity = "M"
+expected_type = "float"
+constraint = " " 
+[global_attributes.physics_index]
+severity = "H"
+expected_type = "int"
+
+[global_attributes.realm]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.sub_experiment_id]
+severity = "H"
+expected_type = "str"
+
+[global_attributes.sub_experiment]
+severity = "M"
+expected_type = "str"
+constraint = " " 
+[global_attributes.parent_activity_id]
+severity = "H"
+expected_type = "str"
+constraint = " " 
+
+[global_attributes.Conventions]
+severity = "H"
+expected_type = "str"
+
+
+[global_attributes.contact]
+severity = "M"
+expected_type = "str"
+constraint = ".*@.*"
+
+[global_attributes.realization_index]
+severity = "H"
+expected_type = "int"
+
+[global_attributes.forcing_index]
+severity = "H"
+expected_type = "int"
+
+[global_attributes.c3s_disclaimer]
+severity = "M"
+expected_type = "str"
+constraint = " " 
+
+[global_attributes.source_type]
+severity = "M"
+expected_type = "str"
+
+[global_attributes.comment]
+severity = "L"
+expected_type = "str"
+constraint = " " 
+# ==============================================================================
+# == Checks Variable registry
+# ==============================================================================
+#To activate Variable regisrty checks
+[variable_registry_checks]
+severity = "H"
+
+# ==============================================================================
+# == Consistency Checks
+# ==============================================================================
+
+[consistency_checks]
+  [consistency_checks.variant_label]
+  severity = "H"
+  [consistency_checks.filename_vs_attributes]
+  severity = "H"
+  [consistency_checks.experiment_details]
+  severity = "H"
+  
+  [consistency_checks.institution_details]
+  severity = "H"
+
+  [consistency_checks.source_details]
+  severity = "H"
+
+# Check frequency and table_id consistency via tha mapping below
+[freq_table_id_consistency_checks]
+severity = "H"
+
+
+# ==============================================================================
+# == Mappings for frequency/table_id Consistency Checks
+# ==============================================================================
+[frequency_table_id_mapping]
+AERday = ["day"]
+AERhr = ["1hr"]
+AERmon = ["mon"]
+AERmonZ = ["mon"]
+Aclim = ["monClim"]
+Amon = ["mon", "monC", "monClim"]
+AmonExtras = ["mon"]
+CF3hr = ["3hrPt"]
+CFday = ["day"]
+CFmon = ["mon"]
+CFsubhr = ["subhrPt"]
+cf3hr = ["3hr"]
+cfDay = ["day"]
+cfMon = ["mon"]
+cfOff = ["mon"]
+cfSites = ["3hr", "6hr", "subhr"]
+day = ["day"]
+dayExtras = ["day"]
+E1hr = ["1hr", "1hrPt"]
+E1hrClimMon = ["1hrCM"]
+E3hr = ["3hr"]
+E3hrPt = ["3hrPt"]
+E6hrZ = ["6hr", "6hrPt"]
+Eday = ["day"]
+EdayZ = ["day"]
+Emon = ["mon"]
+EmonZ = ["mon"]
+Esubhr = ["subhrPt"]
+Eyr = ["yr", "yrPt"]
+HOMAL3hrPt = ["3hrPt", "3hr"]
+HOMALmon = ["mon"]
+HOMEPmon = ["mon"]
+HOMOImon = ["mon"]
+IyrAnt = ["yr"]
+IyrGre = ["yr"]
+ImonAnt = ["mon"]
+ImonGre = ["mon"]
+LIclim = ["monClim"]
+LImon = ["mon"]
+Lclim = ["monClim"]
+Lmon = ["mon"]
+Oclim = ["monClim", "monC"]
+Oday = ["day"]
+Odec = ["dec"]
+OIclim = ["monClim"]
+OImon = ["mon"]
+Omon = ["mon"]
+OmonExtras = ["mon"]
+Oyr = ["yr"]
+OyrExtras = ["yr"]
+SIday = ["day"]
+SImon = ["mon", "monPt"]
+sites = ["subhr"]
+3hr = ["3hr", "3hrPt"]
+3hrCurt = ["3hr"]
+3hrMlev = ["3hr"]
+3hrPlev = ["3hr"]
+3hrSlev = ["3hr"]
+6hrLev = ["6hr", "6hrPt"]
+6hrPlev = ["6hr"]
+6hrPlevPt = ["6hr", "6hrPt"]

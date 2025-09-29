@@ -1,0 +1,2 @@
+[console_scripts]
+esgvoc = esgvoc.cli.main:main
