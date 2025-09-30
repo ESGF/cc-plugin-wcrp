@@ -1,4 +1,3 @@
-
 [build-system]
 requires = ["setuptools>=42", "wheel", "setuptools_scm[toml]>=3.4"]
 build-backend = "setuptools.build_meta"
@@ -28,13 +27,13 @@ dependencies = [
 ]
 dynamic = ["version"]
 
+[project.entry-points."compliance_checker.suites"]
+plugin_cmip6 = "plugins.cmip6.cmip6:Cmip6ProjectCheck"
 
-entry-points."compliance_checker.suites"."plugin_cmip6" = "wcrp_plugins.wcrp_cmip6.wcrp_cmip6:Cmip6ProjectCheck"
-
-
+# -- SECTION CORRIGÉE --
 [tool.setuptools_scm]
 fallback_version = "0.0.0"
-write_to = "wcrp_plugins/_version.py"
+write_to = "plugins/_version.py"
 
-
-
+[tool.setuptools.packages.find]
+include = ["plugins*", "checks*"]

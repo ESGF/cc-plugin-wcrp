@@ -1,0 +1,6 @@
+compliance-checker>=5.1.2
+netCDF4
+xarray
+pandas
+cftime
+toml

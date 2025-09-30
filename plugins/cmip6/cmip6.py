@@ -10,28 +10,27 @@
 # calls a suite of checks developed for quality control
 
 # =============================================================================
-
+from netCDF4 import Dataset
 import os
 import toml
 from compliance_checker.base import BaseCheck, Result, TestCtx
-from ..wcrp_base import WCRPBaseCheck
-from netCDF4 import Dataset
-from ...checks.consistency_checks.check_experiment_consistency import *
-from ...checks.variable_checks.check_variable_existence import check_variable_existence
-from ...checks.variable_checks.check_variable_shape_vs_dimensions import check_variable_shape
-from ...checks.variable_checks.check_bounds_value_consistency import check_bounds_value_consistency
-from ...checks.consistency_checks.check_drs_filename_cv import *
-from ...checks.consistency_checks.check_institution_source_consistency import *
-from ...checks.attribute_checks.check_attribute_suite import check_attribute_suite
-from ...checks.dimension_checks.check_dimension_positive import check_dimension_positive
-from ...checks.dimension_checks.check_dimension_existence import check_dimension_existence
-from ...checks.dimension_checks.check_dimension_size import *
-from ...checks.consistency_checks.check_variant_label_consistency import check_variant_label_consistency
-from ...checks.consistency_checks.check_frequency_table_consistency import check_frequency_table_id_consistency
-from ...checks.consistency_checks.check_drs_consistency import check_attributes_match_directory_structure, check_filename_matches_directory_structure
-from ...checks.consistency_checks.check_attributes_match_filename import check_filename_vs_global_attrs, _parse_filename_components
-from ...checks.time_checks.check_time_bounds import check_time_bounds
-from ...checks.time_checks.check_time_range_vs_filename import *
+from plugins.wcrp_base import WCRPBaseCheck
+from checks.consistency_checks.check_experiment_consistency import *
+from checks.variable_checks.check_variable_existence import check_variable_existence
+from checks.variable_checks.check_variable_shape_vs_dimensions import check_variable_shape
+from checks.variable_checks.check_bounds_value_consistency import check_bounds_value_consistency
+from checks.consistency_checks.check_drs_filename_cv import *
+from checks.consistency_checks.check_institution_source_consistency import *
+from checks.attribute_checks.check_attribute_suite import check_attribute_suite
+from checks.dimension_checks.check_dimension_positive import check_dimension_positive
+from checks.dimension_checks.check_dimension_existence import check_dimension_existence
+from checks.dimension_checks.check_dimension_size import *
+from checks.consistency_checks.check_variant_label_consistency import check_variant_label_consistency
+from checks.consistency_checks.check_frequency_table_consistency import check_frequency_table_id_consistency
+from checks.consistency_checks.check_drs_consistency import check_attributes_match_directory_structure, check_filename_matches_directory_structure
+from checks.consistency_checks.check_attributes_match_filename import check_filename_vs_global_attrs, _parse_filename_components
+from checks.time_checks.check_time_bounds import check_time_bounds
+from checks.time_checks.check_time_range_vs_filename import *
 
 # --- Esgvoc universe import---
 try:
