@@ -239,8 +239,19 @@ def prepare_results(outliers, thresholds, dataset, variable, number_limit=100000
 
 def check_outliers(dataset, thresholds_file='outliers_thresholds.json', severity=BaseCheck.MEDIUM):
     """
-    Check for outliers in a dataset based on predefined thresholds.
-    Uses ExtendedTestCtx to store detailed coordinate-level results.
+    Check for physically impossible outliers in a dataset based on predefined thresholds. 
+    The function reads thresholds from a JSON file, detects outliers in the dataset variable,
+    and logs the coordinates and values of any detected outliers using ExtendedTestCtx.
+
+    Parameters:
+    - dataset (netCDF4.Dataset): The dataset containing the variable to be checked.
+    - thresholds_file (str): Path to a JSON file containing the min and max thresholds for the variable.
+    - severity : The severity level of the check.
+
+    Returns:
+    - TestCtx: An object containing detailed results of the check, including
+      pass/failure status, messages, and coordinates of detected outliers.
+    - file: If outliers are detected, a file is written containing their coordinates and values.
     """
     ctx = ExtendedTestCtx(
         category=severity,

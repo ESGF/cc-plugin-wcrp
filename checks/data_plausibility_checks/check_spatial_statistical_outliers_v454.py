@@ -23,7 +23,6 @@ from checks.data_plausibility_checks.utils.auxiliar import(
     Coordinate,
 )
 
-
 def calculate_iqr(data_slice):
     """Calculate the IQR for a given data slice."""
     data_slice = data_slice.filled(np.nan)
@@ -71,29 +70,24 @@ def calculate_time_series_max_min(dataset, variable):
     return max_time_series, min_time_series
 
 
-
-def collect_all_outlier_coords(values_dict):
-    """
-    Traverse the values dictionary and extract all outlier coordinates.
-    """
-    all_coords = []
-
-    if isinstance(values_dict, dict):
-        for key, val in values_dict.items():
-            if key == 'outlier_coordinates':
-                all_coords.extend(extract_outlier_indices(val))
-            elif isinstance(val, dict):
-                all_coords.extend(collect_all_outlier_coords(val))
-            elif isinstance(val, list):
-                for item in val:
-                    if isinstance(item, dict):
-                        all_coords.extend(collect_all_outlier_coords(item))
-    return all_coords
-
-
-
 def check_spatial_statistical_ouliers(dataset, variable, severity=BaseCheck.MEDIUM, threshold=5, parameter="Z-Score"):
+    """
+    Check for outliers in a dataset based on Z-Score and IQR, logs their coordinates, and records
+    results using ExtendedTestCtx when the condition checked fails
 
+    Parameters:
+    - dataset (netCDF4.Dataset): The dataset containing the values to be checked.
+    - variable (str): The variable to be checked.
+    - parameter (str): The method to use for outlier detection; either "Z-Score" or "IQR".
+    - threshold (float): The Z-Score threshold to consider a value an outlier.
+    - severity: Severity level for the check.
+
+
+    Returns:
+    - TestCtx: An object containing detailed results of the check, including
+      pass/failure status, messages, and coordinates of detected outliers.
+    - file: A file containing the coordinates and values of detected outliers is written when the check condition fails.
+    """
 
     ctx = ExtendedTestCtx(
         category=severity,

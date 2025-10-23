@@ -44,7 +44,9 @@ def check_chunk_size(dataset, severity=BaseCheck.MEDIUM):
     - severity: BaseCheck severity level (default is MEDIUM)
 
     Returns:
-    - TestCtx: A context object with the results of the check.
+    - TestCtx: An object containing detailed results of the check, including
+      pass/failure status, messages, and coordinates of detected outliers.
+    - file: A file containing the coordinates and values of detected outliers is written when the check condition fails.
     """
     ctx = TestCtx(severity)
     variables = []

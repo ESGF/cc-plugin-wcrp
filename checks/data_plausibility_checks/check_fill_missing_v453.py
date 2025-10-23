@@ -77,6 +77,21 @@ def load_value_to_check(var_obj, parameter, ctx):
 def check_fillvalues_timeseries(
     dataset, variable, parameter="FillValue", severity=BaseCheck.MEDIUM
 ):
+    """
+    Check for FillValue or MissingValue in a dataset. First it checks if the value is present, then it checks if the number of the checked value is constant along the time series,
+    logs their coordinates, and records results using ExtendedTestCtx when the condition checked fails.
+    
+    Parameters:
+    - dataset (netCDF4.Dataset): The dataset containing the values to be checked.
+    - variable (str): The variable to be checked.
+    - parameter (str): The parameter to check, either "FillValue" or "MissingValue".
+    - severity : The severity level of the check.
+
+    Returns:
+    - TestCtx: An object containing detailed results of the check, including
+      pass/failure status, messages, and coordinates of detected outliers.
+    - file: A file containing the coordinates and values of detected outliers is written when the check condition fails.
+    """
     ctx = ExtendedTestCtx(
         category=severity,
         description=f"Check for {parameter} in a dataset.",
@@ -88,14 +103,12 @@ def check_fillvalues_timeseries(
 
     check_dims = get_filtered_dimensions(dataset, variable)
     var_obj = dataset.variables[variable]
-
     parameters_func, ctx = load_value_to_check(var_obj, parameter, ctx)
     if parameters_func["val"] is None:
         ctx.add_pass()
         ctx.messages.append(f"{parameter} not found in the variable attributes.")
         return ctx
 
-    label = "fill_missing"
     try:
         # Detect failed coordinates
         if len(check_dims) > 1:
@@ -150,7 +163,6 @@ def check_fillvalues_timeseries(
                                 name=",".join(check_dims),
                                 indices=[coord],
                                 values=[value],)
-
         message = (
             f"{parameter} detected in the dataset. "
             f"{parameter} are not constant. "

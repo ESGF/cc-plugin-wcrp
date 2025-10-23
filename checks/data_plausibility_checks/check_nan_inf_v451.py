@@ -37,8 +37,21 @@ def get_inf_coordinates(data_slice):
 
 def check_nan_inf(dataset, variable, parameter="NaN", severity=BaseCheck.MEDIUM):
     """
-    Check for NaN or Inf values in a dataset.
-    Uses ExtendedTestCtx to store detailed results.
+    Check for NaN or Inf values in a dataset. The function inspects the specified variable
+    for the presence of either NaN or Inf values, logs their coordinates, and records
+    results using ExtendedTestCtx when the condition checked fails. Special attention is given to _FillValue attributes
+    that may be NaN.
+    
+    Parameters:
+    - dataset (netCDF4.Dataset): The dataset containing the variable to be checked.
+    - variable (str): The variable to be checked.
+    - parameter (str): The type of value to check for; either "NaN" or "Inf".
+    - severity : The severity level of the check.
+
+    Returns:
+    - TestCtx: An object containing detailed results of the check, including
+      pass/failure status, messages, and coordinates of detected outliers.
+    - file: A file containing the coordinates and values of detected outliers is written when the check condition fails.
     """
     ctx = ExtendedTestCtx(
         category=severity,
