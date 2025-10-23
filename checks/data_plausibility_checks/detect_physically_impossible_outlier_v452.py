@@ -13,8 +13,8 @@ import os
 import json
 
 
-from compliance_checker.checks.data_plausibility_checks.utils.dimensions import get_dimension_info
-from compliance_checker.checks.data_plausibility_checks.utils.auxiliar import ExtendedTestCtx, dump_data_file_extended,Coordinate
+from checks.data_plausibility_checks.utils.dimensions import get_dimension_info
+from checks.data_plausibility_checks.utils.auxiliar import ExtendedTestCtx, dump_data_file_extended,Coordinate
 
 def get_thresholds_variable(dataset, thresholds_file):
     """

@@ -11,7 +11,7 @@ from compliance_checker.base import BaseCheck, TestCtx
 import numpy as np
 
 
-from compliance_checker.checks.data_plausibility_checks.utils.auxiliar import (
+from checks.data_plausibility_checks.utils.auxiliar import (
     ExtendedTestCtx,
     Coordinate,
     dump_data_file_extended

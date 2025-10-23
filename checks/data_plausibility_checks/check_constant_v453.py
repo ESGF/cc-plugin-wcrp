@@ -10,9 +10,9 @@ Intended to be included in the WCRP plugins.
 from compliance_checker.base import BaseCheck, TestCtx
 import numpy as np
 
-from compliance_checker.checks.data_plausibility_checks.utils.dimensions import get_filtered_dimensions
-from compliance_checker.checks.data_plausibility_checks.utils.data import check_variable_conditions
-from compliance_checker.checks.data_plausibility_checks.utils.auxiliar import (
+from checks.data_plausibility_checks.utils.dimensions import get_filtered_dimensions
+from checks.data_plausibility_checks.utils.data import check_variable_conditions
+from checks.data_plausibility_checks.utils.auxiliar import (
                         ExtendedTestCtx,
                         dump_data_file_extended,
                         Coordinate)

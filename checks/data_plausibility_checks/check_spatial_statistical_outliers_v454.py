@@ -8,16 +8,16 @@ Check for outliers in the specified netCDF dataset based on the Z-Score along sp
 from compliance_checker.base import BaseCheck, TestCtx
 import numpy as np
 
-from compliance_checker.checks.data_plausibility_checks.utils.dimensions import (
+from checks.data_plausibility_checks.utils.dimensions import (
     get_filtered_dimensions,
     get_dimension_indices,
     get_var_dimensions,
 )
-from compliance_checker.checks.data_plausibility_checks.utils.data import (
+from checks.data_plausibility_checks.utils.data import (
     check_variable_conditions,
     check_variable_conditions_expanded
 )
-from compliance_checker.checks.data_plausibility_checks.utils.auxiliar import(
+from checks.data_plausibility_checks.utils.auxiliar import(
     ExtendedTestCtx,
     dump_data_file_extended,
     Coordinate,

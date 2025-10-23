@@ -8,7 +8,7 @@ Intended to be included in the WCRP plugins.
 """
 
 from compliance_checker.base import BaseCheck, TestCtx
-from compliance_checker.checks.data_plausibility_checks.utils.dimensions import get_filtered_dimensions, get_ds_dimensions
+from checks.data_plausibility_checks.utils.dimensions import get_filtered_dimensions, get_ds_dimensions
 
 def chunk_sizes_conditions(ds, variable='time'):
     """

@@ -1,6 +1,6 @@
 import numpy as np
 import itertools
-from compliance_checker.checks.data_plausibility_checks.utils.dimensions import get_ds_dimensions
+from checks.data_plausibility_checks.utils.dimensions import get_ds_dimensions
 def check_variable_conditions_expanded(
     dataset, variable_name, check_dims, check_func, data=None, parameters=None
 ):

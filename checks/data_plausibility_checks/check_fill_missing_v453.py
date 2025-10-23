@@ -12,9 +12,9 @@ import numpy as np
 import numpy.ma as ma
 
 
-from compliance_checker.checks.data_plausibility_checks.utils.dimensions import get_filtered_dimensions
-from compliance_checker.checks.data_plausibility_checks.utils.data import check_variable_conditions,check_variable_conditions_expanded
-from compliance_checker.checks.data_plausibility_checks.utils.auxiliar import (dump_data_file_extended,
+from checks.data_plausibility_checks.utils.dimensions import get_filtered_dimensions
+from checks.data_plausibility_checks.utils.data import check_variable_conditions,check_variable_conditions_expanded
+from checks.data_plausibility_checks.utils.auxiliar import (dump_data_file_extended,
                             ExtendedTestCtx
                             )
 def detect_changes_in_values(coordinate_values):
