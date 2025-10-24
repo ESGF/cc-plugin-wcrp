@@ -32,14 +32,13 @@ def check_all_constant(data_slice):
 
 def check_constants(dataset, variable, severity=BaseCheck.MEDIUM):
     """
-    Check for nans in a dataset 
+    Check for constant values in 2d slices of the specified variable in the netCDF dataset.
     Parameters:
     - dataset (netCDF4.Dataset): The dataset containing the values to be checked.
     - variable (str): The variable to be checked.
-    - json_file (str): The path to the JSON file containing the thresholds.
     Returns:
-    - TestCtx: An object containing detailed results of the check, including 
-            pass/failure status, messages, and coordinates of detected outliers.
+    - TestCtx: An object containing detailed results of the check, including
+      pass/failure status, messages, and coordinates of detected outliers.
     - file: A file containing the coordinates and values of detected outliers is written when the check condition fails.
     """
     ctx = ExtendedTestCtx(
