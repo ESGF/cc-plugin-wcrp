@@ -9,6 +9,7 @@ Intended to be included in the WCRP plugins.
 
 from compliance_checker.base import BaseCheck, TestCtx
 import numpy as np
+import numpy.ma as ma
 import os
 import json
 
@@ -268,7 +269,8 @@ def check_outliers(dataset, thresholds_file='outliers_thresholds.json', severity
         return ctx
 
     data = dataset.variables[variable][:]
-    data = data.filled(np.nan)
+    if isinstance(data, ma.MaskedArray):
+        data = data.filled(np.nan)
     outliers = detect_outliers(data, thresholds['min'], thresholds['max'])
     try:
         results, check = prepare_results(outliers, thresholds, dataset, variable)

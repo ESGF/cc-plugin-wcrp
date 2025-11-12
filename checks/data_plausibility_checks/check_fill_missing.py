@@ -53,8 +53,11 @@ def check_value(data_slice, parameters):
     val = parameters['val']
     val_name = parameters['name']
     if val_name == 'FillValue' or val_name == 'MissingValue':
-        filled_data = data_slice.filled(fill_value=val)
-    return np.sum(filled_data == val)
+        if isinstance(data_slice, ma.MaskedArray):
+            filled_data = data_slice.filled(fill_value=val)
+            return np.sum(filled_data == val)
+        else:
+            return np.sum(data_slice == val)
 
 def load_value_to_check(var_obj, parameter, ctx):
     # Load the FillValue or MissingValue from the variable attributes

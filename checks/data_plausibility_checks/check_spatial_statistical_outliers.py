@@ -7,6 +7,7 @@ Check for outliers in the specified netCDF dataset based on the Z-Score along sp
 
 from compliance_checker.base import BaseCheck, TestCtx
 import numpy as np
+import numpy.ma as ma
 
 from checks.data_plausibility_checks.utils.dimensions import (
     get_filtered_dimensions,
@@ -25,7 +26,8 @@ from checks.data_plausibility_checks.utils.auxiliar import(
 
 def calculate_iqr(data_slice):
     """Calculate the IQR for a given data slice."""
-    data_slice = data_slice.filled(np.nan)
+    if isinstance(data_slice, ma.MaskedArray):
+        data_slice = data_slice.filled(np.nan)
 
     q1 = np.percentile(data_slice, 25)
     q3 = np.percentile(data_slice, 75)
