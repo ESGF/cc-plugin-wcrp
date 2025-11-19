@@ -118,9 +118,13 @@ class ExtendedTestCtx(TestCtx):
             return "No coordinates stored."
         rows = []
         for coord in self.coordinates:
-            for idx, val in zip(coord.indices, coord.values):
-                rows.append(f"{coord.name}\t{idx}\t{val}")
-        return "Name\tIndex\tValue\n" + "\n".join(rows)
+            for idx, val_score in zip(coord.indices, coord.values):
+                if ',' in val_score:
+                    val, score = val_score.split(',', 1)  # Split on first comma only
+                    rows.append(f"{coord.name}\t{idx}\t{val}\t{score}")
+                else:
+                    rows.append(f"{coord.name}\t{idx}\t{val_score}")
+        return "Name\tIndex\tValue\tScore\n" + "\n".join(rows)
 
     def summarize(self):
         summary = (

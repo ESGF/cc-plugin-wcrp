@@ -72,6 +72,24 @@ def calculate_time_series_max_min(dataset, variable):
     return max_time_series, min_time_series
 
 
+def extract_coordinates_from_indices(flattened,ctx,parameter):
+    coords = [coord for (coord, _, _) in flattened]
+    vals = [val1 for (_, val1, _) in flattened]
+    scores = [score1 for (_, _, score1) in flattened]
+    if coords:
+        detected=True
+    else:
+        detected=False
+    ctx.coordinates=[]
+    for coord,value,score in zip(coords, vals, scores):
+        coord_obj = Coordinate(
+            name=parameter.lower(),                
+            indices=[coord],
+            values=[f"{value},{parameter}:{score}"],
+            result=True
+        )
+        ctx.coordinates.append(coord_obj)
+    return ctx,detected
 def check_spatial_statistical_outliers(dataset, variable, severity=BaseCheck.MEDIUM, threshold=5, parameter="Z-Score"):
     """
     Check for outliers in a dataset based on Z-Score and IQR, logs their coordinates, and records
@@ -102,12 +120,13 @@ def check_spatial_statistical_outliers(dataset, variable, severity=BaseCheck.MED
     # Define condition functions
     def zscore_condition(data_slice):
         zscores = calculate_zscore(data_slice)
-        return is_outlier(zscores, threshold), data_slice, zscores
+        data_mask = is_outlier(zscores, threshold)
+        return data_mask, data_slice, zscores
 
     def iqr_condition(data_slice):
         iqr, q1, q3 = calculate_iqr(data_slice)
-        return is_outlier_iqr(data_slice, iqr, q1, q3, threshold),data_slice, iqr
-    
+        data_mask = is_outlier_iqr(data_slice, iqr, q1, q3, threshold)
+        return data_mask,data_slice, iqr
 
     dim_dict = get_var_dimensions(dataset, variable)
     check_dims = get_filtered_dimensions(dataset, variable)
@@ -141,27 +160,24 @@ def check_spatial_statistical_outliers(dataset, variable, severity=BaseCheck.MED
         flattened_min = [item for d in values_min.values() for v in d.values() for item in v]
         flattened_max = [item for d in values_max.values() for v in d.values() for item in v]
         flattened = flattened_min + flattened_max
-        total_coords = [coord for (coord, _, _) in flattened]
-        vals = [val1 for (_, val1, _) in flattened]
-        scores = [score1 for (_, _, score1) in flattened]
+        ctx, detected = extract_coordinates_from_indices(flattened, ctx, parameter)
     except Exception as e:
         ctx.add_failure(f"Error during outlier detection: {e}")
         return ctx
-    # Save as Coordinate objects in ctx.coordinates
-    for coord,value,score in zip(total_coords, vals, scores):
-        coord_obj = Coordinate(
-            name=parameter.lower(),                
-            indices=[coord],
-            values=[f"{value},{score}"],
-            result=True
-        )
-        ctx.coordinates.append(coord_obj)
 
     # Messages / result
-    if total_coords:
-        ctx.add_failure(f"Outliers detected: {len(total_coords)} points.")
-        dump_data_file_extended(dataset, variable, 'check_spatial_statistical_outliers', ctx, parameter)
-    else:
+    if detected:
+        ctx.add_failure(f"Outliers detected: {len(ctx.coordinates)} points.")
+        ctx_min, detected_min = extract_coordinates_from_indices(flattened_min, ctx, parameter)
+        if detected_min:
+            ctx_min.messages.append(f"Outliers detected in minimum time series: {len(ctx_min.coordinates)} points.")
+            dump_data_file_extended(dataset, variable, 'check_spatial_statistical_outliers_min_series', ctx_min, parameter)
+            ctx.messages.extend(ctx_min.messages)
+        ctx_max, detected_max = extract_coordinates_from_indices(flattened_max, ctx, parameter)
+        if detected_max:
+            ctx.messages.append(f"Outliers detected in maximum time series: {len(ctx_max.coordinates)} points.")
+            dump_data_file_extended(dataset, variable, 'check_spatial_statistical_outliers_max_series', ctx_max, parameter)
+            ctx.messages.extend(ctx_max.messages)
         ctx.messages.append(f"No outliers detected in the dataset based on {parameter}.")
         ctx.add_pass()
 
