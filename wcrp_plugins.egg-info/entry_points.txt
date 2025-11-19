@@ -1,2 +1,0 @@
-[compliance_checker.suites]
-plugin_cmip6 = plugins.cmip6.cmip6:Cmip61ProjectCheck

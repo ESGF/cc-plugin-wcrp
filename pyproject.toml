@@ -3,17 +3,17 @@ requires = ["setuptools>=42", "wheel", "setuptools_scm[toml]>=3.4"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wcrp_plugins"
-description = "This IOO Compliance-Checker plugins checks compliance with WCRP Projects specifications "
+name = "cc-plugin-wcrp"
+description = "This IOOS Compliance-Checker plugins checks compliance with WCRP Projects specifications "
 readme = "README.md"
-keywords = ["compliance checker", "plugin", "wcrp", "cmip6"]
+keywords = ["compliance checker", "plugin", "wcrp", "cmip6", "cordex_cmip6"]
 license = {file = "LICENSE"}
 authors = [
   { name = "Ayoub Nachite", email = "anachite@ipsl.fr" },
   { name = "Martin Schupfner", email = "schupfner@dkrz.de" },
   { name = "Javier Diez-Sierra", email = "javier.diez@unican.es" },
-  { name = "GHAZALI Iliana", email = "liana.ghazali@meteo.fr" },
-  { name = "Joakim Low", email = "joakim.low@smhi.se" }
+  { name = "Rubén García Macho", email = "rubengm@ifca.unican.es" },
+  { name = "Adrian Chantreux", email = "chantreux@ifca.unican.es" }
 ]
 maintainers = [{name = "Ayoub Nachite", email = "anachite@ipsl.fr"}]
 requires-python = ">=3.10"
@@ -23,17 +23,21 @@ dependencies = [
   "xarray",
   "pandas",
   "cftime",
-  "toml"
+  "toml",
+  "cf_xarray",
+  "esgvoc",
+  "pooch"
 ]
 dynamic = ["version"]
 
 [project.entry-points."compliance_checker.suites"]
 plugin_cmip6 = "plugins.cmip6.cmip6:Cmip6ProjectCheck"
+plugin_cc6 = "plugins.cordex_cmip6.cordex_cmip6:CordexCmip6ProjectCheck"
 
-# -- SECTION CORRIGÉE --
 [tool.setuptools_scm]
 fallback_version = "0.0.0"
 write_to = "plugins/_version.py"
+local_scheme = "no-local-version"
 
 [tool.setuptools.packages.find]
 include = ["plugins*", "checks*"]

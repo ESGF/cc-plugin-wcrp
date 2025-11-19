@@ -31,6 +31,13 @@ from checks.consistency_checks.check_drs_consistency import check_attributes_mat
 from checks.consistency_checks.check_attributes_match_filename import check_filename_vs_global_attrs, _parse_filename_components
 from checks.time_checks.check_time_bounds import check_time_bounds
 from checks.time_checks.check_time_range_vs_filename import *
+from checks.data_plausibility_checks.check_nan_inf import check_nan_inf
+from checks.data_plausibility_checks.check_fill_missing import check_fillvalues_timeseries
+from checks.data_plausibility_checks.check_constant import check_constants
+from checks.data_plausibility_checks.detect_physically_impossible_outlier import check_outliers
+from checks.data_plausibility_checks.check_spatial_statistical_outliers import check_spatial_statistical_outliers
+from checks.data_plausibility_checks.check_chunk_size import check_chunk_size
+
 
 # --- Esgvoc universe import---
 try:
@@ -42,8 +49,11 @@ except ImportError:
 
 
 class Cmip6ProjectCheck(WCRPBaseCheck):
-    
-    _cc_spec = "plugin_cmip6"
+    """
+    Class for WCRP CMIP6 project-specific compliance checks.
+    """
+
+    _cc_spec = "wcrp_cmip6"
     _cc_spec_version = "1.0"
     _cc_description = "WCRP Project Checks"
     supported_ds = [Dataset]
@@ -94,7 +104,10 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
         except Exception as e:
             print(f"Error while loading variable mapping: {e}")
             self.variable_mapping = {}
-    
+        
+        
+        if self.consistency_output:
+            self._write_consistency_output()
     def check_Drs_Vocabulary(self, ds):
         
         """
@@ -514,5 +527,123 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                 severity=self.get_severity(check_config.get('severity')),
                 project_id=project_id
             ))
+
+        return results
+
+    def check_Data_Plausibility(self, ds):
+        """
+        Runs all DATAxxx plausibility checks on CMIP6 variables.
+        Each check produces a Result with its own DATA00X identifier.
+        """
+        results = []
+
+        # Load configuration section
+        if "data_plausibility_checks" not in self.config:
+            return results
+
+        config = self.config["data_plausibility_checks"]
+        variable_id = getattr(ds, "variable_id", None)
+
+        # Retrieve the project name defined in TOML (default “CMIP”)
+        project = self.config.get("data_plausibility_checks", {}).get("project", "CMIP")
+
+
+        # === DATA001: NaN check ===
+        if config.get("check_nan", {}).get("enabled", False):
+            ctx = check_nan_inf(
+                dataset=ds,
+                variable=variable_id,
+                parameter=config["check_nan"].get("parameter", "NaN"),
+                severity=self.get_severity(config["check_nan"].get("severity"))
+            )
+            ctx.description = f"[DATA001] Check for NaN values in variable '{variable_id}'"
+            results.append(ctx.to_result())
+
+        # === DATA002: Inf check ===
+        if config.get("check_inf", {}).get("enabled", False):
+            ctx = check_nan_inf(
+                dataset=ds,
+                variable=variable_id,
+                parameter=config["check_inf"].get("parameter", "Inf"),
+                severity=self.get_severity(config["check_inf"].get("severity"))
+            )
+            ctx.description = f"[DATA002] Check for Inf values in variable '{variable_id}'"
+            results.append(ctx.to_result())
+
+        # === DATA003: Fill value check ===
+        if config.get("check_fill", {}).get("enabled", False):
+            ctx = check_fillvalues_timeseries(
+                dataset=ds,
+                variable=variable_id,
+                parameter=config["check_fill"].get("parameter", "FillValue"),
+                severity=self.get_severity(config["check_fill"].get("severity"))
+            )
+            ctx.description = f"[DATA003] FillValue plausibility for '{variable_id}'"
+            results.append(ctx.to_result())
+
+        # === DATA004: Missing value check ===
+        if config.get("check_missing", {}).get("enabled", False):
+            ctx = check_fillvalues_timeseries(
+                dataset=ds,
+                variable=variable_id,
+                parameter=config["check_missing"].get("parameter", "MissingValue"),
+                severity=self.get_severity(config["check_missing"].get("severity"))
+            )
+            ctx.description = f"[DATA004] MissingValue plausibility for '{variable_id}'"
+            results.append(ctx.to_result())
+
+        # === DATA005: Constant value check ===
+        if config.get("check_constant", {}).get("enabled", False):
+            ctx = check_constants(
+                dataset=ds,
+                variable=variable_id,
+                severity=self.get_severity(config["check_constant"].get("severity"))
+            )
+            ctx.description = f"[DATA005] Constant field detection for '{variable_id}'"
+            results.append(ctx.to_result())
+
+        # === DATA006: Physically impossible outlier check ===
+        if config.get("check_physically_impossible_outlier", {}).get("enabled", False):
+            ctx = check_outliers(
+                dataset=ds,
+                thresholds_file='outliers_thresholds.json',
+                severity=self.get_severity(config["check_physically_impossible_outlier"].get("severity"))
+            )
+            ctx.description = f"[DATA006] Physically impossible outlier detection for '{variable_id}'"
+            results.append(ctx.to_result())
+
+        # === DATA007: Spatial statistical outlier check Z-Score===
+        if config.get("check_spatial_statistical_outliers_Z-Score", {}).get("enabled", False):
+            ctx = check_spatial_statistical_outliers(
+                dataset=ds,
+                variable=variable_id,
+                severity=self.get_severity(config["check_spatial_statistical_outliers_Z-Score"].get("severity")),
+                threshold=config["check_spatial_statistical_outliers_Z-Score"].get("threshold", 5),
+                parameter=config["check_spatial_statistical_outliers_Z-Score"].get("method", "Z-Score")
+            )
+            ctx.description = f"[DATA007] Spatial statistical outlier ({ctx.description}) check for '{variable_id}'"
+            results.append(ctx.to_result())
+
+        # === DATA008: Spatial statistical outlier check IQR===
+        if config.get("check_spatial_statistical_outliers_IQR", {}).get("enabled", False):
+            ctx = check_spatial_statistical_outliers(
+                dataset=ds,
+                variable=variable_id,
+                severity=self.get_severity(config["check_spatial_statistical_outliers_IQR"].get("severity")),
+                threshold=config["check_spatial_statistical_outliers_IQR"].get("threshold", 4.5),
+                parameter=config["check_spatial_statistical_outliers_IQR"].get("method", "IQR")
+            )
+            ctx.description = f"[DATA008] Spatial statistical outlier ({ctx.description}) check for '{variable_id}'"
+            results.append(ctx.to_result())
+
+
+        # === DATA009: Chunk size check ===
+        if config.get("check_chunk_size", {}).get("enabled", False):
+            ctx = check_chunk_size(
+                dataset=ds,
+                severity=self.get_severity(config["check_chunk_size"].get("severity"))
+            )
+            ctx.description = "[DATA009] Chunk size compliance check for 'time' and 'time_bnds'"
+            results.append(ctx.to_result())
 
         return results

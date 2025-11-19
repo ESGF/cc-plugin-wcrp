@@ -15,4 +15,6 @@ setuptools>=15.0
 shapely>=1.7.1
 validators>=0.14.2
 toml
+cf_xarray
 esgvoc
+pooch

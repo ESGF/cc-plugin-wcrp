@@ -15,7 +15,7 @@ def check_time_bounds(ds, severity=BaseCheck.MEDIUM):
     """
     
     """
-    check_id = "WWWWW"
+    check_id = "VAR009"
     ctx = TestCtx(severity, f"[{check_id}] Check Time bounds")
 
     if "time" not in ds.variables:

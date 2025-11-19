@@ -1,0 +1,19 @@
+site_name: cc-plugin-wcrp Documentation
+site_url: https://github.com/ESGF/cc-plugin-wcrp
+
+theme:
+  name: material
+markdown_extensions:
+  - attr_list
+repo_name: ESGF/cc-plugin-wcrp
+repo_url: https://github.com/ESGF/cc-plugin-wcrp
+
+nav:
+  - Home: index.md
+  - Install : installation.md
+  - Usage: usage.md
+  - Reporting : reporting.md
+  - Checks : checks.md
+  - WCRP Project Plugins : wcrp_plugins.md
+  - CF Plugin : cf_plugin.md
+  - Credit : credits.md

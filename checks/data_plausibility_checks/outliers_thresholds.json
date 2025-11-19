@@ -88,5 +88,11 @@
         "max": 2000,
         "unit": "kg.m-2",
         "projects": ["CORDEX", "CMIP", "C3SATLAS"]
+    },
+    "wind_speed": {
+        "min": -1,
+        "max": 200,
+        "unit": "m.s-1",
+        "projects": ["CORDEX", "CMIP", "C3SATLAS"]
     }
 }

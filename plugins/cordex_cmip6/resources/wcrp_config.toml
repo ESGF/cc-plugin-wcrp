@@ -1,0 +1,309 @@
+# ==============================================================================
+# cc-plugin-wcrp CORDEX-CMIP6 Configuration FILE
+# ==============================================================================
+project_name = "cordex-cmip6"
+project_version = "1.0"
+
+#------------------------------------------------------------------------------
+# Format Checks
+# -----------------------------------------------------------------------------
+[format_checks.check_format]
+severity = "H"
+expected_format = "HDF5"
+expected_data_model = "NETCDF4_CLASSIC"
+#expected_data_model = "NETCDF4"
+
+[format_checks.check_compression]
+severity = "M"
+expected_complevel = 1
+expected_shuffle = true
+
+#------------------------------------------------------------------------------
+# Coordinate / Variable Checks
+# -----------------------------------------------------------------------------
+[variable_checks.check_coord_data_types]
+severity = "H"
+ctype = "double"
+auxtype = "real"
+
+[variable_checks.check_var_data_type]
+severity = "H"
+vartype = "real"
+var="main"
+
+[variable_checks.check_lat_lon_bounds]
+severity = "M"
+
+[variable_checks.check_horizontal_axes_bounds]
+severity = "M"
+
+[variable_checks.check_lon_value_range]
+severity = "H"
+
+#------------------------------------------------------------------------------
+# CORDEX-CMIP6 specific checks
+# -----------------------------------------------------------------------------
+[time_checks.check_time_chunking_cordex]
+severity = "M"
+
+[time_checks.check_time_range_cordex]
+severity = "H"
+
+[time_checks.check_calendar_cordex]
+severity = "M"
+
+[time_checks.check_time_units_cordex]
+severity = "H"
+
+[attribute_checks.check_grid_mapping]
+severity = "H"
+
+[attribute_checks.check_domain_id]
+severity = "H"
+
+[attribute_checks.check_institution]
+severity = "H"
+
+[attribute_checks.check_references]
+severity = "M"
+
+[attribute_checks.check_version_realization]
+severity = "H"
+
+[attribute_checks.check_version_realization_info]
+severity = "M"
+
+[attribute_checks.check_grid]
+severity = "M"
+
+[attribute_checks.check_driving_attributes]
+severity = "H"
+
+# ------------------------------------------------------------------------------
+# DRS Checks
+# ------------------------------------------------------------------------------
+# ############
+#   NOTE:    DRS checks with esgvoc currently not yet working for CORDEX-CMIP6
+# ############
+#[drs_checks]
+#severity = "H"
+
+# Fallback: check against CORDEX-CMIP6_CV.json
+[drs_checks_cv]
+project_id = "CORDEX-CMIP6"
+severity = "H"
+drs_element_hard_checks = [
+    "domain_id",
+    "time_range",
+    "variable_id",
+    "version",
+    "version_realization",
+]
+
+# ------------------------------------------------------------------------------
+# Global Attribute Checks
+# ------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+# Global Attributes to check
+# This section lists required  NetCDF global attributes for CORDEX-CMIP6 QC.
+# Each entry defines:
+#   - severity: "H" (High) (Mandatory) , "M" (Medium) (Warning), or "L" (Low) (Optional) priority
+#   - expected_type: expected value type ("str", "int", "float")
+# The 'constraint' key provides intelligent control over value validation:
+#   - If 'constraint' is MISSING: A controlled vocabulary (ESG-VOC) check is performed by default (ATTR004).
+#   - If 'constraint' HAS A VALUE (e.g., ".*@.*"): A regular expression pattern match is performed instead (ATTR005).
+#   - If 'constraint' is PRESENT but EMPTY (e.g., constraint = ""): All value checks (vocabulary and pattern) are DISABLED for that attribute.
+# ------------------------------------------------------------------------------
+# ############
+#   NOTE:    Global Attribute Checks with esgvoc curerntly not yet fully operational for CORDEX-CMIP6
+# ############
+#[global_attributes.activity_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.Conventions]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.contact]
+#severity = "H"
+#expected_type = "str"
+#constraint = '^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|https?://[a-zA-Z0-9.-]+(?:/[^\s]*)?)$'
+
+#[global_attributes.creation_date]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.domain_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.domain]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.driving_experiment_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.driving_experiment]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.driving_institution_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.driving_source_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.driving_variant_label]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.frequency]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.grid]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.history]
+#severity = "L"
+#expected_type = "str"
+
+#[global_attributes.institution_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.institution]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.license]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.mip_era]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.product]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.project_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.references]
+#severity = "L"
+#expected_type = "str"
+#constraint = ""
+
+#[global_attributes.source_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.source]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.source_type]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.tracking_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.variable_id]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.version_realization]
+#severity = "H"
+#expected_type = "str"
+
+#[global_attributes.version_realization_info]
+#severity = "L"
+#expected_type = "str"
+#constraint = ""
+
+# ------------------------------------------------------------------------------
+# Global attributes to check
+# Fallback - check against CORDEX-CMIP6_CV.json
+# ------------------------------------------------------------------------------
+[required_global_attributes_checks_cv]
+severity = "H"
+global_attrs_hard_checks = [
+    "contact",
+    "creation_date",
+    "domain_id",
+    "grid",
+    "institution",
+    "time_range",
+    "variable_id",
+    "version",
+    "version_realization",
+]
+
+# ==============================================================================
+# == Checks Variable registry
+# ==============================================================================
+# ############
+#   NOTE:    Variable registry checks with esgvoc currently not yet working for CORDEX-CMIP6
+# ############
+[variable_registry_checks]
+severity = "H"
+
+# ==============================================================================
+# == Consistency Checks
+# ==============================================================================
+[consistency_checks]
+  [consistency_checks.drs]
+  severity = "H"
+  dir_template_keys = [
+    "project_id",
+    "activity_id",
+    "domain_id",
+    "institution_id",
+    "driving_source_id",
+    "driving_experiment_id",
+    "driving_variant_label",
+    "source_id",
+    "version_realization",
+    "frequency",
+    "variable_id",
+    "version",
+  ]
+  filename_template_keys = [
+    "variable_id",
+    "domain_id",
+    "driving_source_id",
+    "driving_experiment_id",
+    "driving_variant_label",
+    "institution_id",
+    "source_id",
+    "version_realization",
+    "frequency",
+    "time_range",
+  ]
+
+  [consistency_checks.filename_vs_attributes]
+  severity = "H"
+  filename_template_keys = [
+    "variable_id",
+    "domain_id",
+    "driving_source_id",
+    "driving_experiment_id",
+    "driving_variant_label",
+    "institution_id",
+    "source_id",
+    "version_realization",
+    "frequency",
+    "time_range",
+  ]

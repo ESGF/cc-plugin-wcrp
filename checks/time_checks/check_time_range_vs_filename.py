@@ -3,7 +3,10 @@
 import os
 from compliance_checker.base import BaseCheck, TestCtx
 from netCDF4 import num2date
-from ..consistency_checks.check_attributes_match_filename import _parse_filename_components
+
+from checks.consistency_checks.check_drs_consistency import _filename_template_keys
+from checks.utils import _parse_filename_components
+
 
 def check_time_range_vs_filename(ds, severity=BaseCheck.MEDIUM):
     check_id = "VAR009"
@@ -22,6 +25,7 @@ def check_time_range_vs_filename(ds, severity=BaseCheck.MEDIUM):
         ctx.add_failure("The 'time' variable is empty.")
         return [ctx.to_result()]
 
+    # Convert values to dates and times
     try:
         units = time_var.units
         calendar = getattr(time_var, "calendar", "standard")
@@ -30,16 +34,21 @@ def check_time_range_vs_filename(ds, severity=BaseCheck.MEDIUM):
         ctx.add_failure(f"Error converting time values to datetime: {e}")
         return [ctx.to_result()]
 
+    # Extract the time range from the filename
     try:
         filename = os.path.basename(ds.filepath())
-        components = _parse_filename_components(filename)
-        metadata = components[0]
-        time_range = metadata.get("time_range", "")
+        filename_facets, error = _parse_filename_components(filename, _filename_template_keys)
+        if error:
+            ctx.add_failure(f"Error parsing time range from filename: {error}")
+            return [ctx.to_result()]
+
+        time_range = filename_facets.get("time_range", "")
         if not time_range or "-" not in time_range:
             raise ValueError(f"Invalid or missing time_range: {time_range}")
+
         start_str, end_str = time_range.split("-")
 
-        # Handle YYYYMMDD or YYYYMM format
+        # Manage YYYYMMDD or YYYYMM formats
         if len(start_str) == 8:
             expected_start = (int(start_str[:4]), int(start_str[4:6]), int(start_str[6:8]))
             expected_end = (int(end_str[:4]), int(end_str[4:6]), int(end_str[6:8]))
@@ -50,10 +59,12 @@ def check_time_range_vs_filename(ds, severity=BaseCheck.MEDIUM):
             use_day = False
         else:
             raise ValueError(f"Unrecognized time range format: {time_range}")
+
     except Exception as e:
         ctx.add_failure(f"Error parsing time range from filename: {e}")
         return [ctx.to_result()]
 
+    #Compare the dates in the file with those in the name
     try:
         first = time_dates[0]
         last = time_dates[-1]
@@ -67,7 +78,6 @@ def check_time_range_vs_filename(ds, severity=BaseCheck.MEDIUM):
     except Exception as e:
         ctx.add_failure(f"Error interpreting datetime objects: {e}")
         return [ctx.to_result()]
-    
 
     if start_parts > expected_start or end_parts < expected_end:
         ctx.add_failure(
