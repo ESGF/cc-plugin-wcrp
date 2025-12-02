@@ -35,10 +35,13 @@ severity = "H"
 # == Auto-generated Global Attribute Checks (from attached NetCDF file)
 # ======================================================================
 
+# JA: keeping this file consistent with the global attributes doc (https://zenodo.org/records/17250297) might be simpler if the attributes here are ordered the same way (mandatory attributes, then conditional attributes, then optional attributes)
+
 [global_attributes.Conventions]
 severity = "H"
 expected_type = "str"
 # Remove - this only relates to CMOR and not all groups use CMOR ? Or can this check handle the case where there is no CMOR information?
+# JA: keep, with severity "H", as a mandatory global attribute: "CF version governing data (along with any other conventions)"
 
 [global_attributes.activity_id]
 severity = "H"
@@ -48,6 +51,7 @@ expected_type = "str"
 severity = "M"
 expected_type = "str"
 # Remove - archive ID isn't a required global attribute
+# JA: not in global attributes, so I think can remove
 
 [global_attributes.area_label]
 severity = "H"
@@ -56,42 +60,52 @@ expected_type = "str"
 [global_attributes.branch_method]
 severity = "H"
 expected_type = "str"
+# JA: not in global attributes, so remove (?)
 
 # How do we express that the branch attributes
 # must be there if there is a parent,
 # and must not be there if there is no parent?
+# JA: I was wondering that - should it (can it) be specified somehow in this file? In cmip7.py? (I added a "conditional" comment to those attributes, below, to flag them, based on the global attributes)
 [global_attributes.branch_time_in_child]
 severity = "H"
 expected_type = "float"
+# JA: conditional
 
 [global_attributes.branch_time_in_parent]
 severity = "H"
 expected_type = "float"
+# JA: conditional
 
 # How do we express that these can be None?
 [global_attributes.parent_activity_id]
 severity = "H"
 expected_type = "str"
+# JA: conditional
 
 [global_attributes.parent_experiment_id]
 severity = "H"
 expected_type = "str"
+# JA: conditional
 
 [global_attributes.parent_mip_era]
 severity = "H"
 expected_type = "str"
+# JA: conditional
 
 [global_attributes.parent_source_id]
 severity = "H"
 expected_type = "str"
+# JA: conditional
 
 [global_attributes.parent_time_units]
 severity = "H"
 expected_type = "str"
+# JA: conditional
 
 [global_attributes.parent_variant_label]
 severity = "H"
 expected_type = "str"
+# JA: conditional
 
 [global_attributes.branded_variable]
 severity = "H"
@@ -122,6 +136,9 @@ expected_type = "str"
 severity = "M"
 expected_type = "str"
 # Remove - not a thing that CVs is checking/validating
+# JA: global attributes doc (v1.0) says: 
+# "if the optional global attributes "experiment", "source", "institution", and/or "license" are included, the data provider should make these consistent with what has been recorded in the controlled vocabularies."
+# So should this be included? If so, severity = "M" (warning) seems better to me than "L" (optional). I don't think it helps users if the same experiment is described with different text in different netcdf files.
 
 [global_attributes.experiment_id]
 severity = "H"
@@ -130,6 +147,7 @@ expected_type = "str"
 [global_attributes.external_variables]
 severity = "M"
 expected_type = "str"
+# JA: conditional, and CF requires it when an external variable is referred to. So should be "H" if the condition applies.
 
 [global_attributes.forcing_index]
 severity = "H"
@@ -168,6 +186,7 @@ expected_type = "str"
 severity = "M"
 expected_type = "str"
 # Remove - not a thing that CVs is checking/validating
+# JA: could be useful to users, perhaps include with severity = "L"? (optional)
 
 [global_attributes.source_id]
 severity = "H"
@@ -201,6 +220,7 @@ expected_type = "str"
 severity = "M"
 expected_type = "str"
 # Remove - not a thing that CVs is checking/validating
+# JA: or include with severity = "L" ?
 
 [global_attributes.variable_id]
 severity = "H"
@@ -247,6 +267,7 @@ expected_type = "str"
 severity = "M"
 expected_type = "str"
 # Remove - not all groups use CMOR
+# JA: but for those that do, this could be useful info - include with severity = "L"? (ie encourage them to include it if applicable)
 
 [global_attributes.tracking_id]
 severity = "H"
@@ -262,6 +283,9 @@ severity = "H"
 # ==============================================================================
 # == Data Plausibility Checks
 # ==============================================================================
+
+# JA: how/where do we specify which checks are the lightweight set that the ESGF publisher will carry out, vs. the heavier checks on data? Modellers may want to run these separately.
+
 [data_plausibility_checks]
 # Project name (must match the “projects” key in your outliers_thresholds.json)
 project = "CMIP"
@@ -292,6 +316,7 @@ method = "Z-Score"
 enabled = true
 severity = "H"
 # Or will chunking be handled by the repacking tool?
+# JA: AFAIK yes, but the QAQC should check it
 
 
 # ==============================================================================
@@ -315,6 +340,7 @@ severity = "H"
 # Check frequency and table_id consistency via tha mapping below
 [freq_table_id_consistency_checks]
 severity = "H"
+# JA: temporary thing required for the frequency/table_id checks below?
 
 
 # ==============================================================================
