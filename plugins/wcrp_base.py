@@ -62,6 +62,11 @@ class WCRPBaseCheck(BaseCheck):
         self.config = None
         self.project_config_path = None  # To be set by the specific WCRP plugin class
 
+    def __del__(self):
+        xrds = getattr(self, "xrds", None)
+        if xrds is not None and hasattr(xrds, "close"):
+            xrds.close()
+
     def setup(self, dataset):
         """
         Base checker setup

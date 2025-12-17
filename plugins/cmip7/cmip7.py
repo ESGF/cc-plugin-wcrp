@@ -30,6 +30,7 @@ from checks.consistency_checks.check_attributes_match_filename import check_file
     _parse_filename_components
 from checks.time_checks.check_time_bounds import check_time_bounds
 from checks.time_checks.check_time_range_vs_filename import *
+from checks.time_checks.check_time_calendar import check_calendar_cmip7
 from checks.data_plausibility_checks.check_nan_inf import check_nan_inf
 from checks.data_plausibility_checks.check_fill_missing import check_fillvalues_timeseries
 from checks.data_plausibility_checks.check_constant import check_constants
@@ -503,6 +504,27 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 ds=ds,
                 severity=self.get_severity(check_config.get('severity')),
                 project_id=project_id
+            ))
+
+        return results
+
+
+    def check_cmip7_output_requirements(self, ds):
+        """
+        Checks the compliance with CMIP7 Output Requirements.
+        """
+        results = []
+
+        # Load configuration section
+        if "cmip7_output_requirements" not in self.config:
+            return results
+        config = self.config["cmip7_output_requirements"]
+
+        # Prefer "proleptic_gregorian" calendar over "standard" calendar
+        if config.get("calendar", {}).get("enabled", False):
+            results.extend(check_calendar_cmip7(
+                ds=ds,
+                severity=self.get_severity(config["calendar"].get("severity"))
             ))
 
         return results

@@ -8,15 +8,15 @@ project_version = "1.0"
 #  Important Notes
 # ==============================================================================
 
-#  
-* Many of the DRS, CV, and variable registry checks will not pass or run correctly at the moment :
-   	- This is expected, because the esgvoc library does not yet include the CMIP7 controlled vocabulary definitions required for validation.
-   	
-* The variable mapping file (mapping_variables.toml) currently acts as a temporary bridge, manually linking table and variable identifiers for CMIP7 datasets
-		
-* Once ESGVOC provides official CMIP7 vocabulary support, this mapping file will no longer be needed : 
-    	- CMIP7 introduces a global attribute suffix branded variable that removes the need for hard-coded mapping between table_id and variable_id.
-   	- When that feature becomes operational in the CMIP7 CV, the plugin will dynamically resolve variable identities without local TOML mappings."
+#
+#* Many of the DRS, CV, and variable registry checks will not pass or run correctly at the moment :
+#   	- This is expected, because the esgvoc library does not yet include the CMIP7 controlled vocabulary definitions required for validation.
+#
+#* The variable mapping file (mapping_variables.toml) currently acts as a temporary bridge, manually linking table and variable identifiers for CMIP7 datasets#
+#
+#* Once ESGVOC provides official CMIP7 vocabulary support, this mapping file will no longer be needed :
+#    	- CMIP7 introduces a global attribute suffix branded variable that removes the need for hard-coded mapping between table_id and variable_id.
+#   	- When that feature becomes operational in the CMIP7 CV, the plugin will dynamically resolve variable identities without local TOML mappings."
 
 #------------------------------------------------------------------------------
 # DRS Checks
@@ -29,7 +29,7 @@ severity = "H"
 severity = "H"
 
 #------------------------------------------------------------------------------
-# Global Attributes to check 
+# Global Attributes to check
 # ------------------------------------------------------------------------------
 # ======================================================================
 # == Auto-generated Global Attribute Checks (from attached NetCDF file)
@@ -169,6 +169,14 @@ expected_type = "str"
 #To activate Variable regisrty checks
 [variable_registry_checks]
 severity = "H"
+
+# ==============================================================================
+# == CMIP7 Output Requirements Checks
+# ==============================================================================
+[cmip7_output_requirements.calendar]
+enabled = true
+severity = "M"
+
 # ==============================================================================
 # == Data Plausibility Checks
 # ==============================================================================
@@ -214,7 +222,7 @@ severity = "M"
   severity = "H"
   [consistency_checks.experiment_details]
   severity = "H"
-  
+
   [consistency_checks.institution_details]
   severity = "H"
 
