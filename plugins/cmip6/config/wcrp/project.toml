@@ -1,12 +1,13 @@
 # ==============================================================================
 # CMIP6 Configuration FILE 
 # ==============================================================================
+# Documentation & check inventory at https://esgf.github.io/cc-plugin-wcrp/checks/
 project_name = "cmip6"
 project_version = "1.0"
 
-#------------------------------------------------------------------------------
+# ==============================================================================
 # == Data Reference Syntax checks
-# ------------------------------------------------------------------------------
+# ==============================================================================
 
 [drs.filename]
 # Check FILE001
@@ -36,11 +37,9 @@ severity = "H"
 expected_complevel = 1
 expected_shuffle = true
 
-
-#------------------------------------------------------------------------------
-# Global Attributes checks 
-
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# == Global Attributes checks
+# ==============================================================================
 
 [global_attributes.activity_id]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -79,12 +78,10 @@ cv_source_collection = "experiment_id"
 
 [global_attributes.experiment]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
-# GL: We can switch the CV constraint to free-text or other easily if preferred.
 severity = "M"
 value_type = "str"
 is_required = false
-cv_source_collection = "experiment_id"
-cv_source_collection_key = "description"
+constraint = ".*"
 
 [global_attributes.frequency]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -97,7 +94,6 @@ cv_source_collection = "frequency"
 severity = "H"
 value_type = "str"
 is_required = true
-
 
 [global_attributes.grid_label]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -154,7 +150,6 @@ severity = "H"
 value_type = "int"
 is_required = true
 
-
 [global_attributes.mip_era]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
@@ -164,12 +159,9 @@ cv_source_collection = "mip_era"
 
 [global_attributes.source]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
-# GL: We can switch the CV constraint to free-text or other easily if preferred.
 severity = "L"
 value_type = "str"
 is_required = false
-cv_source_collection = "source_id"
-cv_source_collection_key = "description"
 
 [global_attributes.source_id]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -221,12 +213,14 @@ is_required = true
 cv_source_collection = "product"
 
 [global_attributes.branch_method]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 value_type = "str"
 is_required = true
 constraint = ".*"
 
 [global_attributes.branch_time]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 value_type = "float"
 is_required = true
@@ -249,7 +243,6 @@ severity = "H"
 value_type = "int"
 is_required = true
 
-
 [global_attributes.realm]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
@@ -271,8 +264,8 @@ value_type = "str"
 is_required = true
 cv_source_collection = "experiment_id"
 
-
 [global_attributes.sub_experiment]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 value_type = "str"
 is_required = false
@@ -285,7 +278,6 @@ severity = "H"
 value_type = "str"
 is_required = false
 cv_source_collection = "activity_id"
-
 
 [global_attributes.parent_experiment_id]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -308,14 +300,12 @@ value_type = "str"
 is_required = false
 cv_source_collection = "source_id"
 
-
 [global_attributes.parent_time_units]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
 value_type = "str"
 is_required = false
 constraint = "^days since [0-9]{4}-[0-9]{2}-[0-9]{2}$"
-# Full CF-compliant pattern is: "^(seconds|minutes|hours|days|months|years) since [0-9]{4}-[0-9]{2}-[0-9]{2}( [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?)?( ?(Z|[+-][0-9]{2}:[0-9]{2}))?$"
 
 [global_attributes.parent_variant_label]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -324,7 +314,6 @@ value_type = "str"
 is_required = false
 cv_source_collection = "variant_label"
 
-
 [global_attributes.conventions]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 attribute_name = "Conventions"
@@ -332,7 +321,6 @@ severity = "H"
 value_type = "str"
 is_required = true
 cv_source_collection = "conventions"
-
 
 [global_attributes.contact]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -347,13 +335,11 @@ severity = "H"
 value_type = "int"
 is_required = true
 
-
 [global_attributes.forcing_index]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
 value_type = "int"
 is_required = true
-
 
 [global_attributes.c3s_disclaimer]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -376,56 +362,66 @@ value_type = "str"
 is_required = false
 constraint = ".*"
 
-
 # ==============================================================================
 # == Geophysical variable metadata checks
 # ==============================================================================
 
 [variable.existence]
+# Checks VAR000 VAR001
 severity = "H"
 
 [variable.type]
+# Checks VAR005
 severity = "H"
 
 [variable.dimensions]
+# Checks DIM001 DIM002 DIM003
 severity = "H"
 
 [variable.bnds_vertices]
+# Check DIM003
 severity = "H"
 
 [variable.shape_bounds]
-# uniquement bounds value consistency
+# Checks VAR002
 severity = "H"
 
 [variable.time_checks]
-# time_range_vs_filename + time_bounds
+# Checks VAR003
 severity = "H"
 
 # ==============================================================================
-# == Variable attributes checks
+# == Geophysical variable attributes checks
 # ==============================================================================
 
 [variable.attributes.units]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
 
 [variable.attributes.long_name]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 
 [variable.attributes.standard_name]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
 
 [variable.attributes.cell_methods]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 
 [variable.attributes.cell_measures]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 
 [variable.attributes.description]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "L"
 
 # ==============================================================================
 # == Coordinates checks
-# ============================================================================
+# ==============================================================================
+
 [coordinates.auxiliary]
 severity = "H"
 
@@ -442,14 +438,9 @@ calendar = ""
 ref_time_units = ""
 frequency = { subhr = "30m" }
 
-
 # ==============================================================================
 # == Metadata Consistency Checks
 # ==============================================================================
-
-
-[consistency_checks.variant_label]
-severity = "H"
 
 [consistency_checks.filename_vs_attributes]
 # Check ATTR005 
@@ -467,73 +458,10 @@ severity = "H"
 # Check ATTR010 
 severity = "H"
 
-[consistency_checks.freq_tableid]
+[consistency_checks.frequency_details]
 # Check ATTR008 
 severity = "H"
 
-
-# ==============================================================================
-# == Mappings for frequency/table_id Consistency Checks
-# ==============================================================================
-[frequency_table_id_mapping]
-AERday = ["day"]
-AERhr = ["1hr"]
-AERmon = ["mon"]
-AERmonZ = ["mon"]
-Aclim = ["monClim"]
-Amon = ["mon", "monC", "monClim"]
-AmonExtras = ["mon"]
-CF3hr = ["3hrPt"]
-CFday = ["day"]
-CFmon = ["mon"]
-CFsubhr = ["subhrPt"]
-cf3hr = ["3hr"]
-cfDay = ["day"]
-cfMon = ["mon"]
-cfOff = ["mon"]
-cfSites = ["3hr", "6hr", "subhr"]
-day = ["day"]
-dayExtras = ["day"]
-E1hr = ["1hr", "1hrPt"]
-E1hrClimMon = ["1hrCM"]
-E3hr = ["3hr"]
-E3hrPt = ["3hrPt"]
-E6hrZ = ["6hr", "6hrPt"]
-Eday = ["day"]
-EdayZ = ["day"]
-Emon = ["mon"]
-EmonZ = ["mon"]
-Esubhr = ["subhrPt"]
-Eyr = ["yr", "yrPt"]
-HOMAL3hrPt = ["3hrPt", "3hr"]
-HOMALmon = ["mon"]
-HOMEPmon = ["mon"]
-HOMOImon = ["mon"]
-IyrAnt = ["yr"]
-IyrGre = ["yr"]
-ImonAnt = ["mon"]
-ImonGre = ["mon"]
-LIclim = ["monClim"]
-LImon = ["mon"]
-Lclim = ["monClim"]
-Lmon = ["mon"]
-Oclim = ["monClim", "monC"]
-Oday = ["day"]
-Odec = ["dec"]
-OIclim = ["monClim"]
-OImon = ["mon"]
-Omon = ["mon"]
-OmonExtras = ["mon"]
-Oyr = ["yr"]
-OyrExtras = ["yr"]
-SIday = ["day"]
-SImon = ["mon", "monPt"]
-sites = ["subhr"]
-3hr = ["3hr", "3hrPt"]
-3hrCurt = ["3hr"]
-3hrMlev = ["3hr"]
-3hrPlev = ["3hr"]
-3hrSlev = ["3hr"]
-6hrLev = ["6hr", "6hrPt"]
-6hrPlev = ["6hr"]
-6hrPlevPt = ["6hr", "6hrPt"]
+[consistency_checks.variant_details]
+# Check ATTR006
+severity = "H"

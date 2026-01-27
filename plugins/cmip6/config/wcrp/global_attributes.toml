@@ -1,0 +1,352 @@
+# ==============================================================================
+# == Global attributes checks
+# ==============================================================================
+
+[global_attributes.activity_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "activity_id"
+
+[global_attributes.creation_date]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "L"
+value_type = "str"
+is_required = true
+cv_source_collection = "creation_date"
+
+[global_attributes.data_specs_version]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "data_specs_version"
+
+[global_attributes.description]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = false
+constraint = ".*"
+
+[global_attributes.experiment_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "experiment_id"
+
+[global_attributes.experiment]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = false
+constraint = ".*"
+
+[global_attributes.frequency]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "frequency"
+
+[global_attributes.further_info_url]
+severity = "H"
+value_type = "str"
+is_required = true
+
+[global_attributes.grid_label]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "grid_label"
+
+[global_attributes.grid]
+severity = "M"
+value_type = "str"
+is_required = true
+constraint = ".*"
+
+[global_attributes.institution_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "institution_id"
+
+[global_attributes.institution]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = false
+cv_source_collection = "institution_id"
+cv_source_collection_key = "description"
+
+[global_attributes.license]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "L"
+value_type = "str"
+is_required = false
+constraint = ".*"
+
+[global_attributes.license_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "license_id"
+
+[global_attributes.nominal_resolution]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "nominal_resolution"
+
+[global_attributes.initialization_index]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "int"
+is_required = true
+
+[global_attributes.mip_era]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "mip_era"
+
+[global_attributes.source]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "L"
+value_type = "str"
+is_required = false
+
+[global_attributes.source_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "source_id"
+
+[global_attributes.title]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "L"
+value_type = "str"
+is_required = false
+constraint = ".*"
+
+[global_attributes.table_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "table_id"
+
+[global_attributes.tracking_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "tracking_id"
+
+[global_attributes.variable_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "variable_id"
+
+[global_attributes.variant_label]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "variant_label"
+
+[global_attributes.product]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "product"
+
+[global_attributes.branch_method]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = true
+constraint = ".*"
+
+[global_attributes.branch_time]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "float"
+is_required = true
+
+[global_attributes.branch_time_in_parent]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "float"
+is_required = false
+
+[global_attributes.branch_time_in_child]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "float"
+is_required = false
+
+[global_attributes.physics_index]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "int"
+is_required = true
+
+[global_attributes.realm]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "realm"
+
+[global_attributes.references]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "L"
+value_type = "str"
+is_required = false
+constraint = ".*"
+
+[global_attributes.sub_experiment_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = true
+cv_source_collection = "experiment_id"
+
+[global_attributes.sub_experiment]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = false
+cv_source_collection = "experiment_id"
+cv_source_collection_key = "description"
+
+[global_attributes.parent_activity_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = false
+cv_source_collection = "activity_id"
+
+[global_attributes.parent_experiment_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = false
+cv_source_collection = "experiment_id"
+
+[global_attributes.parent_mip_era]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = false
+cv_source_collection = "mip_era"
+
+[global_attributes.parent_source_id]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = false
+cv_source_collection = "source_id"
+
+[global_attributes.parent_time_units]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = false
+constraint = "^days since [0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$"
+
+[global_attributes.parent_variant_label]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = false
+cv_source_collection = "variant_label"
+
+[global_attributes.conventions]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+attribute_name = "Conventions"
+severity = "H"
+value_type = "str"
+is_required = true
+cv_source_collection = "conventions"
+
+[global_attributes.contact]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = false
+constraint = ".*@.*"
+
+[global_attributes.realization_index]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "int"
+is_required = true
+
+[global_attributes.forcing_index]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "int"
+is_required = true
+
+[global_attributes.c3s_disclaimer]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = false
+constraint = ".*"
+
+[global_attributes.source_type]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = true
+cv_source_collection = "source_type"
+
+[global_attributes.comment]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "L"
+value_type = "str"
+is_required = false
+constraint = ".*"
+
+# ==============================================================================
+# == Global attributes consistency Checks
+# ==============================================================================
+
+[global.consistency.filename_vs_attributes]
+# Checks ATTR005 
+severity = "H"
+
+[global.consistency.experiment_properties]
+# Checks ATTR007 
+severity = "H"
+
+[global.consistency.institution_properties]
+# Checks ATTR009 
+severity = "H"
+
+[global.consistency.source_properties]
+# Checks ATTR010 
+severity = "H"
+
+[global.consistency.frequency_properties]
+# Checks ATTR008 
+severity = "H"
+
+[global.consistency.variant_properties]
+# Checks ATTR006
+severity = "H"

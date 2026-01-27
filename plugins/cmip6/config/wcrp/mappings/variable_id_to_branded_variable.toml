@@ -1,4 +1,8 @@
-[mapping_variables]
+# ==============================================================================
+# == Mappings to get branded_variable from table_id + variable_id
+# ==============================================================================
+
+[variable_id_to_branded_variable]
 "3hr.clt" = "clt_tavg-u-hxy-u"
 "3hr.evspsblsoi" = "evspsblsoi_tavg-u-hxy-u"
 "3hr.evspsblveg" = "evspsblveg_tavg-u-hxy-u"
@@ -590,7 +594,6 @@
 "CFsubhr.fco2fos" = "fco2fos_tpt-u-hxys-u"
 "CFsubhr.fco2nat" = "fco2nat_tpt-u-hxys-u"
 "CFsubhr.hfls" = "hfls_tpt-u-hxys-u"
-"Changes since reverted/fixed. Variable now matches CMIP6 definition.\"" = "down"
 "CFsubhr.hfss" = "hfss_tpt-u-hxys-u"
 "CFsubhr.hur" = "hur_tpt-l-hxys-u"
 "CFsubhr.hurs" = "hurs_tpt-h2m-hxys-u"
@@ -627,7 +630,6 @@
 "CFsubhr.rsutcs" = "rsutcs_tpt-u-hxys-u"
 "CFsubhr.rtmt" = "rtmt_tpt-u-hxys-u"
 "CFsubhr.sbl" = "sbl_tpt-u-hxys-u"
-"CHANGE SINCE CMIP6 in Modeling Realm - CMIP6:landIce CMIP7:ocean" = "circulation and climate sensitivity: extension for process-level studies\"\"\""
 "CFsubhr.sci" = "sci_tpt-u-hxys-u"
 "CFsubhr.sfcWind" = "sfcWind_tpt-h10m-hxys-u"
 "CFsubhr.ta" = "ta_tpt-l-hxys-u"
@@ -1164,7 +1166,6 @@
 "fx.lat" = "lat_ti-u-hxys-u"
 "fx.lithk" = "lithk_ti-u-hxy-u"
 "fx.lon" = "lon_ti-u-hxys-u"
-"CHANGE SINCE CMIP6: compound name" = "circulation and climate sensitivity: extension for process-level studies\"\"\""
 "fx.mrsofc" = "mrsofc_ti-u-hxy-lnd"
 "fx.orog" = "orog_ti-u-hxy-u"
 "fx.rootd" = "rootd_ti-u-hxy-lnd"
@@ -1356,7 +1357,6 @@
 "Lmon.fVegSoil" = "fVegSoil_tavg-u-hxy-lnd"
 "Lmon.gpp" = "gpp_tavg-u-hxy-lnd"
 "Lmon.grassFrac" = "grassFrac_tavg-u-hxy-u"
-"CHANGE SINCE CMIP6 in Cell Methods - CMIP6:area: mean where land over allareatypes time: mean CMIP7:area: time: mean" = "FireMIP_monthly"
 "Lmon.lai" = "lai_tavg-u-hxy-lnd"
 "Lmon.landCoverFrac" = "landCoverFrac_tavg-u-hxy-u"
 "Lmon.mrfso" = "mrfso_tavg-u-hxy-lnd"
@@ -1520,7 +1520,6 @@
 "Omon.hfds" = "hfds_tavg-u-hxy-sea"
 "Omon.hfevapds" = "hfevapds_tavg-u-hxy-ifs"
 "Omon.hfgeou" = "hfgeou_ti-u-hxy-sea"
-"CHANGE SINCE CMIP6 in Dimensions - CMIP6:longitude latitude time CMIP7:longitude latitude depthseafloor time" = "paleo_permafrost\""
 "Omon.hfibthermds" = "hfibthermds_tavg-l-hxy-sea"
 "Omon.hfibthermds2d" = "hfibthermds_tavg-u-hxy-sea"
 "Omon.hfrainds" = "hfrainds_tavg-u-hxy-ifs"
@@ -1580,13 +1579,11 @@
 "Omon.mpwwindsea" = "mpwwindsea_tavg-u-hxy-sea"
 "Omon.msftbarot" = "msftbarot_tavg-u-hxy-sea"
 "Omon.msftmrho" = "msftmz_tavg-rho-hys-sea"
-"CHANGE SINCE CMIP6 in Cell Methods - CMIP6:longitude: sum (comment: basin sum [along zig-zag grid path]) depth: sum time: mean CMIP7:longitude: sum (basin sum [along zig-zag grid path]) depth: sum time: mean" = "Drivers and Impacts\"\"\""
 "Omon.msftmrhompa" = "msftmz_tavg-rho-hys-sea"
 "Omon.msftmz" = "msftmz_tavg-l-hys-sea"
 "Omon.msftmzmpa" = "msftmzmpa_tavg-l-hys-sea"
 "Omon.msftmzsmpa" = "msftmzsmpa_tavg-l-hys-sea"
 "Omon.msftyrho" = "msftyz_tavg-rho-hm-sea"
-"CHANGE SINCE CMIP6 in Dimensions - CMIP6:gridlatitude rho basin time CMIP7:rho basin time" = "Drivers and Impacts\"\"\""
 "Omon.msftyrhompa" = "msftyzmpa_tavg-rho-ht-sea"
 "Omon.msftyz" = "msftyz_tavg-l-ht-sea"
 "Omon.msftyzmpa" = "msftyzmpa_tavg-l-ht-sea"

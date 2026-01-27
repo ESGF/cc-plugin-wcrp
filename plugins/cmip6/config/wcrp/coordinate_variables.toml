@@ -1,0 +1,272 @@
+# ==============================================================================
+# == Metadata checks applied to all coordinate variables
+# ==============================================================================
+
+[coordinates.bounds]
+# Checks VAR004
+severity = "H"
+
+[coordinates.dimensions]
+# Checks VAR002 DIM001 DIM002 DIM003
+severity = "H"
+
+# ==============================================================================
+# == Metadata checks applied to latitude coordinate
+# ==============================================================================
+
+[coordinates.latitude.name]
+# Checks VAR001
+severity = "H"
+variable_name = "lat"
+
+[coordinates.latitude.type]
+# Checks VAR001
+severity = "H"
+data_type = "double"
+
+[coordinates.latitude.monotonicity]
+# Checks VAR005
+severity = "H"
+direction = "increasing"
+
+[coordinates.latitude.attributes.axis]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "Y"
+
+[coordinates.latitude.attributes.standard_name]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "latitude"
+
+[coordinates.latitude.attributes.units]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "degrees_north"
+
+[coordinates.latitude.attributes.bounds]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+as_variable = true
+
+# ==============================================================================
+# == Metadata checks applied to longitude coordinate
+# ==============================================================================
+
+[coordinates.longitude.name]
+# Checks VAR001
+severity = "H"
+variable_name = "lon"
+
+[coordinates.longitude.type]
+# Checks VAR005
+severity = "H"
+data_type = "double"
+
+[coordinates.longitude.monotonicity]
+# Checks VAR005
+severity = "H"
+direction = "increasing"
+
+[coordinates.longitude.attributes.axis]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "X"
+
+[coordinates.longitude.attributes.standard_name]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "longitude"
+
+[coordinates.longitude.attributes.units]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "degrees_east"
+
+[coordinates.longitude.attributes.bounds]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+as_variable = true
+
+# ==============================================================================
+# == Metadata checks applied to air pressure coordinate
+# ==============================================================================
+
+[coordinates.air_pressure.name]
+# Checks VAR001
+severity = "H"
+variable_name = "plev"
+
+[coordinates.air_pressure.type]
+# Checks VAR001
+severity = "H"
+data_type = "double"
+
+[coordinates.air_pressure.monotonicity]
+# Checks VAR005
+severity = "H"
+direction = "decreasing"
+
+[coordinates.air_pressure.attributes.axis]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "Z"
+
+[coordinates.air_pressure.attributes.standard_name]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "air_pressure"
+
+[coordinates.air_pressure.attributes.units]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "Pa"
+
+[coordinates.air_pressure.attributes.bounds]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = false
+as_variable = true
+
+[coordinates.air_pressure.attributes.positive]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "down"
+
+# ==============================================================================
+# == Metadata checks applied to height coordinate
+# ==============================================================================
+
+[coordinates.height.name]
+# Checks VAR001
+severity = "H"
+variable_name = "height"
+
+[coordinates.height.type]
+# Checks VAR001
+severity = "H"
+data_type = "double"
+
+[coordinates.height.monotonicity]
+# Checks VAR005
+severity = "H"
+direction = "increasing"
+
+[coordinates.height.attributes.axis]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "Z"
+
+[coordinates.height.attributes.standard_name]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "height"
+
+[coordinates.height.attributes.units]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "m"
+
+[coordinates.height.attributes.positive]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "up"
+
+
+# ==============================================================================
+# == Metadata checks applied to time coordinate
+# ==============================================================================
+
+[coordinates.time.name]
+# Checks VAR001
+severity = "H"
+variable_name = "time"
+
+[coordinates.time.type]
+# Checks VAR001
+severity = "H"
+data_type = "double"
+
+[coordinates.time.monotonicity]
+# Checks VAR005
+severity = "H"
+direction = "increasing"
+
+[coordinates.time.attributes.axis]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "T"
+
+[coordinates.time.attributes.standard_name]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+constant = "time"
+
+[coordinates.time.attributes.calendar]
+# Checks TIME003 ATTR001 ATTR002 ATTR003 ATTR004
+severity = "M"
+value_type = "str"
+is_required = true
+enum = ["gregorian", "proleptic_gregorian", "noleap", "365_day", "all_leap", "366_day", "360_day", "utc", "tai"]  
+
+[coordinates.time.attributes.units]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = true
+pattern = "^days since [0-9]{4}-[0-9]{1,2}-[0-9]{1,2}"
+
+[coordinates.time.attributes.bounds]
+# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+value_type = "str"
+is_required = false
+as_variable = true
+
+[coordinates.time.squareness]
+# Check TIME001
+severity = "H"
+ref_calendar = ""
+ref_time_units = ""
+ref_increment = ""
+
+[coordinates.time.coverage]
+# Checks TIME002
+severity = "H"

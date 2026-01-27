@@ -1,4 +1,8 @@
-[mapping_variables]
+# ==============================================================================
+# == Mappings to get branded_variable from table_id + variable_id
+# ==============================================================================
+
+[variable_id_to_branded_variable]
 "fx.orog" = "orog_ti-u-hxy-u"
 "fx.sftlf" = "sftlf_ti-u-hxy-u"
 "fx.sftgif" = "sftgif_ti-u-hxy-u"
