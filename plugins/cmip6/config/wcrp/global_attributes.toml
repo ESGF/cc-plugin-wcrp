@@ -91,13 +91,6 @@ value_type = "str"
 is_required = false
 pattern = ".*"
 
-[global.attributes.license_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "license_id"
-
 [global.attributes.nominal_resolution]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
