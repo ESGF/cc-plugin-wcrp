@@ -712,15 +712,19 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
 
             # monotonicity
             if getattr(rule, "monotonicity", None):
-                sev = _sev(rule.monotonicity.severity, default=BaseCheck.MEDIUM)
-                res.extend(
-                    check_coordinate_monotonicity(
-                        ds,
-                        coord_name=cname,
-                        direction=rule.monotonicity.direction,
-                        severity=sev,
+                # CF allows auxiliary coordinates (e.g. lat/lon attached to a
+                # generic cell dimension on unstructured grids) to be non-monotonic.
+                # Only apply the strict-monotonicity check to dimension coords.
+                if cname in ds.dimensions:
+                    sev = _sev(rule.monotonicity.severity, default=BaseCheck.MEDIUM)
+                    res.extend(
+                        check_coordinate_monotonicity(
+                            ds,
+                            coord_name=cname,
+                            direction=rule.monotonicity.direction,
+                            severity=sev,
+                        )
                     )
-                )
 
             # TIME001
             if getattr(rule, "squareness", None):
