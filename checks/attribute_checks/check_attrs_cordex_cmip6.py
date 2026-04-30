@@ -30,6 +30,12 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
 
     # The allowed grid_mapping_name attribute values in CORDEX-CMIP6
     gmallowed = ["lambert_conformal_conic", "rotated_latitude_longitude"]
+    # The allowed exceptions for omitting the grid_mapping attribute, based on the global attribute 'grid'
+    gmomittedif = ["tripolar",]
+    grid_description = str(getattr(CheckerObject.ds, "grid", "") or "").lower()
+    grid_mapping_optional = any(
+        token in grid_description for token in gmomittedif
+    )
     # One of the following attributes needs to be specified for the grid_mapping variable
     # assuming that means that the Earth is specified/described as requested
     # (the checking of the validity of the description is left to CF checks)
@@ -87,10 +93,15 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
                     f"but is of type '{CheckerObject.ds[crs].dtype} ({CheckerObject.ds[crs].dtype.kind})'."
                 )
         else:
-            testctx.add_failure(
-                f"The grid_mapping variable '{crs}', describing the coordinate reference system,"
-                " could not be found in the file."
-            )
+            if grid_mapping_optional:
+                testctx.add_pass()
+            else:
+                testctx.add_failure(
+                    f"The grid_mapping variable '{crs}', describing the coordinate reference system,"
+                    " could not be found in the file."
+                    "The grid_mapping attribute can only be omitted for supported ocean grids, "
+                    f"when the global attribute 'grid' contains one of: {gmomittedif}."
+                )
 
     else:
         testctx.add_pass()
@@ -116,7 +127,9 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
             else:
                 testctx.add_pass()
     else:
-        if ("rlat" in CheckerObject.xrds and "rlon" in CheckerObject.xrds) or (
+        if grid_mapping_optional:
+            testctx.add_pass()
+        elif ("rlat" in CheckerObject.xrds and "rlon" in CheckerObject.xrds) or (
             "y" in CheckerObject.xrds and "x" in CheckerObject.xrds
         ):
             testctx.add_pass()
