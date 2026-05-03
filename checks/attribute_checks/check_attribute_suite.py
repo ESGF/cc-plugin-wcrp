@@ -261,6 +261,16 @@ def check_attribute_suite(
         allowed = [str(x) for x in enum]
         if str(attr_value) in allowed:
             ctx.add_pass()
+            # Non-blocking advisory for time:calendar="standard"
+            if (
+            var_name == "time"
+            and str(attribute_name).lower() == "calendar"
+            and str(attr_value).strip().lower() == "gregorian"
+        ):
+                ctx.messages.append(
+                "Value 'gregorian' is accepted for variable 'time' attribute "
+                "'calendar', but 'proleptic_gregorian' is recommended."
+                )
         else:
             ctx.add_failure(f"Value '{attr_value}' not in allowed values {allowed}.")
         results.append(ctx.to_result())

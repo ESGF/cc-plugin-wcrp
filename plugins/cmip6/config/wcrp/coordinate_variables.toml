@@ -245,6 +245,7 @@ severity = "H"
 value_type = "str"
 is_required = true
 enum = [
+    "standard",
     "gregorian",
     "proleptic_gregorian",
     "noleap",

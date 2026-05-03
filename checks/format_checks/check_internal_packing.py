@@ -124,7 +124,7 @@ def check_cmip7_packing(ds, severity=BaseCheck.HIGH) -> list:
 
     # -- pyfive available? ---------------------------------------------------
     if not _PYFIVE_OK:
-        ctx = TestCtx(BaseCheck.LOW, "[FILE004] CMIP7 internal packing")
+        ctx = TestCtx(BaseCheck.HIGH, "[FILE004] CMIP7 internal packing")
         ctx.add_failure(
             f"Optional dependency 'pyfive >= 1.1.1' is not installed or "
             f"incompatible — FILE004 skipped. ({_PYFIVE_ERR})"

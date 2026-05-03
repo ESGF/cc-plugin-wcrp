@@ -4,8 +4,10 @@ from compliance_checker.base import TestCtx
 
 try:
     import esgvoc.api as voc
+
     ESG_VOCAB_AVAILABLE = True
 except ImportError:
+    voc = None
     ESG_VOCAB_AVAILABLE = False
 
 
@@ -48,16 +50,94 @@ def _get_global_attr(ds, attr_name, missing_attrs):
     if attr_name not in ds.ncattrs():
         missing_attrs.append(attr_name)
         return None
+
     return str(ds.getncattr(attr_name)).strip()
 
 
-def check_experiment_consistency(ds, severity, project_id="cmip6"):
+def _get_experiment_reference_term(ds, project_id, failures, missing_attrs):
     """
-    [ATTR007] Checks if attributes are consistent with the 'experiment_id'
-    from Esgvoc
+    Resolve the ESGVOC experiment term from file global attribute experiment_id.
+
+    Return:
+      actual_experiment_id, reference_term
+    """
+    actual_experiment_id = _get_global_attr(ds, "experiment_id", missing_attrs)
+
+    if actual_experiment_id is None:
+        return None, None
+
+    collection_id = _get_cv_collection(project_id, "experiment_id")
+
+    reference_term = voc.get_term_in_collection(
+        project_id=project_id,
+        collection_id=collection_id,
+        term_id=actual_experiment_id,
+    )
+
+    # Fallback: if the term is not found by term_id, try to resolve the
+    # underlying ESGVOC id from an exact drs_name match.
+    if not reference_term:
+        candidates = voc.find_terms_in_collection(
+            project_id=project_id,
+            collection_id=collection_id,
+            expression=actual_experiment_id,
+            selected_term_fields=["id", "drs_name"],
+        )
+
+        resolved_term_id = None
+
+        for item in candidates:
+            candidate_drs_name = str(getattr(item, "drs_name", "")).strip()
+            candidate_id = str(getattr(item, "id", "")).strip()
+
+            if candidate_drs_name == actual_experiment_id:
+                resolved_term_id = candidate_id
+                break
+
+        if resolved_term_id:
+            reference_term = voc.get_term_in_collection(
+                project_id=project_id,
+                collection_id=collection_id,
+                term_id=resolved_term_id,
+            )
+
+    if not reference_term:
+        failures.append(
+            f"The experiment_id '{actual_experiment_id}' was not found in the ESGF vocabulary."
+        )
+
+    return actual_experiment_id, reference_term
+
+
+def _expected_matches_actual(expected_value, actual_value):
+    """
+    Compare expected ESGVOC value(s) with actual file value.
+    """
+    if expected_value is None:
+        return True
+
+    expected_norm = _lower_str_list(expected_value)
+
+    if not expected_norm:
+        return True
+
+    return str(actual_value).strip().lower() in expected_norm
+
+
+def _check_experiment_id_vs_global_attr(
+    ds,
+    severity,
+    project_id,
+    attr_name,
+    expected_field=None,
+):
+    """
+    Generic single-comparison check:
+      experiment_id CV term field <expected_field> vs file global attribute <attr_name>
     """
     fixed_check_id = "ATTR007"
-    description = f"[{fixed_check_id}] Consistency: experiment_id vs other global attributes"
+    expected_field = expected_field or attr_name
+    description = f"[{fixed_check_id}] Consistency: experiment_id vs {attr_name}"
     ctx = TestCtx(severity, description)
 
     if not ESG_VOCAB_AVAILABLE:
@@ -68,107 +148,80 @@ def check_experiment_consistency(ds, severity, project_id="cmip6"):
         failures = []
         missing_attrs = []
 
-        # Read all file attributes independently so one missing attribute does
-        # not prevent the other comparisons from running.
-        actual_experiment_id = _get_global_attr(ds, "experiment_id", missing_attrs)
-        actual_activity_id = _get_global_attr(ds, "activity_id", missing_attrs)
-        actual_experiment = _get_global_attr(ds, "experiment", missing_attrs)
-        actual_parent_id = _get_global_attr(ds, "parent_experiment_id", missing_attrs)
-        actual_sub_experiment_id = _get_global_attr(ds, "sub_experiment_id", missing_attrs)
+        actual_experiment_id, reference_term = _get_experiment_reference_term(
+            ds,
+            project_id,
+            failures,
+            missing_attrs,
+        )
 
-        reference_term = None
+        actual_value = _get_global_attr(ds, attr_name, missing_attrs)
 
-        # We can only query the CV if experiment_id exists in the file.
-        if actual_experiment_id is not None:
-            collection_id = _get_cv_collection(project_id, "experiment_id")
+        if reference_term is not None and actual_value is not None:
+            expected_value = getattr(reference_term, expected_field, None)
 
-            reference_term = voc.get_term_in_collection(
-                project_id=project_id,
-                collection_id=collection_id,
-                term_id=actual_experiment_id,
-            )
-
-            # Fallback: if the term is not found by term_id, try to resolve the
-            # underlying ESGVOC id from an exact drs_name match.
-            if not reference_term:
-                candidates = voc.find_terms_in_collection(
-                    project_id=project_id,
-                    collection_id=collection_id,
-                    expression=actual_experiment_id,
-                    selected_term_fields=["id", "drs_name"],
-                )
-
-                resolved_term_id = None
-
-                for item in candidates:
-                    candidate_drs_name = str(getattr(item, "drs_name", "")).strip()
-                    candidate_id = str(getattr(item, "id", "")).strip()
-
-                    if candidate_drs_name == actual_experiment_id:
-                        resolved_term_id = candidate_id
-                        break
-
-                if resolved_term_id:
-                    reference_term = voc.get_term_in_collection(
-                        project_id=project_id,
-                        collection_id=collection_id,
-                        term_id=resolved_term_id,
-                    )
-
-            if not reference_term:
+            if not _expected_matches_actual(expected_value, actual_value):
                 failures.append(
-                    f"The experiment_id '{actual_experiment_id}' was not found in the ESGF vocabulary."
+                    f"Inconsistency: experiment_id '{actual_experiment_id}' vs {attr_name}. "
+                    f"CV expects one of {list(_as_list(expected_value))}, "
+                    f"file has '{actual_value}'."
                 )
 
-        # Compare against the CV only when both the CV term and the file
-        # attribute needed for that comparison are available.
-        if reference_term:
-            expected_activity_ids = getattr(reference_term, "activity_id", None)
-            if expected_activity_ids and actual_activity_id is not None:
-                expected_activity_ids_norm = _lower_str_list(expected_activity_ids)
-                if actual_activity_id.lower() not in expected_activity_ids_norm:
-                    failures.append(
-                        f"Inconsistency for 'activity_id': CV expects one of {list(_as_list(expected_activity_ids))}, "
-                        f"file has '{actual_activity_id}'."
-                    )
+        for attr in missing_attrs:
+            failures.append(f"Missing required global attribute: '{attr}'.")
 
-            expected_experiment = getattr(reference_term, "experiment", None)
-            if expected_experiment and actual_experiment is not None:
-                if actual_experiment != str(expected_experiment).strip():
-                    failures.append(
-                        f"Inconsistency for 'experiment': CV expects '{expected_experiment}', "
-                        f"file has '{actual_experiment}'."
-                    )
-
-            expected_parent_ids = getattr(reference_term, "parent_experiment_id", None)
-            if expected_parent_ids and actual_parent_id is not None:
-                expected_parent_ids_norm = _lower_str_list(expected_parent_ids)
-                if actual_parent_id.lower() not in expected_parent_ids_norm:
-                    failures.append(
-                        f"Inconsistency for 'parent_experiment_id': CV expects one of {list(_as_list(expected_parent_ids))}, "
-                        f"file has '{actual_parent_id}'."
-                    )
-
-            expected_sub_experiment_ids = getattr(reference_term, "sub_experiment_id", None)
-            if expected_sub_experiment_ids and actual_sub_experiment_id is not None:
-                expected_sub_ids_norm = _lower_str_list(expected_sub_experiment_ids)
-                if actual_sub_experiment_id.lower() not in expected_sub_ids_norm:
-                    failures.append(
-                        f"Inconsistency for 'sub_experiment_id': CV expects one of {list(_as_list(expected_sub_experiment_ids))}, "
-                        f"file has '{actual_sub_experiment_id}'."
-                    )
-
-        # Report each missing attribute separately with its exact name.
-        for attr_name in missing_attrs:
-            failures.append(f"Missing required global attribute: '{attr_name}'.")
-
-        if not failures:
-            ctx.add_pass()
-        else:
+        if failures:
             for failure in failures:
                 ctx.add_failure(failure)
+        else:
+            ctx.add_pass()
 
     except Exception as e:
         ctx.add_failure(f"An unexpected error occurred: {e}")
 
     return [ctx.to_result()]
+
+
+# ==============================================================================
+# Atomic ATTR007 checks
+# ==============================================================================
+
+def check_experiment_id_vs_activity_id(ds, severity, project_id="cmip6"):
+    return _check_experiment_id_vs_global_attr(
+        ds,
+        severity,
+        project_id=project_id,
+        attr_name="activity_id",
+        expected_field="activity_id",
+    )
+
+
+def check_experiment_id_vs_experiment(ds, severity, project_id="cmip6"):
+    return _check_experiment_id_vs_global_attr(
+        ds,
+        severity,
+        project_id=project_id,
+        attr_name="experiment",
+        expected_field="experiment",
+    )
+
+
+def check_experiment_id_vs_parent_experiment_id(ds, severity, project_id="cmip6"):
+    return _check_experiment_id_vs_global_attr(
+        ds,
+        severity,
+        project_id=project_id,
+        attr_name="parent_experiment_id",
+        expected_field="parent_experiment_id",
+    )
+
+
+def check_experiment_id_vs_sub_experiment_id(ds, severity, project_id="cmip6"):
+    return _check_experiment_id_vs_global_attr(
+        ds,
+        severity,
+        project_id=project_id,
+        attr_name="sub_experiment_id",
+        expected_field="sub_experiment_id",
+    )
+

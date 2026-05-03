@@ -33,14 +33,18 @@ from checks.consistency_checks.check_attributes_match_filename import (
     check_filename_vs_global_attrs,
 )
 from checks.consistency_checks.check_experiment_consistency import (
-    check_experiment_consistency,
+    check_experiment_id_vs_activity_id,
+    check_experiment_id_vs_experiment,
+    check_experiment_id_vs_parent_experiment_id,
 )
 from checks.consistency_checks.check_institution_source_consistency import (
     check_institution_consistency,
-    check_source_consistency,
 )
 from checks.consistency_checks.check_variant_label_consistency import (
-    check_variant_label_consistency,
+    check_variant_label_vs_realization_index,
+    check_variant_label_vs_initialization_index,
+    check_variant_label_vs_physics_index,
+    check_variant_label_vs_forcing_index,
 )
 
 try:
@@ -536,8 +540,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
 
         return res
 
-    # -------------------------------------------------------------------------
-    # 5) Global consistency 
+       # -------------------------------------------------------------------------
+    # 5) Global consistency
     # -------------------------------------------------------------------------
     def check_Global_Consistency(self, ds):
         res = []
@@ -550,29 +554,75 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
 
         c = self.config.global_.consistency
 
+        # ATTR005 
         if c.filename_vs_attributes:
             sev = self.get_severity(c.filename_vs_attributes.severity)
-            res.extend(check_filename_vs_global_attrs(ds, sev, project_id=self.project_name))
-
-        if c.experiment_properties:
-            sev = self.get_severity(c.experiment_properties.severity)
             res.extend(
-                check_experiment_consistency(ds, sev, project_id=self.project_name)
+                check_filename_vs_global_attrs(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                )
             )
 
-        if c.institution_properties:
-            sev = self.get_severity(c.institution_properties.severity)
+        # ATTR007 - experiment_id consistency checks
+        if c.experiment_id_vs_activity_id:
+            sev = self.get_severity(c.experiment_id_vs_activity_id.severity)
             res.extend(
-                check_institution_consistency(ds, sev, project_id=self.project_name)
+                check_experiment_id_vs_activity_id(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                )
             )
 
-        if c.source_properties:
-            sev = self.get_severity(c.source_properties.severity)
-            res.extend(check_source_consistency(ds, sev, project_id=self.project_name))
+        if c.experiment_id_vs_experiment:
+            sev = self.get_severity(c.experiment_id_vs_experiment.severity)
+            res.extend(
+                check_experiment_id_vs_experiment(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                )
+            )
 
-        if c.variant_properties:
-            sev = self.get_severity(c.variant_properties.severity)
-            res.extend(check_variant_label_consistency(ds, sev))
+        if c.experiment_id_vs_parent_experiment_id:
+            sev = self.get_severity(c.experiment_id_vs_parent_experiment_id.severity)
+            res.extend(
+                check_experiment_id_vs_parent_experiment_id(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                )
+            )
+
+        # ATTR009
+        if c.institution_id_vs_institution:
+            sev = self.get_severity(c.institution_id_vs_institution.severity)
+            res.extend(
+                check_institution_consistency(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                )
+            )
+
+        # ATTR006 - variant_label consistency checks
+        if c.variant_label_vs_realization_index:
+            sev = self.get_severity(c.variant_label_vs_realization_index.severity)
+            res.extend(check_variant_label_vs_realization_index(ds, sev))
+
+        if c.variant_label_vs_initialization_index:
+            sev = self.get_severity(c.variant_label_vs_initialization_index.severity)
+            res.extend(check_variant_label_vs_initialization_index(ds, sev))
+
+        if c.variant_label_vs_physics_index:
+            sev = self.get_severity(c.variant_label_vs_physics_index.severity)
+            res.extend(check_variant_label_vs_physics_index(ds, sev))
+
+        if c.variant_label_vs_forcing_index:
+            sev = self.get_severity(c.variant_label_vs_forcing_index.severity)
+            res.extend(check_variant_label_vs_forcing_index(ds, sev))
 
         return res
 

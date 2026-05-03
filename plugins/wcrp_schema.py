@@ -153,12 +153,29 @@ class ConsistencyRule(BaseModel):
 class GlobalConsistency(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # ATTR005 - kept grouped
     filename_vs_attributes: Optional[ConsistencyRule] = None
-    experiment_properties: Optional[ConsistencyRule] = None
-    institution_properties: Optional[ConsistencyRule] = None
-    source_properties: Optional[ConsistencyRule] = None
-    frequency_properties: Optional[ConsistencyRule] = None
-    variant_properties: Optional[ConsistencyRule] = None
+
+    # ATTR007 - experiment_id consistency checks
+    experiment_id_vs_activity_id: Optional[ConsistencyRule] = None
+    experiment_id_vs_experiment: Optional[ConsistencyRule] = None
+    experiment_id_vs_parent_experiment_id: Optional[ConsistencyRule] = None
+    experiment_id_vs_sub_experiment_id: Optional[ConsistencyRule] = None
+
+    # ATTR009
+    institution_id_vs_institution: Optional[ConsistencyRule] = None
+
+    # ATTR010
+    source_id_vs_institution_id: Optional[ConsistencyRule] = None
+
+    # ATTR008
+    frequency_vs_table_id: Optional[ConsistencyRule] = None
+
+    # ATTR006 - variant_label consistency checks
+    variant_label_vs_realization_index: Optional[ConsistencyRule] = None
+    variant_label_vs_initialization_index: Optional[ConsistencyRule] = None
+    variant_label_vs_physics_index: Optional[ConsistencyRule] = None
+    variant_label_vs_forcing_index: Optional[ConsistencyRule] = None
 
 
 class GlobalSection(BaseModel):
