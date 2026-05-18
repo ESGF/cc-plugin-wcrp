@@ -30,12 +30,10 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
 
     # The allowed grid_mapping_name attribute values in CORDEX-CMIP6
     gmallowed = ["lambert_conformal_conic", "rotated_latitude_longitude"]
-    # The allowed exceptions for omitting the grid_mapping attribute, based on the global attribute 'grid'
-    gmomittedif = ["tripolar",]
+    # The allowed exception for omitting the grid_mapping attribute, based on the global attribute 'grid'
+    gmomittedtext = "(no grid_mapping)"
     grid_description = str(getattr(CheckerObject.ds, "grid", "") or "").lower()
-    grid_mapping_optional = any(
-        token in grid_description for token in gmomittedif
-    )
+    grid_mapping_optional = gmomittedtext in grid_description
     # One of the following attributes needs to be specified for the grid_mapping variable
     # assuming that means that the Earth is specified/described as requested
     # (the checking of the validity of the description is left to CF checks)
@@ -100,7 +98,7 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
                     f"The grid_mapping variable '{crs}', describing the coordinate reference system,"
                     " could not be found in the file."
                     "The grid_mapping attribute can only be omitted for supported ocean grids, "
-                    f"when the global attribute 'grid' contains one of: {gmomittedif}."
+                    f"when the global attribute 'grid' contains the text '{gmomittedtext}'."
                 )
 
     else:
