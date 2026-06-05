@@ -29,7 +29,7 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
     testctx = TestCtx(severity, desc)
 
     # The allowed grid_mapping_name attribute values in CORDEX-CMIP6
-    gmallowed = ["lambert_conformal_conic", "rotated_latitude_longitude"]
+    gmallowed = ["lambert_conformal_conic", "rotated_latitude_longitude", "mercator", "latitude_longitude"]
     # The allowed exception for omitting the grid_mapping attribute, based on the global attribute 'grid'
     gmomittedtext = "(no grid_mapping)"
     grid_description = str(getattr(CheckerObject.ds, "grid", "") or "").lower()
@@ -95,8 +95,8 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
                 testctx.add_pass()
             else:
                 testctx.add_failure(
-                    f"The grid_mapping variable '{crs}', describing the coordinate reference system,"
-                    " could not be found in the file."
+                    f"No grid_mapping variable, describing the coordinate reference system,"
+                    " could be found in the file."
                     "The grid_mapping attribute can only be omitted for supported ocean grids, "
                     f"when the global attribute 'grid' contains the text '{gmomittedtext}'."
                 )
@@ -106,10 +106,10 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
 
     # rlat, rlon or y, x must be present in file, depending on the grid_mapping_name
     if grid_mapping_name and grid_mapping_name in gmallowed:
-        if grid_mapping_name == "lambert_conformal_conic":
+        if grid_mapping_name in ["lambert_conformal_conic", "mercator"]:
             if "y" not in CheckerObject.xrds or "x" not in CheckerObject.xrds:
                 testctx.add_failure(
-                    "The grid_mapping_name 'lambert_conformal_conic' requires the variables"
+                    f"The grid_mapping_name '{grid_mapping_name}' requires the variables"
                     " 'y' and 'x' to be present in the file defining the native coordinate"
                     " system used by the RCM."
                 )
