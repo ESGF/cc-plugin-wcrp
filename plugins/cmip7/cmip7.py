@@ -351,7 +351,28 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             results.append(ctx.to_result())
             return None, results
 
-        # 2) variable lookup for long_name only
+        # 2) variable lookup for long_name only.
+        #
+        # Many tile / operation variants share the same variable_id (cVeg
+        # on Shrub Tiles, Grass Tiles, Tree Tiles all carry the bare
+        # variable_id 'cVeg'). Each variant has its own term in the
+        # 'variable' data descriptor with the per-variant long_name
+        # (cveggrass / cvegshrub / cvegtree, hursmin / hursmax / tasmin / ...).
+        # Picking the bare root means comparing the file's variant-specific
+        # long_name against a generic root long_name, and ATTR004 fails on
+        # every variant that isn't the root's tile.
+        #
+        # Prefer the variant whose registered long_name matches the file's
+        # actual long_name attr. Fall back to the root term if no variant
+        # matches. Same single-value comparison semantics for the check,
+        # the resolution just picks the right candidate.
+        file_long_name = None
+        try:
+            if variable_id in ds.variables:
+                file_long_name = getattr(ds.variables[variable_id], "long_name", None)
+        except Exception:
+            file_long_name = None
+
         try:
             var_id_lower = str(variable_id).lower()
             var_terms = find_terms_in_data_descriptor(
@@ -359,11 +380,27 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 data_descriptor_id="variable",
                 selected_term_fields=["long_name"],
             )
+            root_term = None
+            variant_match = None
             if var_terms:
+                normalized_file_ln = (
+                    str(file_long_name).strip() if file_long_name else None
+                )
                 for term in var_terms:
-                    if getattr(term, "id", None) == var_id_lower :
-                        expected_var = term
+                    tid = getattr(term, "id", None)
+                    if not tid or not tid.startswith(var_id_lower):
+                        continue
+                    if tid == var_id_lower:
+                        root_term = term
+                    term_ln = getattr(term, "long_name", None)
+                    if (
+                        normalized_file_ln
+                        and term_ln
+                        and str(term_ln).strip() == normalized_file_ln
+                    ):
+                        variant_match = term
                         break
+            expected_var = variant_match or root_term
         except Exception as e:
             ctx = TestCtx(severity, "Variable Registry")
             ctx.add_failure(
