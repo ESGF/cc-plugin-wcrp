@@ -254,6 +254,19 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         ctx = TestCtx(severity, "Geophysical Variable Detection")
 
         if len(geo_vars) == 0:
+            # CF detection returns zero candidates for files whose data
+            # variable carries flag_meanings (compliance-checker's
+            # is_geophysical heuristic treats those as QC flags). CMIP7
+            # region-selector fx files (basin, siline, ...) are flag-valued
+            # by spec but ARE the geophysical variable of the file. Fall
+            # back to the global variable_id attribute, which CMIP7 defines
+            # as the single geophysical variable of the file, when the
+            # named variable exists in the dataset.
+            vid = getattr(ds, "variable_id", None)
+            vid = str(vid) if vid else None
+            if vid and vid in ds.variables:
+                self._geo_var_cache = vid
+                return vid, res
             ctx.add_failure("No geophysical variable detected in the file.")
             res.append(ctx.to_result())
             return None, res
