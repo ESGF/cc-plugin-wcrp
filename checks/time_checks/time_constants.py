@@ -11,6 +11,7 @@
 # resolves them to use_midpoint=False without needing a Pt suffix.
 AVERAGE_CORRECTION_FREQ = [
     "day", "mon", "monPt", "yr", "yrPt", "1hrCM", "sem",
+    "1hr", "3hr", "6hr",
 ]
 
 
