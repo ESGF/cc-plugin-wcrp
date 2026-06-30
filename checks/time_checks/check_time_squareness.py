@@ -13,9 +13,19 @@ NDECIMALS = 6
 _TIME_RANGE_RE = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$", re.IGNORECASE)
 
 
-def _trunc(arr: np.ndarray, ndecs: int) -> np.ndarray:
+def _round(arr: np.ndarray, ndecs: int) -> np.ndarray:
+    # Round (not truncate) to ``ndecs`` decimal places before comparison.
+    # ``np.trunc`` was used here previously, but it floors toward zero and
+    # is sensitive to round-trip float64 precision: a theoretical value
+    # computed as ``first + i*step`` accumulates a per-index epsilon
+    # (~5e-17) that, after multiplying by 1e6, falls just below the next
+    # integer and trunc drops it. The file's stored value can be exact at
+    # the same precision, so the two land in different 1e-6 buckets and a
+    # phantom mismatch fires even though the values agree at well below
+    # the check's resolution. ``np.round`` (banker's rounding to nearest
+    # even) is unaffected by ulp-level precision drift.
     f = 10.0 ** int(ndecs)
-    return np.trunc(arr * f) / f
+    return np.round(arr * f) / f
 
 
 def _get_ds_path(ds) -> str:
@@ -279,9 +289,10 @@ def check_time_squareness(
             )
             cur = nxt
 
-    # Compare after truncation (nctime spirit)
-    a_t = _trunc(actual, NDECIMALS)
-    t_t = _trunc(theo, NDECIMALS)
+    # Compare after rounding to NDECIMALS places. See _round docstring
+    # for why this is np.round and not np.trunc.
+    a_t = _round(actual, NDECIMALS)
+    t_t = _round(theo, NDECIMALS)
 
     bad = np.where(a_t != t_t)[0]
     if bad.size:
