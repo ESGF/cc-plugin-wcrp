@@ -910,10 +910,11 @@ variable_name = "lev"
 severity = "H"
 data_type = "double"
 
-[coordinates.lev.monotonicity]
-# Checks VAR005
-severity = "H"
-direction = "increasing"
+# Temporarily deactivted waiting for coordinates information from CVs
+#[coordinates.lev.monotonicity]
+## Checks VAR005
+#severity = "H"
+#direction = "increasing"
 
 [coordinates.lev.attributes.axis]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
