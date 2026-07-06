@@ -122,6 +122,22 @@ def _load_toml(path: str) -> dict:
         return toml.load(f)
 
 
+def _is_flag_variable(ds, var_name):
+    """Return True iff ``var_name`` carries CF flag semantics
+    (``flag_values`` or ``flag_meanings``). CMIP7 region-selector
+    variables like ``basin`` and ``siline`` are integer flag variables
+    per CF §7.5 and CMIP7 data descriptor ``type: integer``. The default
+    geophysical_variable.toml rules assume continuous float fields
+    (float ``_FillValue = 1e20`` and float type check) and cannot
+    describe the flag case.
+    """
+    try:
+        attrs = ds.variables[var_name].ncattrs()
+    except Exception:
+        return False
+    return "flag_values" in attrs or "flag_meanings" in attrs
+
+
 class Cmip7ProjectCheck(WCRPBaseCheck):
     _cc_spec = "wcrp_cmip7"
     _cc_spec_version = "1.0"
@@ -532,6 +548,13 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return res
 
         vcfg = self.config.variable
+        # CF flag-valued variables (basin, siline, similar CMIP7 region
+        # selectors) are integer by construction. The default TOML rules
+        # (float type, _FillValue = 1e20, missing_value = 1e20) do not
+        # fit them. Gate the float type check and the two fill/missing
+        # attribute rules on ``is_flag``; everything else still applies.
+        # See #59.
+        is_flag = _is_flag_variable(ds, geo)
 
         # existence
         if vcfg.existence:
@@ -539,7 +562,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             res.extend(check_variable_existence(ds, geo, sev))
 
         # type
-        if vcfg.type:
+        if vcfg.type and not is_flag:
             sev = self.get_severity(vcfg.type.severity)
             dt = (vcfg.type.data_type or "").lower()
             allowed = ["f"] if dt in {"float", "double", "real"} else None
@@ -572,6 +595,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         for attr_key, rule in vcfg.attributes.items():
             sev = self.get_severity(rule.severity)
             name_in_file = rule.attribute_name or attr_key
+            if is_flag and name_in_file in ("_FillValue", "missing_value"):
+                continue
             res.extend(
                 check_attribute_suite(
                     ds=ds,
