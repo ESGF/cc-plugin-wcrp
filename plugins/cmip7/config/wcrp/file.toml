@@ -34,4 +34,4 @@ severity = "H"
 #min_chunk_size_bytes = 4194304
 
 # Optional fallback exceptions by frequency: minimum timesteps per time chunk.
-#frequency_min_timesteps = { "dec": 1, "yr": 1, "mon": 6, "day": 1, "6hr": 4, "3hr": 1, "1hr": 6 }
+#frequency_min_timesteps = { "dec" = 1, "yr" = 1, "mon" = 6, "day" = 1, "6hr" = 4, "3hr" = 1, "1hr" = 6 }

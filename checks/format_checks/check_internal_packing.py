@@ -62,30 +62,6 @@ def _attr_to_str(attr) -> str:
     return str(np.array(attr).astype("U"))
 
 
-def _extract_time_chunk_steps(var) -> int | None:
-    """Return chunk length along the time dimension, if available."""
-    try:
-        chunks = var.chunks
-    except Exception:
-        return None
-    if chunks is None:
-        return None
-
-    try:
-        dims = tuple(str(d) for d in var.dimensions)
-    except Exception:
-        return None
-
-    if "time" not in dims:
-        return None
-
-    time_dim_index = dims.index("time")
-    if time_dim_index >= len(chunks):
-        return None
-
-    return int(chunks[time_dim_index])
-
-
 def _is_single_chunk_or_contiguous(var) -> tuple[bool, str]:
     """
     True  if the variable is contiguous (chunks is None)
@@ -112,6 +88,7 @@ def _check_data_variable(
     min_chunk_size_bytes: int,
     frequency: str | None = None,
     frequency_min_timesteps: dict[str, int] | None = None,
+    has_time: bool = False,
 ) -> tuple[bool, str]:
     """
 
@@ -155,7 +132,7 @@ def _check_data_variable(
             f"(>= {min_chunk_size_bytes - lee_way} B threshold)"
         )
 
-    if frequency_min_timesteps:
+    if frequency_min_timesteps and has_time:
         if not frequency or str(frequency).strip().lower() == "unknown":
             known = ", ".join(sorted(str(k) for k in frequency_min_timesteps))
             return False, (
@@ -168,7 +145,7 @@ def _check_data_variable(
 
         if frequency in frequency_min_timesteps:
             required_steps = int(frequency_min_timesteps[frequency])
-            chunk_time_steps = _extract_time_chunk_steps(var)
+            chunk_time_steps = int(chunks[0]) if chunks is not None and len(chunks) > 0 else None
 
             if chunk_time_steps is not None and chunk_time_steps >= required_steps:
                 return True, (
@@ -395,6 +372,7 @@ def check_internal_packing(
                     min_chunk_size_bytes=min_chunk_size_bytes,
                     frequency=frequency,
                     frequency_min_timesteps=frequency_min_timesteps,
+                    has_time=has_time,
                 )
                 if ok:
                     ctx_d.add_pass()
