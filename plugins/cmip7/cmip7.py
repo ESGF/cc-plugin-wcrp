@@ -781,6 +781,15 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
 
         
         if check_time_range_vs_filename is not None:
-            res.extend(check_time_range_vs_filename(ds, BaseCheck.HIGH))
+            precision_map = None
+            if self.config and self.config.drs:
+                precision_map = self.config.drs.time_range_label_precision
+            res.extend(
+                check_time_range_vs_filename(
+                    ds,
+                    BaseCheck.HIGH,
+                    precision_by_frequency=precision_map,
+                )
+            )
 
         return res

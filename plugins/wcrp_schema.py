@@ -145,6 +145,7 @@ class DrsSection(BaseModel):
     directory: Optional[DrsRule] = None
     attributes_vs_directory: Optional[DrsRule] = None
     filename_vs_directory: Optional[DrsRule] = None
+    time_range_label_precision: Optional[Dict[str, str]] = None
 
 
 # =============================================================================
