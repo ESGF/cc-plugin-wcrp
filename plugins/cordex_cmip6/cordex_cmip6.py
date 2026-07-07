@@ -45,6 +45,7 @@ from checks.consistency_checks.check_drs_filename_cv import (
 )
 from checks.format_checks.check_compression import check_compression
 from checks.format_checks.check_format import check_format
+from checks.format_checks.check_internal_packing import check_internal_packing
 from checks.time_checks.check_time_cordex_cmip6 import (
     check_calendar,
     check_time_chunking,
@@ -240,6 +241,31 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 )
             )
 
+        return results
+
+    def check_file_internal_packing(self, ds):
+        """
+        [FILE004] Internal packing checks (shared logic with CMIP7, config in [format_checks.internal_packing])
+        """
+        results = []                
+        if "format_checks" not in self.config or "internal_packing" not in self.config["format_checks"]:
+            return results
+
+        check_config = self.config["format_checks"]["internal_packing"]
+
+        kwargs = {
+            "severity": self.get_severity(check_config.get("severity")),
+            "min_chunk_size_bytes": check_config.get("min_chunk_size_bytes", 4 * (2**20)),
+            "frequency": self.frequency,
+            "frequency_min_timesteps": check_config.get("frequency_min_timesteps"),
+        }
+        # Support per-subcheck severities if present
+        for sub in ("a", "b", "c", "d"):
+            key = f"severity_{sub}"
+            if check_config.get(key) is not None:
+                kwargs[key] = self.get_severity(check_config[key])
+
+        results.extend(check_internal_packing(ds, **kwargs))
         return results
 
     def check_data_types(self, ds):

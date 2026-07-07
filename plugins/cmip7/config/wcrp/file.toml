@@ -17,4 +17,21 @@ allowed_data_models = ["NETCDF4_CLASSIC", "NETCDF4"]
 
 [file.internal_packing]
 # Check FILE004
+# Default severity for FILE004a-d unless overridden below.
 severity = "H"
+
+# Optional per-subcheck severities (FILE004a..d)
+# FILE004a - consolidated metadata
+#severity_a = "H"
+# FILE004b - time chunking
+#severity_b = "H"
+# FILE004c - bounds chunking
+#severity_c = "H"
+# FILE004d - data chunking
+#severity_d = "H"
+
+# Optional minimum uncompressed chunk size threshold (bytes). Default: 4 MiB.
+#min_chunk_size_bytes = 4194304
+
+# Optional fallback exceptions by frequency: minimum timesteps per time chunk.
+#frequency_min_timesteps = { "dec": 1, "yr": 1, "mon": 6, "day": 1, "6hr": 4, "3hr": 1, "1hr": 6 }

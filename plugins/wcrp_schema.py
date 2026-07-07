@@ -129,6 +129,28 @@ class FileSection(BaseModel):
 class FileInternalPackingRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
+    severity_a: Optional[str] = None
+    severity_b: Optional[str] = None
+    severity_c: Optional[str] = None
+    severity_d: Optional[str] = None
+    min_chunk_size_bytes: Optional[int] = Field(default=None, ge=1)
+    frequency_min_timesteps: Optional[Dict[str, int]] = None
+
+    @model_validator(mode="after")
+    def _validate_frequency_min_timesteps(self):
+        if self.frequency_min_timesteps is None:
+            return self
+
+        for freq, steps in self.frequency_min_timesteps.items():
+            try:
+                if int(steps) <= 0:
+                    raise ValueError
+            except Exception as e:
+                raise ValueError(
+                    f"frequency_min_timesteps['{freq}'] must be a positive integer"
+                ) from e
+
+        return self
 
 
 # =============================================================================

@@ -20,7 +20,7 @@ from checks.attribute_checks.check_attribute_suite import check_attribute_suite
 
 from checks.format_checks.check_format import check_format
 from checks.format_checks.check_compression import check_compression
-from checks.format_checks.check_internal_packing import  check_cmip7_packing
+from checks.format_checks.check_internal_packing import  check_internal_packing
 from checks.consistency_checks.check_drs_filename_cv import (
     check_drs_filename,
     check_drs_directory,
@@ -437,8 +437,23 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
 
         r = self.config.file.internal_packing
         sev = self.get_severity(r.severity)
+        kwargs = {
+            "severity": sev,
+            "min_chunk_size_bytes": (r.min_chunk_size_bytes or 4 * (2**20)),
+            "frequency": self.frequency,
+            "frequency_min_timesteps": r.frequency_min_timesteps,
+        }
 
-        return check_cmip7_packing(ds, severity=sev)
+        if r.severity_a is not None:
+            kwargs["severity_a"] = self.get_severity(r.severity_a)
+        if r.severity_b is not None:
+            kwargs["severity_b"] = self.get_severity(r.severity_b)
+        if r.severity_c is not None:
+            kwargs["severity_c"] = self.get_severity(r.severity_c)
+        if r.severity_d is not None:
+            kwargs["severity_d"] = self.get_severity(r.severity_d)
+
+        return check_internal_packing(ds, **kwargs)
 
     # -------------------------------------------------------------------------
     # 2) Global attributes

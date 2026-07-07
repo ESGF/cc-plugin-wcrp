@@ -18,6 +18,24 @@ severity = "M"
 expected_complevel = 1
 expected_shuffle = true
 
+[format_checks.internal_packing]
+# Check FILE004
+# Default severity for FILE004a-d unless overridden below.
+severity = "M"
+# Optional per-subcheck severities (FILE004a..d)
+# FILE004a - consolidated metadata
+#severity_a = "M"
+# FILE004b - time chunking
+#severity_b = "M"
+# FILE004c - bounds chunking
+#severity_c = "M"
+# FILE004d - data chunking
+#severity_d = "M"
+# Optional minimum uncompressed chunk size threshold (bytes). Default: 4 MiB.
+#min_chunk_size_bytes = 4194304
+# Optional fallback exceptions by frequency: minimum timesteps per time chunk.
+frequency_min_timesteps = { "mon": 6, "day": 1, "6hr": 4, "3hr": 1, "1hr" = 6 }
+
 #------------------------------------------------------------------------------
 # Coordinate / Variable Checks
 # -----------------------------------------------------------------------------
