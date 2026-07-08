@@ -8,10 +8,6 @@ classifier depends on specific keys and specific spellings inside them
 names). If a cf-xarray release reshapes or renames any of these, this test
 fails LOUDLY at CI time so we notice on a dependency bump and can react
 deliberately, instead of silently losing classification coverage.
-
-Historical note: this file previously guarded private ``_possiblet``-style
-name sets inside compliance_checker.cf.util; that dependency was replaced by
-cf-xarray's public tables, which is what is guarded now.
 """
 import pytest
 
