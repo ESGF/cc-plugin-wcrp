@@ -1,13 +1,9 @@
-"""Guard test: coordinate_standard._role_from_weak_signals relies on
-cf-xarray's public criteria tables (``cf_xarray.criteria.coordinate_criteria``
-and ``cf_xarray.criteria.regex``).
+"""Tests that cf-xarray still provides the vocabulary we depend on.
 
-These are public API, so they should be stable -- but the weak-signal
-classifier depends on specific keys and specific spellings inside them
-(rlon/rlat in X/Y, lev/depth in Z, air_pressure in the vertical standard
-names). If a cf-xarray release reshapes or renames any of these, this test
-fails LOUDLY at CI time so we notice on a dependency bump and can react
-deliberately, instead of silently losing classification coverage.
+The coordinate classifier uses cf-xarray's criteria tables to recognize
+coordinate names (rlon/rlat as grid axes, lev/depth as vertical, and so
+on). If a future cf-xarray version changes or removes these entries, the
+classifier would quietly stop recognizing those coordinates.
 """
 import pytest
 
