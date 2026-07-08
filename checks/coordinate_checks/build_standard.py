@@ -18,7 +18,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # repo root
+# Bootstrap the repo root only when run as a script; as a module import the
+# root is already on sys.path, and imports must not mutate it.
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from plugins.coordinate_standard import (  # noqa: E402, F401  (re-exports)
     Role, Representation, VariableKind, Coordinate, Standard,
