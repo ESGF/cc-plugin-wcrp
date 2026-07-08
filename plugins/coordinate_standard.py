@@ -304,12 +304,14 @@ def classify_dataset(ds) -> tuple[dict, dict]:
     grid_mapping_names = set(cfutil.get_grid_mapping_variables(ds))
 
     # Variables consumed by a formula_terms attribute ("term: var term: var").
-    # No cf.util getter resolves these to variable names.
+    # No cf.util getter resolves these to variable names. The regex tolerates
+    # nonstandard spacing around the colon ("term : var").
     formula_refs: set[str] = set()
     for var in ds.variables.values():
         if "formula_terms" in var.ncattrs():
-            tokens = str(var.getncattr("formula_terms")).split()
-            formula_refs.update(tokens[1::2])
+            s = str(var.getncattr("formula_terms"))
+            formula_refs.update(
+                m.group(1) for m in re.finditer(r"\w+\s*:\s*(\w+)", s))
 
     kinds: dict[str, VariableKind] = {}
     candidates: dict[str, Coordinate] = {}
@@ -337,8 +339,11 @@ def classify_dataset(ds) -> tuple[dict, dict]:
         parametric = ("formula_terms" in var.ncattrs()) or (sn in PARAMETRIC_STANDARD_NAMES)
         is_dim_coord = name in dim_coord_names
         is_aux = (name in aux_coord_names) and not is_dim_coord
+        # A 1-D length-1 variable referenced in a coordinates attribute is
+        # still a scalar coordinate (CF: scalar coordinates are degenerate
+        # auxiliaries), so being auxiliary does not veto scalar treatment.
         is_scalar = (var.ndim == 0) or (
-            var.size == 1 and name not in dims and not is_aux
+            var.size == 1 and name not in dims
             and (axis or sn in VERTICAL_STANDARD_NAMES or sn in ("latitude", "longitude")))
 
         looks_coord = bool(is_dim_coord or is_aux or is_scalar or parametric
@@ -598,14 +603,17 @@ def _to_floats(values):
 
 
 def _values_match(file_values, ref_values, tolerance) -> bool:
+    """Compare value lists. An explicit table tolerance (including 0) is
+    used as-is; an absent tolerance falls back to a small relative one."""
     try:
-        tol = float(tolerance) if tolerance else 0.0
-    except ValueError:
-        tol = 0.0
+        tol = float(tolerance) if str(tolerance).strip() else None
+    except (TypeError, ValueError):
+        tol = None
     if len(file_values) != len(ref_values):
         return False
-    return all(abs(a - b) <= (tol or 1e-6 * max(1.0, abs(b)))
-               for a, b in zip(file_values, ref_values))
+    return all(
+        abs(a - b) <= (tol if tol is not None else 1e-6 * max(1.0, abs(b)))
+        for a, b in zip(file_values, ref_values))
 
 
 def _compare_units(candidate_units: str, entry_units: str) -> tuple[str, str]:
@@ -633,6 +641,9 @@ def _compare_units(candidate_units: str, entry_units: str) -> tuple[str, str]:
                 return "warn", (f"units {candidate_units!r} use base unit "
                                 f"{cand_base!r}, table expects {entry_base!r}")
             return "fail", f"units {candidate_units!r} not convertible to {entry_units!r}"
+        # A template can never be parsed by udunits, so do not fall through.
+        return "fail", (f"units {candidate_units!r} do not match the table "
+                        f"template {entry_units!r}")
     if cfutil.units_convertible(candidate_units, entry_units):
         return "warn", (f"units {candidate_units!r} convertible to, but not "
                         f"identical to, table units {entry_units!r}")
@@ -686,6 +697,21 @@ def diff(candidate: Coordinate, file_values, entry: Coordinate) -> tuple[list[st
             failures.append(f"min {min(fv)} < valid_min {entry.valid_min}")
         if entry.valid_max and max(fv) > float(entry.valid_max):
             failures.append(f"max {max(fv)} > valid_max {entry.valid_max}")
+    # Pinned values: when the entry prescribes exact values (requested list
+    # or scalar value), the file must match them even when the entry was
+    # resolved without value-pinning (a pool of one). Label (character)
+    # axes are skipped: their requested lists are not numeric.
+    if entry.requested or entry.value:
+        ref = (_to_floats(entry.requested) if entry.requested
+               else _to_floats([entry.value]))
+        cand = fv
+        if cand is None and candidate.value:
+            cand = _to_floats([candidate.value])
+        if (ref is not None and cand is not None
+                and not _values_match(cand, ref, entry.tolerance)):
+            failures.append(
+                f"values do not match the table's "
+                f"{'requested list' if entry.requested else 'value'}")
     return failures, warnings
 
 
