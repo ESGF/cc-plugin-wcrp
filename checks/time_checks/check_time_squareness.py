@@ -293,8 +293,6 @@ def check_time_squareness(
     # for why this is np.round and not np.trunc.
     a_t = _round(actual, NDECIMALS)
     t_t = _round(theo, NDECIMALS)
-<<<<<<< Updated upstream
-=======
 
     # For monthly instantaneous data, allow three valid timestamp conventions,
     # but require consistency across the whole file (single convention per file):
@@ -307,7 +305,6 @@ def check_time_squareness(
         and (inc_unit == "months")
         and (inc_val == 1)
     )
->>>>>>> Stashed changes
 
     if allow_mon_point_midmonth:
         theo_mid = np.zeros(actual.size, dtype=float)
