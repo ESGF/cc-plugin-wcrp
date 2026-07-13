@@ -451,7 +451,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 run_data=False,
             )
         finally:
-            finalize_internal_packing_session(ds)
+            finalize_internal_packing_session(ds, total_packing_checks=3)
 
     def check_File_Internal_Packing_Time(self, ds):
         try:
@@ -470,7 +470,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 run_data=False,
             )
         finally:
-            finalize_internal_packing_session(ds)
+            finalize_internal_packing_session(ds, total_packing_checks=3)
 
     def check_File_Internal_Packing_Data(self, ds):
         try:
@@ -492,7 +492,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 run_data=True,
             )
         finally:
-            finalize_internal_packing_session(ds)
+            finalize_internal_packing_session(ds, total_packing_checks=3)
 
     # -------------------------------------------------------------------------
     # 2) Global attributes

@@ -271,7 +271,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             )
             return results
         finally:
-            finalize_internal_packing_session(ds)
+            finalize_internal_packing_session(ds, total_packing_checks=3)
 
     def check_file_internal_packing_time(self, ds):
         """
@@ -298,7 +298,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             )
             return results
         finally:
-            finalize_internal_packing_session(ds)
+            finalize_internal_packing_session(ds, total_packing_checks=3)
 
     def check_file_internal_packing_data(self, ds):
         """
@@ -328,7 +328,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             )
             return results
         finally:
-            finalize_internal_packing_session(ds)
+            finalize_internal_packing_session(ds, total_packing_checks=3)
 
     def check_data_types(self, ds):
         """

@@ -44,6 +44,7 @@ except Exception as e:
 
 _DEFAULT_MIN_CHUNK_SIZE_BYTES = 4 * (2**20)  # 4 194 304 bytes
 _INTERNAL_PACKING_FILE_SESSIONS = {}
+_INTERNAL_PACKING_FINALIZE_COUNTERS = {}
 
 
 # ---------------------------------------------------------------------------
@@ -74,30 +75,51 @@ def _acquire_internal_packing_file(ds, file_path: str):
         return session["file"]
 
     f = pyfive.File(file_path)
-    _INTERNAL_PACKING_FILE_SESSIONS[key] = {
-        "file": f,
-        "remaining_calls": 3,
-    }
+    _INTERNAL_PACKING_FILE_SESSIONS[key] = {"file": f}
     return f
 
 
-def finalize_internal_packing_session(ds) -> None:
-    """Decrement session call counter and close shared FILE004 file handle when done."""
+def finalize_internal_packing_session(ds, total_packing_checks: int = 3) -> None:
+    """Called after each internal packing section check method (metadata / time / data).
+
+    Closes the shared FILE004 pyfive file handle after all section check methods
+    have reported in.
+
+    Parameters
+    ----------
+    ds : dataset
+        The dataset being checked.
+    total_packing_checks : int, optional
+        Total number of internal packing section check methods in the plugin.
+        Default is 3 (metadata + time + data). Custom plugins that only implement
+        a subset should pass the actual number so the file is closed promptly.
+    """
     file_path = _get_file_path(ds)
     key = _session_key(ds, file_path)
-    session = _INTERNAL_PACKING_FILE_SESSIONS.get(key)
-    if not session:
-        return
 
-    remaining = int(session.get("remaining_calls", 1)) - 1
-    if remaining <= 0:
-        try:
-            session.get("file").close()
-        except Exception:
-            pass
-        _INTERNAL_PACKING_FILE_SESSIONS.pop(key, None)
+    entry = _INTERNAL_PACKING_FINALIZE_COUNTERS.get(key)
+    if entry is None:
+        # First finalize call: record the threshold and count.
+        entry = {"count": 1, "total": total_packing_checks}
     else:
-        session["remaining_calls"] = remaining
+        if entry["total"] != total_packing_checks:
+            raise ValueError(
+                f"finalize_internal_packing_session called with total_packing_checks={total_packing_checks} "
+                f"but was previously initialized with total_packing_checks={entry['total']}. "
+                "Ensure all section check methods pass the same total_packing_checks value."
+            )
+        entry = {"count": entry["count"] + 1, "total": entry["total"]}
+
+    if entry["count"] >= entry["total"]:
+        session = _INTERNAL_PACKING_FILE_SESSIONS.pop(key, None)
+        if session:
+            try:
+                session["file"].close()
+            except Exception:
+                pass
+        _INTERNAL_PACKING_FINALIZE_COUNTERS.pop(key, None)
+    else:
+        _INTERNAL_PACKING_FINALIZE_COUNTERS[key] = entry
 
 
 def _is_single_chunk_or_contiguous(var) -> tuple[bool, str]:
