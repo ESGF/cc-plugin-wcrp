@@ -126,13 +126,20 @@ class FileSection(BaseModel):
     compression: Optional[FileCompressionRule] = None
     internal_packing: Optional[FileInternalPackingRule] = None
 
-class FileInternalPackingRule(BaseModel):
+
+class FileInternalPackingMetadataRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
-    severity_a: Optional[str] = None
-    severity_b: Optional[str] = None
-    severity_c: Optional[str] = None
-    severity_d: Optional[str] = None
+
+
+class FileInternalPackingTimeRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    severity: Optional[str] = None
+
+
+class FileInternalPackingDataRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    severity: Optional[str] = None
     min_chunk_size_bytes: Optional[int] = Field(default=None, ge=1)
     frequency_min_timesteps: Optional[Dict[str, int]] = None
 
@@ -151,6 +158,13 @@ class FileInternalPackingRule(BaseModel):
                 ) from e
 
         return self
+
+
+class FileInternalPackingRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metadata: Optional[FileInternalPackingMetadataRule] = None
+    time: Optional[FileInternalPackingTimeRule] = None
+    data: Optional[FileInternalPackingDataRule] = None
 
 
 # =============================================================================

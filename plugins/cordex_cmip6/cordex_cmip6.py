@@ -45,7 +45,10 @@ from checks.consistency_checks.check_drs_filename_cv import (
 )
 from checks.format_checks.check_compression import check_compression
 from checks.format_checks.check_format import check_format
-from checks.format_checks.check_internal_packing import check_internal_packing
+from checks.format_checks.check_internal_packing import (
+    check_internal_packing,
+    finalize_internal_packing_session,
+)
 from checks.time_checks.check_time_cordex_cmip6 import (
     check_calendar,
     check_time_chunking,
@@ -243,30 +246,89 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
 
         return results
 
-    def check_file_internal_packing(self, ds):
+    def check_file_internal_packing_metadata(self, ds):
         """
-        [FILE004] Internal packing checks (shared logic with CMIP7, config in [format_checks.internal_packing])
+        [FILE004a] Internal packing consolidated metadata check.
         """
-        results = []                
-        if "format_checks" not in self.config or "internal_packing" not in self.config["format_checks"]:
+        try:
+            results = []
+            if "format_checks" not in self.config or "internal_packing" not in self.config["format_checks"]:
+                return results
+
+            check_config = self.config["format_checks"]["internal_packing"]
+            metadata_cfg = check_config.get("metadata")
+            if not metadata_cfg:
+                return results
+
+            results.extend(
+                check_internal_packing(
+                    ds,
+                    severity=self.get_severity(metadata_cfg.get("severity")),
+                    run_metadata=True,
+                    run_time=False,
+                    run_data=False,
+                )
+            )
             return results
+        finally:
+            finalize_internal_packing_session(ds)
 
-        check_config = self.config["format_checks"]["internal_packing"]
+    def check_file_internal_packing_time(self, ds):
+        """
+        [FILE004b-c] Internal packing time and time-bounds checks.
+        """
+        try:
+            results = []
+            if "format_checks" not in self.config or "internal_packing" not in self.config["format_checks"]:
+                return results
 
-        kwargs = {
-            "severity": self.get_severity(check_config.get("severity")),
-            "min_chunk_size_bytes": check_config.get("min_chunk_size_bytes", 4 * (2**20)),
-            "frequency": self.frequency,
-            "frequency_min_timesteps": check_config.get("frequency_min_timesteps"),
-        }
-        # Support per-subcheck severities if present
-        for sub in ("a", "b", "c", "d"):
-            key = f"severity_{sub}"
-            if check_config.get(key) is not None:
-                kwargs[key] = self.get_severity(check_config[key])
+            check_config = self.config["format_checks"]["internal_packing"]
+            time_cfg = check_config.get("time")
+            if not time_cfg:
+                return results
 
-        results.extend(check_internal_packing(ds, **kwargs))
-        return results
+            results.extend(
+                check_internal_packing(
+                    ds,
+                    severity=self.get_severity(time_cfg.get("severity")),
+                    run_metadata=False,
+                    run_time=True,
+                    run_data=False,
+                )
+            )
+            return results
+        finally:
+            finalize_internal_packing_session(ds)
+
+    def check_file_internal_packing_data(self, ds):
+        """
+        [FILE004d] Internal packing data-variable chunking check.
+        """
+        try:
+            results = []
+            if "format_checks" not in self.config or "internal_packing" not in self.config["format_checks"]:
+                return results
+
+            check_config = self.config["format_checks"]["internal_packing"]
+            data_cfg = check_config.get("data")
+            if not data_cfg:
+                return results
+
+            results.extend(
+                check_internal_packing(
+                    ds,
+                    severity=self.get_severity(data_cfg.get("severity")),
+                    min_chunk_size_bytes=data_cfg.get("min_chunk_size_bytes", 4 * (2**20)),
+                    frequency=self.frequency,
+                    frequency_min_timesteps=data_cfg.get("frequency_min_timesteps"),
+                    run_metadata=False,
+                    run_time=False,
+                    run_data=True,
+                )
+            )
+            return results
+        finally:
+            finalize_internal_packing_session(ds)
 
     def check_data_types(self, ds):
         """
