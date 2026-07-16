@@ -294,15 +294,63 @@ def check_time_squareness(
     a_t = _round(actual, NDECIMALS)
     t_t = _round(theo, NDECIMALS)
 
-    bad = np.where(a_t != t_t)[0]
-    if bad.size:
-        i = int(bad[0])
-        ctx.add_failure(
-            f"Mismatch at index {i}: expected {t_t[i]:.{NDECIMALS}f}, got {a_t[i]:.{NDECIMALS}f}. "
-            f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
-        )
+    # For monthly instantaneous data, allow three valid timestamp conventions,
+    # but require consistency across the whole file (single convention per file):
+    #  - first day of each month at 00:00
+    #  - 15th day of each month at 00:00
+    #  - exact calendar-aware midpoint of each month interval
+    allow_mon_point_midmonth = (
+        instantaneous
+        and (freq_id in {"mon", "monPt"})
+        and (inc_unit == "months")
+        and (inc_val == 1)
+    )
+
+    if allow_mon_point_midmonth:
+        theo_mid = np.zeros(actual.size, dtype=float)
+        theo_center = np.zeros(actual.size, dtype=float)
+        cur = start_boundary
+        for i in range(actual.size):
+            nxt = _add_time_increment(cur, inc_val, inc_unit, cal)
+            mid = cftime.datetime(cur.year, cur.month, 15, 0, 0, 0, calendar=cal)
+            theo_mid[i] = float(cftime.date2num(mid, units=units, calendar=cal))
+            theo_center[i] = _midpoint_num(cur, nxt, units, cal)
+            cur = nxt
+
+        t_mid = _round(theo_mid, NDECIMALS)
+        t_center = _round(theo_center, NDECIMALS)
+
+        # A file passes only if the full axis matches one convention end-to-end.
+        full_match_start = np.array_equal(a_t, t_t)
+        full_match_mid = np.array_equal(a_t, t_mid)
+        full_match_center = np.array_equal(a_t, t_center)
+
+        if not (full_match_start or full_match_mid or full_match_center):
+            bad = np.where((a_t != t_t) & (a_t != t_mid) & (a_t != t_center))[0]
+            if bad.size:
+                i = int(bad[0])
+            else:
+                # Mixed-convention axis: every point matches at least one candidate,
+                # but no single candidate matches the entire file.
+                first_start = np.where(a_t != t_t)[0]
+                i = int(first_start[0]) if first_start.size else 0
+            ctx.add_failure(
+                f"Mismatch at index {i}: expected {t_t[i]:.{NDECIMALS}f} (month-start) "
+                f"or {t_mid[i]:.{NDECIMALS}f} (day-15) "
+                f"or {t_center[i]:.{NDECIMALS}f} (exact center), got {a_t[i]:.{NDECIMALS}f}. "
+                "The full file must consistently follow one of these conventions. "
+                f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
+            )
     else:
-        if not ctx.messages:
-            ctx.add_pass()
+        bad = np.where(a_t != t_t)[0]
+        if bad.size:
+            i = int(bad[0])
+            ctx.add_failure(
+                f"Mismatch at index {i}: expected {t_t[i]:.{NDECIMALS}f}, got {a_t[i]:.{NDECIMALS}f}. "
+                f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
+            )
+
+    if not ctx.messages:
+        ctx.add_pass()
 
     return [ctx.to_result()]
