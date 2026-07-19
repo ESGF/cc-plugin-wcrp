@@ -89,7 +89,7 @@ cv_source_collection_key = "description"
 severity = "L"
 value_type = "str"
 is_required = false
-pattern = "^CMIP6 model data produced by .* is licensed under a Creative Commons Attribution 4\\.0 International License (https://creativecommons\\.org/licenses/by/4\\.0/)\\. *Consult https://pcmdi\\.llnl\\.gov/CMIP6/TermsOfUse for terms of use governing CMIP6 output, including citation requirements and proper acknowledgment\\. *Further information about this data, including some limitations, can be found via the further_info_url (recorded as a global attribute in this file).*\\. *The data producers and data providers make no warranty, either express or implied, including, but not limited to, warranties of merchantability and fitness for a particular purpose\\. *All liabilities arising from the supply of the information (including any liability arising in negligence) are excluded to the fullest extent permitted by law\\.$"
+cv_source_collection = "license"
 
 [global.attributes.nominal_resolution]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
@@ -174,12 +174,6 @@ is_required = false
 na_value = "no parent"
 pattern = ".*"
 
-[global.attributes.branch_time]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "M"
-value_type = "float"
-is_required = true
-
 [global.attributes.branch_time_in_parent]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
@@ -216,7 +210,7 @@ pattern = ".*"
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 value_type = "str"
-is_required = false
+is_required = "has_sub_experiment"
 na_value = "none"
 cv_source_collection = "sub_experiment_id"
 
@@ -233,7 +227,7 @@ cv_source_collection_key = "description"
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
 value_type = "str"
-is_required = false
+is_required = "has_parent_activity"
 na_value = "no parent"
 cv_source_collection = "activity_id"
 
@@ -241,7 +235,7 @@ cv_source_collection = "activity_id"
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
 value_type = "str"
-is_required = false
+is_required = "has_parent_experiment"
 na_value = "no parent"
 cv_source_collection = "experiment_id"
 
@@ -327,27 +321,50 @@ pattern = ".*"
 # ==============================================================================
 # == Global attributes consistency Checks
 # ==============================================================================
-
 [global.consistency.filename_vs_attributes]
-# Checks ATTR005 
+# Checks ATTR005a
 severity = "H"
 
-[global.consistency.experiment_properties]
-# Checks ATTR007 
+[global.consistency.experiment_id_vs_activity_id]
+# ATTR007a
 severity = "M"
 
-[global.consistency.institution_properties]
-# Checks ATTR009 
+[global.consistency.experiment_id_vs_experiment]
+# ATTR007b
+severity = "M"
+
+[global.consistency.experiment_id_vs_parent_experiment_id]
+# ATTR007c
+severity = "M"
+
+[global.consistency.experiment_id_vs_sub_experiment_id]
+# ATTR007d
+severity = "M"
+
+[global.consistency.institution_id_vs_institution]
+# ATTR009
 severity = "H"
 
-[global.consistency.source_properties]
-# Checks ATTR010 
+[global.consistency.source_id_vs_institution_id]
+# ATTR010
 severity = "H"
 
-[global.consistency.frequency_properties]
-# Checks ATTR008 
+[global.consistency.frequency_vs_table_id]
+# ATTR008
 severity = "H"
 
-[global.consistency.variant_properties]
-# Checks ATTR006
+[global.consistency.variant_label_vs_realization_index]
+# ATTR006a
+severity = "H"
+
+[global.consistency.variant_label_vs_initialization_index]
+# ATTR006b
+severity = "H"
+
+[global.consistency.variant_label_vs_physics_index]
+# ATTR006c
+severity = "H"
+
+[global.consistency.variant_label_vs_forcing_index]
+# ATTR006d
 severity = "H"

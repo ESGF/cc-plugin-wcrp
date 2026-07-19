@@ -1,177 +1,196 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Atomic experiment-consistency checks (ATTR007a-d).
+
+Split from the former monolithic ATTR007 into one function per comparison, so
+each has its own severity and its own Result:
+
+  ATTR007a  experiment_id_vs_activity_id
+  ATTR007b  experiment_id_vs_experiment
+  ATTR007c  experiment_id_vs_parent_experiment_id
+  ATTR007d  experiment_id_vs_sub_experiment_id   (CMIP6 / cmip6plus only)
+
+Precedence rule for parent/sub:
+  If the file's parent_experiment_id / sub_experiment_id attribute is absent or
+  equals a "no value" token ('no parent' / 'none'), the consistency check SKIPS
+  silently (returns []). Whether the attribute *should* be present is the job of
+  the attribute-suite has_parent_experiment()/has_sub_experiment() rule, not of the consistency check.
+  This prevents a single missing-parent situation from producing two errors.
+"""
 
 from compliance_checker.base import TestCtx
 
-try:
-    import esgvoc.api as voc
-    ESG_VOCAB_AVAILABLE = True
-except ImportError:
-    ESG_VOCAB_AVAILABLE = False
+from checks.utils import (
+    resolve_experiment_term,
+    _as_list,
+    _lower_str_list,
+    NO_VALUE_TOKENS as _NO_VALUE_TOKENS,
+    _ESG_VOCAB_PROJECT_API as ESG_VOCAB_AVAILABLE,
+)
 
 
-# ============================================================================
-# Mapping visible: attribute name stays the same in the NetCDF file,
-# only the ESGVOC collection name changes between CMIP6 and CMIP7.
-# ============================================================================
-CV_COLLECTION_MAP = {
-    "cmip6": {
-        "experiment_id": "experiment_id",
-    },
-    "cmip7": {
-        "experiment_id": "experiment",
-    },
-    "cmip6plus": {
-        "experiment_id": "experiment_id",
-    },
-}
-
-
-def _get_cv_collection(project_id, attribute_name):
-    project_key = str(project_id).strip().lower()
-    return CV_COLLECTION_MAP.get(project_key, {}).get(attribute_name, attribute_name)
-
-
-def _as_list(value):
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple, set)):
-        return list(value)
-    return [value]
-
-
-def _lower_str_list(values):
-    return [str(v).strip().lower() for v in _as_list(values) if v is not None]
-
-
-def _get_global_attr(ds, attr_name, missing_attrs):
-    """
-    Return the stripped global attribute value if present, else None.
-    Track missing attributes in missing_attrs without raising.
-    """
-    if attr_name not in ds.ncattrs():
-        missing_attrs.append(attr_name)
+def _get_attr(ds, name):
+    if name not in ds.ncattrs():
         return None
-    return str(ds.getncattr(attr_name)).strip()
+    return str(ds.getncattr(name)).strip()
 
 
-def check_experiment_consistency(ds, severity, project_id="cmip6"):
-    """
-    [ATTR007] Checks if attributes are consistent with the 'experiment_id'
-    from Esgvoc
-    """
-    fixed_check_id = "ATTR007"
-    description = f"[{fixed_check_id}] Consistency: experiment_id vs other global attributes"
-    ctx = TestCtx(severity, description)
+def _no_vocab_result(check_id, label, severity):
+    ctx = TestCtx(severity, f"[{check_id}] {label}")
+    ctx.add_failure("The 'esgvoc' library is not installed.")
+    return [ctx.to_result()]
 
+
+# ---------------------------------------------------------------------------
+# ATTR007a  experiment_id vs activity_id
+# ---------------------------------------------------------------------------
+def check_experiment_id_vs_activity_id(ds, severity, project_id="cmip6"):
+    check_id, label = "ATTR007a", "Consistency: experiment_id vs activity_id"
     if not ESG_VOCAB_AVAILABLE:
-        ctx.add_failure("The 'esgvoc' library is not installed.")
+        return _no_vocab_result(check_id, label, severity)
+    ctx = TestCtx(severity, f"[{check_id}] {label}")
+
+    actual = _get_attr(ds, "activity_id")
+    if actual is None:
+        ctx.add_failure("Missing required global attribute: 'activity_id'.")
         return [ctx.to_result()]
 
-    try:
-        failures = []
-        missing_attrs = []
+    term = resolve_experiment_term(ds, project_id)
+    if term is None:
+        ctx.add_failure("Could not resolve experiment_id in the ESGF vocabulary.")
+        return [ctx.to_result()]
 
-        # Read all file attributes independently so one missing attribute does
-        # not prevent the other comparisons from running.
-        actual_experiment_id = _get_global_attr(ds, "experiment_id", missing_attrs)
-        actual_activity_id = _get_global_attr(ds, "activity_id", missing_attrs)
-        actual_experiment = _get_global_attr(ds, "experiment", missing_attrs)
-        actual_parent_id = _get_global_attr(ds, "parent_experiment_id", missing_attrs)
-        actual_sub_experiment_id = _get_global_attr(ds, "sub_experiment_id", missing_attrs)
+    expected = getattr(term, "activity_id", None)
+    if not expected:
+        ctx.add_pass()
+        return [ctx.to_result()]
 
-        reference_term = None
+    if actual.lower() in _lower_str_list(expected):
+        ctx.add_pass()
+    else:
+        ctx.add_failure(
+            f"Inconsistency for 'activity_id': CV expects one of "
+            f"{list(_as_list(expected))}, file has '{actual}'."
+        )
+    return [ctx.to_result()]
 
-        # We can only query the CV if experiment_id exists in the file.
-        if actual_experiment_id is not None:
-            collection_id = _get_cv_collection(project_id, "experiment_id")
 
-            reference_term = voc.get_term_in_collection(
-                project_id=project_id,
-                collection_id=collection_id,
-                term_id=actual_experiment_id,
-            )
+# ---------------------------------------------------------------------------
+# ATTR007b  experiment_id vs experiment
+# ---------------------------------------------------------------------------
+def check_experiment_id_vs_experiment(ds, severity, project_id="cmip6"):
+    check_id, label = "ATTR007b", "Consistency: experiment_id vs experiment"
+    if not ESG_VOCAB_AVAILABLE:
+        return _no_vocab_result(check_id, label, severity)
+    ctx = TestCtx(severity, f"[{check_id}] {label}")
 
-            # Fallback: if the term is not found by term_id, try to resolve the
-            # underlying ESGVOC id from an exact drs_name match.
-            if not reference_term:
-                candidates = voc.find_terms_in_collection(
-                    project_id=project_id,
-                    collection_id=collection_id,
-                    expression=actual_experiment_id,
-                    selected_term_fields=["id", "drs_name"],
-                )
+    actual = _get_attr(ds, "experiment")
+    if actual is None:
+        ctx.add_failure("Missing required global attribute: 'experiment'.")
+        return [ctx.to_result()]
 
-                resolved_term_id = None
+    term = resolve_experiment_term(ds, project_id)
+    if term is None:
+        ctx.add_failure("Could not resolve experiment_id in the ESGF vocabulary.")
+        return [ctx.to_result()]
 
-                for item in candidates:
-                    candidate_drs_name = str(getattr(item, "drs_name", "")).strip()
-                    candidate_id = str(getattr(item, "id", "")).strip()
+    expected = getattr(term, "experiment", None) or getattr(term, "description", None)
+    if not expected:
+        ctx.add_pass()
+        return [ctx.to_result()]
 
-                    if candidate_drs_name == actual_experiment_id:
-                        resolved_term_id = candidate_id
-                        break
+    if actual == str(expected).strip():
+        ctx.add_pass()
+    else:
+        ctx.add_failure(
+            f"Inconsistency for 'experiment': CV expects '{expected}', "
+            f"file has '{actual}'."
+        )
+    return [ctx.to_result()]
 
-                if resolved_term_id:
-                    reference_term = voc.get_term_in_collection(
-                        project_id=project_id,
-                        collection_id=collection_id,
-                        term_id=resolved_term_id,
-                    )
 
-            if not reference_term:
-                failures.append(
-                    f"The experiment_id '{actual_experiment_id}' was not found in the ESGF vocabulary."
-                )
+# ---------------------------------------------------------------------------
+# ATTR007c  experiment_id vs parent_experiment_id  (precedence-aware)
+# ---------------------------------------------------------------------------
+def check_experiment_id_vs_parent_experiment_id(ds, severity, project_id="cmip6"):
+    check_id, label = "ATTR007c", "Consistency: experiment_id vs parent_experiment_id"
+    if not ESG_VOCAB_AVAILABLE:
+        return _no_vocab_result(check_id, label, severity)
+    ctx = TestCtx(severity, f"[{check_id}] {label}")
 
-        # Compare against the CV only when both the CV term and the file
-        # attribute needed for that comparison are available.
-        if reference_term:
-            expected_activity_ids = getattr(reference_term, "activity_id", None)
-            if expected_activity_ids and actual_activity_id is not None:
-                expected_activity_ids_norm = _lower_str_list(expected_activity_ids)
-                if actual_activity_id.lower() not in expected_activity_ids_norm:
-                    failures.append(
-                        f"Inconsistency for 'activity_id': CV expects one of {list(_as_list(expected_activity_ids))}, "
-                        f"file has '{actual_activity_id}'."
-                    )
+    actual = _get_attr(ds, "parent_experiment_id")
 
-            expected_experiment = getattr(reference_term, "experiment", None)
-            if expected_experiment and actual_experiment is not None:
-                if actual_experiment != str(expected_experiment).strip():
-                    failures.append(
-                        f"Inconsistency for 'experiment': CV expects '{expected_experiment}', "
-                        f"file has '{actual_experiment}'."
-                    )
+    # Precedence: absent or "no parent" -> not this check's responsibility.
+    if actual is None or actual.strip().lower() in _NO_VALUE_TOKENS:
+        return []
 
-            expected_parent_ids = getattr(reference_term, "parent_experiment_id", None)
-            if expected_parent_ids and actual_parent_id is not None:
-                expected_parent_ids_norm = _lower_str_list(expected_parent_ids)
-                if actual_parent_id.lower() not in expected_parent_ids_norm:
-                    failures.append(
-                        f"Inconsistency for 'parent_experiment_id': CV expects one of {list(_as_list(expected_parent_ids))}, "
-                        f"file has '{actual_parent_id}'."
-                    )
+    term = resolve_experiment_term(ds, project_id)
+    if term is None:
+        ctx.add_failure("Could not resolve experiment_id in the ESGF vocabulary.")
+        return [ctx.to_result()]
 
-            expected_sub_experiment_ids = getattr(reference_term, "sub_experiment_id", None)
-            if expected_sub_experiment_ids and actual_sub_experiment_id is not None:
-                expected_sub_ids_norm = _lower_str_list(expected_sub_experiment_ids)
-                if actual_sub_experiment_id.lower() not in expected_sub_ids_norm:
-                    failures.append(
-                        f"Inconsistency for 'sub_experiment_id': CV expects one of {list(_as_list(expected_sub_experiment_ids))}, "
-                        f"file has '{actual_sub_experiment_id}'."
-                    )
+    expected = getattr(term, "parent_experiment_id", None)
+    # CMIP7 exposes the parent as a nested object under 'parent_experiment'
+    if not expected:
+        parent_obj = getattr(term, "parent_experiment", None)
+        if parent_obj is not None:
+            expected = [getattr(parent_obj, "drs_name", None)
+                        or getattr(parent_obj, "id", None)]
 
-        # Report each missing attribute separately with its exact name.
-        for attr_name in missing_attrs:
-            failures.append(f"Missing required global attribute: '{attr_name}'.")
+    if not expected:
+        # File declares a parent but the CV declares none -> inconsistency.
+        ctx.add_failure(
+            f"Inconsistency for 'parent_experiment_id': file declares '{actual}' "
+            f"but the CV declares no parent for this experiment."
+        )
+        return [ctx.to_result()]
 
-        if not failures:
-            ctx.add_pass()
-        else:
-            for failure in failures:
-                ctx.add_failure(failure)
+    if actual.lower() in _lower_str_list(expected):
+        ctx.add_pass()
+    else:
+        ctx.add_failure(
+            f"Inconsistency for 'parent_experiment_id': CV expects one of "
+            f"{list(_as_list(expected))}, file has '{actual}'."
+        )
+    return [ctx.to_result()]
 
-    except Exception as e:
-        ctx.add_failure(f"An unexpected error occurred: {e}")
 
+# ---------------------------------------------------------------------------
+# ATTR007d  experiment_id vs sub_experiment_id  (CMIP6/plus, precedence-aware)
+# ---------------------------------------------------------------------------
+def check_experiment_id_vs_sub_experiment_id(ds, severity, project_id="cmip6"):
+    check_id, label = "ATTR007d", "Consistency: experiment_id vs sub_experiment_id"
+    if not ESG_VOCAB_AVAILABLE:
+        return _no_vocab_result(check_id, label, severity)
+    ctx = TestCtx(severity, f"[{check_id}] {label}")
+
+    actual = _get_attr(ds, "sub_experiment_id")
+
+    # Precedence: absent or 'none' -> not this check's responsibility.
+    if actual is None or actual.strip().lower() in _NO_VALUE_TOKENS:
+        return []
+
+    term = resolve_experiment_term(ds, project_id)
+    if term is None:
+        ctx.add_failure("Could not resolve experiment_id in the ESGF vocabulary.")
+        return [ctx.to_result()]
+
+    expected = getattr(term, "sub_experiment_id", None)
+    expected_norm = [s for s in _lower_str_list(expected) if s not in _NO_VALUE_TOKENS]
+
+    if not expected_norm:
+        ctx.add_failure(
+            f"Inconsistency for 'sub_experiment_id': file declares '{actual}' "
+            f"but the CV declares no sub-experiment for this experiment."
+        )
+        return [ctx.to_result()]
+
+    if actual.lower() in expected_norm:
+        ctx.add_pass()
+    else:
+        ctx.add_failure(
+            f"Inconsistency for 'sub_experiment_id': CV expects one of "
+            f"{list(_as_list(expected))}, file has '{actual}'."
+        )
     return [ctx.to_result()]

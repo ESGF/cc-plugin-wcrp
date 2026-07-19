@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # =============================================================================
-# WCRP CMIP6Plus plugin
+# WCRP CMIP6 plugin
 # =============================================================================
 
 from __future__ import annotations
@@ -126,17 +126,18 @@ def _load_toml(path: str) -> dict:
         return toml.load(f)
 
 
-class Cmip6PlusProjectCheck(WCRPBaseCheck):
-    _cc_spec = "wcrp_cmip6plus"
+class C3SCmip6ProjectCheck(WCRPBaseCheck):
+    _cc_spec = "wcrp_c3scmip6"
     _cc_spec_version = "1.0"
-    _cc_description = "WCRP CMIP6Plus Project Plugin"
+    _cc_description = "WCRP C3S CMIP6 Project PLugin"
     supported_ds = [Dataset]
-
 
     def __init__(self, options=None):
         super().__init__(options)
 
-        self.project_name = "cmip6plus"
+        # C3S has its own Compliance Checker suite/configuration, but its
+        # vocabulary and DRS specification remain CMIP6 in ESGVOC.
+        self.project_name = "cmip6"
         self.config: Optional[WCRPConfig] = None
         self.cfg: dict = {}
 
@@ -783,11 +784,12 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             if getattr(rule, "coverage", None):
                 sev = _sev(rule.coverage.severity, default=BaseCheck.MEDIUM)
                 res.extend(check_time_bounds(ds, severity=sev))
-            
-            # TIME003a (calendar recommendation)
+
+            #time calendar recommendation (TIME003a)
             if getattr(rule, "calendar_recommendation", None):
                 sev = _sev(rule.calendar_recommendation.severity, default=BaseCheck.MEDIUM)
                 res.extend(check_calendar_recommendation(ds, severity=sev))
+
             # coordinate variable attributes
             for attr_key, arule in (getattr(rule, "attributes", None) or {}).items():
                 sev = _sev(arule.severity, default=BaseCheck.MEDIUM)

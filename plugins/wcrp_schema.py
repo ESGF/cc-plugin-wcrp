@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal, Union
 
 from pydantic import (
     BaseModel,
@@ -31,7 +31,19 @@ class AttributeRule(BaseModel):
 
     severity: Optional[str] = None
     value_type: Optional[str] = None
-    is_required: bool = True
+    # is_required is normally a bool. It may also be a dynamic keyword string
+    # resolved at runtime against esgvoc:
+    #   "has_parent_experiment" -> required only if the CV declares a parent experiment
+    #   "has_sub_experiment" -> required only if the CV declares a sub-experiment
+    is_required: Union[
+        bool,
+        Literal[
+            "has_parent_experiment",
+            "has_sub_experiment",
+            "has_parent_activity",
+            "has_parent_mip_era",
+        ],
+    ] = True
     na_value: Optional[Any] = None
     # Optional alias of attribute name as stored in netCDF (case sensitive in practice).
     attribute_name: Optional[str] = None
@@ -39,6 +51,8 @@ class AttributeRule(BaseModel):
     # Mutually exclusive "value rules"
     pattern: Optional[str] = None
     constant: Optional[Any] = None
+    threshold: Optional[Any] = None
+    is_above_threshold: Optional[bool] = None
     enum: Optional[List[Any]] = None
     as_variable: Optional[bool] = None
 
@@ -57,6 +71,12 @@ class AttributeRule(BaseModel):
 
     @model_validator(mode="after")
     def exclusivity(self):
+        if self.is_above_threshold is not None and self.threshold is None:
+            raise ValueError("is_above_threshold requires threshold")
+
+        if self.threshold is not None and self.is_above_threshold is None:
+            raise ValueError("threshold requires is_above_threshold")
+
         # If a collection key is used, the collection must exist.
         if self.cv_source_collection_key and not self.cv_source_collection:
             raise ValueError("cv_source_collection_key requires cv_source_collection")
@@ -67,6 +87,7 @@ class AttributeRule(BaseModel):
                 [
                     self.pattern is not None,
                     self.constant is not None,
+                    self.threshold is not None,
                     self.enum is not None,
                     bool(self.as_variable),
                     bool(self.is_positive),
@@ -84,6 +105,7 @@ class AttributeRule(BaseModel):
         active = [
             self.pattern is not None,
             self.constant is not None,
+            self.threshold is not None,
             self.enum is not None,
             bool(self.as_variable),
             bool(self.is_positive),
@@ -158,12 +180,27 @@ class ConsistencyRule(BaseModel):
 class GlobalConsistency(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Filename vs global attributes (ATTR005a)
     filename_vs_attributes: Optional[ConsistencyRule] = None
-    experiment_properties: Optional[ConsistencyRule] = None
-    institution_properties: Optional[ConsistencyRule] = None
-    source_properties: Optional[ConsistencyRule] = None
-    frequency_properties: Optional[ConsistencyRule] = None
-    variant_properties: Optional[ConsistencyRule] = None
+
+    # Experiment consistency, atomic (ATTR007a-d)
+    experiment_id_vs_activity_id: Optional[ConsistencyRule] = None
+    experiment_id_vs_experiment: Optional[ConsistencyRule] = None
+    experiment_id_vs_parent_experiment_id: Optional[ConsistencyRule] = None
+    experiment_id_vs_sub_experiment_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+
+    # Institution / source (ATTR009, ATTR010)
+    institution_id_vs_institution: Optional[ConsistencyRule] = None
+    source_id_vs_institution_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+
+    # Frequency vs table (ATTR008)
+    frequency_vs_table_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+
+    # Variant label consistency, atomic (ATTR006a-d)
+    variant_label_vs_realization_index: Optional[ConsistencyRule] = None
+    variant_label_vs_initialization_index: Optional[ConsistencyRule] = None
+    variant_label_vs_physics_index: Optional[ConsistencyRule] = None
+    variant_label_vs_forcing_index: Optional[ConsistencyRule] = None
 
 
 class GlobalSection(BaseModel):

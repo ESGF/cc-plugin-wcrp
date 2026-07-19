@@ -40,7 +40,14 @@ def check_bounds_value_consistency(ds, var_name, severity=BaseCheck.MEDIUM):
     try:
         values = var[:].compressed() if hasattr(var[:], "compressed") else var[:]
         bounds = bnds_var[:]
-        lower, upper = bounds[:, 0], bounds[:, 1]
+
+        # Do not assume bounds[:,0] is the lower edge: on a DECREASING axis
+        # (e.g. plev from surface to top), bounds are written decreasing too,
+        # e.g. [103750, 96250] for a value of 100000. bounds[:,0] is then the
+        # upper edge, not the lower one. Take min/max of the pair instead of
+        # trusting column order, so both increasing and decreasing axes work.
+        lower = np.minimum(bounds[:, 0], bounds[:, 1])
+        upper = np.maximum(bounds[:, 0], bounds[:, 1])
 
         outside = np.logical_or(values < lower, values > upper)
         if outside.any():

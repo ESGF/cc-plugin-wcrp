@@ -61,10 +61,12 @@ def check_attribute_suite(
     attribute_name: str,
     severity: int,
     value_type: Optional[str] = None,
-    is_required: bool = True,
+    is_required = True,  # bool OR "has_parent_experiment"/"has_sub_experiment"/... (resolved via esgvoc)
     na_value: Optional[Any] = None,
     pattern: Optional[str] = None,
     constant: Any = None,
+    threshold: Any = None,
+    is_above_threshold: Optional[bool] = None,
     enum: Optional[Iterable[Any]] = None,
     as_variable: Optional[bool] = None,
     is_positive: Optional[bool] = None,
@@ -88,6 +90,7 @@ def check_attribute_suite(
       Exactly ONE of the following rules can be active:
         - pattern
         - constant
+        - threshold (with is_above_threshold)
         - enum
         - as_variable
         - is_positive
@@ -124,6 +127,38 @@ def check_attribute_suite(
     label = f"{prefix}{where} '{attribute_name}'"
 
     # -------------------------------------------------------------------------
+    # Dynamic is_required resolution
+    # -------------------------------------------------------------------------
+    # is_required may be a keyword string resolved against esgvoc:
+    #   "has_parent_experiment" -> required only if the CV declares a parent experiment
+    #   "has_sub_experiment" -> required only if the CV declares a sub-experiment
+    # A file whose experiment has no parent/sub (per the CV) makes the attribute
+    # optional; a file whose experiment HAS one makes it mandatory.
+    if isinstance(is_required, str):
+        keyword = is_required.strip().lower()
+        try:
+            from checks.utils import (
+                has_parent_experiment_for_ds,
+                has_sub_experiment_for_ds,
+                has_parent_activity_for_ds,
+                has_parent_mip_era_for_ds,
+            )
+            if keyword == "has_parent_experiment":
+                is_required = has_parent_experiment_for_ds(ds, project_name or "cmip6")
+            elif keyword == "has_sub_experiment":
+                is_required = has_sub_experiment_for_ds(ds, project_name or "cmip6")
+            elif keyword == "has_parent_activity":
+                is_required = has_parent_activity_for_ds(ds, project_name or "cmip6")
+            elif keyword == "has_parent_mip_era":
+                is_required = has_parent_mip_era_for_ds(ds, project_name or "cmip6")
+            else:
+                # Unknown keyword: fail safe -> treat as required
+                is_required = True
+        except Exception:
+            # If esgvoc resolution fails, do not silently drop the requirement.
+            is_required = True
+
+    # -------------------------------------------------------------------------
     # ATTR001 - Existence
     # -------------------------------------------------------------------------
     existence_ctx = TestCtx(severity, f"[ATTR001] {label} existence")
@@ -140,8 +175,19 @@ def check_attribute_suite(
     # -------------------------------------------------------------------------
     # Short-circuit on sentinel / not-applicable value
     # -------------------------------------------------------------------------
+    # The sentinel (e.g. 'no parent', 'none') is only acceptable when the
+    # attribute is NOT required. If is_required resolved to True (e.g. the CV
+    # declares a parent for this experiment), a sentinel value is equivalent
+    # to a missing value and must fail.
     if na_value is not None:
         if str(attr_value).strip().lower() == str(na_value).strip().lower():
+            if is_required:
+                existence_ctx.add_failure(
+                    f"Required {where.lower()} '{attribute_name}' is set to "
+                    f"'{attr_value}' but a real value is expected for this "
+                    f"experiment."
+                )
+                results.append(existence_ctx.to_result())
             return results
 
     existence_ctx.add_pass()
@@ -203,6 +249,7 @@ def check_attribute_suite(
     rule_flags = [
         pattern is not None,
         constant is not None,
+        threshold is not None,
         enum is not None,
         bool(as_variable),
         bool(is_positive),
@@ -224,7 +271,7 @@ def check_attribute_suite(
         cfg_ctx = TestCtx(severity, f"[ATTR004] {label} rule configuration")
         cfg_ctx.add_failure(
             "Multiple mutually exclusive ATTR004 rules defined. "
-            "Allowed: exactly one of (pattern|constant|enum|as_variable|is_positive|cv_source_collection|cv_source_term_key). "
+            "Allowed: exactly one of (pattern|constant|threshold|enum|as_variable|is_positive|cv_source_collection|cv_source_term_key). "
             "Note: cv_source_collection_key is only a parameter of cv_source_collection."
         )
         results.append(cfg_ctx.to_result())
@@ -252,6 +299,31 @@ def check_attribute_suite(
             ctx.add_pass()
         else:
             ctx.add_failure(f"Expected '{constant}', got '{attr_value}'.")
+        results.append(ctx.to_result())
+        return results
+
+    # ---------------- THRESHOLD ----------------
+    if threshold is not None:
+        ctx = TestCtx(severity, f"[ATTR004] {label} threshold check")
+        value = _to_float(attr_value)
+        limit = _to_float(threshold)
+
+        if is_above_threshold is None:
+            ctx.add_failure("Threshold rule requires 'is_above_threshold'.")
+        elif value is None:
+            ctx.add_failure(f"Value '{attr_value}' is not numeric.")
+        elif limit is None:
+            ctx.add_failure(f"Threshold '{threshold}' is not numeric.")
+        elif is_above_threshold and value >= limit:
+            ctx.add_pass()
+        elif not is_above_threshold and value <= limit:
+            ctx.add_pass()
+        else:
+            operator = ">=" if is_above_threshold else "<="
+            ctx.add_failure(
+                f"Expected a value {operator} {limit}, got {value}."
+            )
+
         results.append(ctx.to_result())
         return results
 

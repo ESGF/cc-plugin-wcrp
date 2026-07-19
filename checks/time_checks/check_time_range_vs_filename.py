@@ -119,8 +119,23 @@ def _fields_from_datestr(s):
 def _coverage_from_time(ds):
     """
     Return data coverage as full-precision tuples (Y, M, D, H, Min, S) + error.
-    Uses bounds when available (start = bvals[0,0], end = bvals[-1,0]),
-    otherwise falls back to time midpoints.
+
+    Uses the TIME COORDINATE VALUES, not the cell bounds.
+
+    Rationale: the CMIP filename time range is built from the time coordinate
+    values -- i.e. the MIDPOINT of the averaging interval for time-aggregated
+    data (tavg/tmax/tmin), and the instant itself for point data (tpt):
+
+        1hr tavg, cell [00:00-01:00] -> time value 00:30 -> '..._185001010030-...'
+        3hr tavg, cell [00:00-03:00] -> time value 01:30 -> '..._185001010130-...'
+        6hr tavg, cell [00:00-06:00] -> time value 03:00 -> '..._185001010300-...'
+        6hr tpt,  instant 06:00      -> time value 06:00 -> '..._185001010600-...'
+
+    Reading time_bnds[0,0] instead would yield the lower bound of the first cell
+    (00:00 in every case above) and wrongly report "data starts earlier than
+    filename start" on every time-aggregated sub-daily file. Monthly/daily files
+    are unaffected either way because the comparison happens at month/day
+    precision, which hides the offset.
     """
     if "time" not in ds.variables:
         return None, None, "Missing 'time' variable."
@@ -131,21 +146,6 @@ def _coverage_from_time(ds):
         return (dt.year, dt.month, dt.day,
                 getattr(dt, "hour", 0), getattr(dt, "minute", 0),
                 getattr(dt, "second", 0))
-
-    bname = getattr(tvar, "bounds", None)
-    if bname and bname in ds.variables:
-        bvar = ds.variables[bname]
-        try:
-            units = tvar.units
-            calendar = getattr(tvar, "calendar", "standard")
-            bvals = bvar[:]
-            start_val = bvals[0, 0]
-            end_val = bvals[-1, 0]
-            start_dt = num2date(start_val, units=units, calendar=calendar)
-            end_dt = num2date(end_val, units=units, calendar=calendar)
-            return _full_tuple(start_dt), _full_tuple(end_dt), None
-        except Exception:
-            pass
 
     try:
         tvals = tvar[:]

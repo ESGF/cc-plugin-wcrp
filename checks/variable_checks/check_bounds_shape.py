@@ -60,7 +60,15 @@ def check_bounds_shape(ds, var_name, severity=BaseCheck.MEDIUM):
     try:
         cshape = tuple(cvar.shape)
         bshape = tuple(bvar.shape)
-        if cvar.ndim == 1:
+        if cvar.ndim == 0:
+            # CF §7.1: scalar coordinate (e.g. a single depth level).
+            # Bounds have no coordinate dimension to align with: shape (2,).
+            ok_shape = bvar.ndim == 1 and bshape[0] == 2
+            expected_desc = (
+                f"(2,) for scalar coordinate '{var_name}' "
+                f"(CF §7.1, bounds of a single-valued coordinate)"
+            )
+        elif cvar.ndim == 1:
             # CF §7.1: 1-D coord of length N.
             # Two valid layouts depending on grid topology:
             #   - regular grid coord on its own dimension (e.g. lat(lat)):

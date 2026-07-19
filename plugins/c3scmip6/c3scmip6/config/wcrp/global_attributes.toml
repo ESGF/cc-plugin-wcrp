@@ -176,13 +176,13 @@ pattern = ".*"
 
 [global.attributes.branch_time_in_parent]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
+severity = "M"
 value_type = "float"
 is_required = false
 
 [global.attributes.branch_time_in_child]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
+severity = "M"
 value_type = "float"
 is_required = false
 
@@ -318,6 +318,7 @@ value_type = "str"
 is_required = false
 pattern = ".*"
 
+
 # ==============================================================================
 # == Global attributes consistency Checks
 # ==============================================================================
@@ -343,11 +344,11 @@ severity = "M"
 
 [global.consistency.institution_id_vs_institution]
 # ATTR009
-severity = "H"
+severity = "M"
 
 [global.consistency.source_id_vs_institution_id]
 # ATTR010
-severity = "H"
+severity = "M"
 
 [global.consistency.frequency_vs_table_id]
 # ATTR008
