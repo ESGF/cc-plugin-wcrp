@@ -1,0 +1,17 @@
+# ==============================================================================
+# == File checks
+# ==============================================================================
+
+[file.format]
+# Check FILE002
+severity = "H"
+expected_format = "HDF5"
+allowed_data_models = ["NETCDF4_CLASSIC", "NETCDF4"]
+
+
+# If you want to use the compressioncheck for your netcdf files, uncomment this section to enable it.
+#[file.compression]
+# Check FILE003
+#severity = "H"
+#expected_complevel = 1
+#expected_shuffle = true

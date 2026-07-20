@@ -33,14 +33,20 @@ from checks.consistency_checks.check_attributes_match_filename import (
     check_filename_vs_global_attrs,
 )
 from checks.consistency_checks.check_experiment_consistency import (
-    check_experiment_consistency,
+    check_experiment_id_vs_activity_id,
+    check_experiment_id_vs_experiment,
+    check_experiment_id_vs_parent_experiment_id,
+    check_experiment_id_vs_sub_experiment_id,
 )
 from checks.consistency_checks.check_institution_source_consistency import (
     check_institution_consistency,
     check_source_consistency,
 )
 from checks.consistency_checks.check_variant_label_consistency import (
-    check_variant_label_consistency,
+    check_variant_vs_realization_index,
+    check_variant_vs_initialization_index,
+    check_variant_vs_physics_index,
+    check_variant_vs_forcing_index,
 )
 
 try:
@@ -248,19 +254,6 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         ctx = TestCtx(severity, "Geophysical Variable Detection")
 
         if len(geo_vars) == 0:
-            # CF detection returns zero candidates for files whose data
-            # variable carries flag_meanings (compliance-checker's
-            # is_geophysical heuristic treats those as QC flags). CMIP7
-            # region-selector fx files (basin, siline, ...) are flag-valued
-            # by spec but ARE the geophysical variable of the file. Fall
-            # back to the global variable_id attribute, which CMIP7 defines
-            # as the single geophysical variable of the file, when the
-            # named variable exists in the dataset.
-            vid = getattr(ds, "variable_id", None)
-            vid = str(vid) if vid else None
-            if vid and vid in ds.variables:
-                self._geo_var_cache = vid
-                return vid, res
             ctx.add_failure("No geophysical variable detected in the file.")
             res.append(ctx.to_result())
             return None, res
@@ -462,6 +455,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     na_value=rule.na_value,
                     pattern=rule.pattern,
                     constant=rule.constant,
+                    threshold=rule.threshold,
+                    is_above_threshold=rule.is_above_threshold,
                     enum=rule.enum,
                     as_variable=rule.as_variable,
                     is_positive=rule.is_positive,
@@ -575,6 +570,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     na_value=rule.na_value,
                     pattern=rule.pattern,
                     constant=rule.constant,
+                    threshold=rule.threshold,
+                    is_above_threshold=rule.is_above_threshold,
                     enum=rule.enum,
                     as_variable=rule.as_variable,
                     is_positive=rule.is_positive,
@@ -606,25 +603,52 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             sev = self.get_severity(c.filename_vs_attributes.severity)
             res.extend(check_filename_vs_global_attrs(ds, sev, project_id=self.project_name))
 
-        if c.experiment_properties:
-            sev = self.get_severity(c.experiment_properties.severity)
-            res.extend(
-                check_experiment_consistency(ds, sev, project_id=self.project_name)
-            )
+        # --- Experiment consistency (atomic ATTR007a-c ; no sub in CMIP7) ---
+        if c.experiment_id_vs_activity_id:
+            sev = self.get_severity(c.experiment_id_vs_activity_id.severity)
+            res.extend(check_experiment_id_vs_activity_id(ds, sev, project_id=self.project_name))
 
-        if c.institution_properties:
-            sev = self.get_severity(c.institution_properties.severity)
-            res.extend(
-                check_institution_consistency(ds, sev, project_id=self.project_name)
-            )
+        if c.experiment_id_vs_experiment:
+            sev = self.get_severity(c.experiment_id_vs_experiment.severity)
+            res.extend(check_experiment_id_vs_experiment(ds, sev, project_id=self.project_name))
 
-        if c.source_properties:
-            sev = self.get_severity(c.source_properties.severity)
+        if c.experiment_id_vs_parent_experiment_id:
+            sev = self.get_severity(c.experiment_id_vs_parent_experiment_id.severity)
+            res.extend(check_experiment_id_vs_parent_experiment_id(ds, sev, project_id=self.project_name))
+
+        # sub_experiment_id has no meaning in CMIP7; the key is absent from its
+        # TOML, so this simply never runs. Kept for symmetry / robustness.
+        if c.experiment_id_vs_sub_experiment_id:
+            sev = self.get_severity(c.experiment_id_vs_sub_experiment_id.severity)
+            res.extend(check_experiment_id_vs_sub_experiment_id(ds, sev, project_id=self.project_name))
+
+        # --- Institution / source ---
+        if c.institution_id_vs_institution:
+            sev = self.get_severity(c.institution_id_vs_institution.severity)
+            res.extend(check_institution_consistency(ds, sev, project_id=self.project_name))
+
+        if c.source_id_vs_institution_id:
+            sev = self.get_severity(c.source_id_vs_institution_id.severity)
             res.extend(check_source_consistency(ds, sev, project_id=self.project_name))
 
-        if c.variant_properties:
-            sev = self.get_severity(c.variant_properties.severity)
-            res.extend(check_variant_label_consistency(ds, sev))
+        # --- Frequency vs table: not part of CMIP7 (no such key in its TOML) ---
+
+        # --- Variant label consistency (atomic ATTR006a-d) ---
+        if c.variant_label_vs_realization_index:
+            sev = self.get_severity(c.variant_label_vs_realization_index.severity)
+            res.extend(check_variant_vs_realization_index(ds, sev))
+
+        if c.variant_label_vs_initialization_index:
+            sev = self.get_severity(c.variant_label_vs_initialization_index.severity)
+            res.extend(check_variant_vs_initialization_index(ds, sev))
+
+        if c.variant_label_vs_physics_index:
+            sev = self.get_severity(c.variant_label_vs_physics_index.severity)
+            res.extend(check_variant_vs_physics_index(ds, sev))
+
+        if c.variant_label_vs_forcing_index:
+            sev = self.get_severity(c.variant_label_vs_forcing_index.severity)
+            res.extend(check_variant_vs_forcing_index(ds, sev))
 
         return res
 
@@ -767,6 +791,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                         na_value=arule.na_value,
                         pattern=arule.pattern,
                         constant=arule.constant,
+                        threshold=arule.threshold,
+                        is_above_threshold=arule.is_above_threshold,
                         enum=arule.enum,
                         as_variable=arule.as_variable,
                         is_positive=arule.is_positive,

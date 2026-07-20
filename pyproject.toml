@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "cc-plugin-wcrp"
 description = "This IOOS Compliance-Checker plugins checks compliance with WCRP Projects specifications "
 readme = "README.md"
-keywords = ["compliance checker", "plugin", "esgf-qc","esgf-qa", "wcrp", "cmip6", "cordex_cmip6"]
+keywords = ["compliance checker", "plugin", "esgf-qc","esgf-qa", "wcrp", "cmip6", "c3scmip6", "cordex_cmip6"]
 license = {file = "LICENSE"}
 authors = [
   { name = "Ayoub Nachite", email = "anachite@ipsl.fr" },
@@ -30,12 +30,13 @@ dependencies = [
   "pyfive >= 1.1.1",
   "pydantic>=2.12.5",
 ]
-version = "2.3.2"
+version = "2.3.3"
 
 [project.entry-points."compliance_checker.suites"]
 
 plugin_cmip6 = "plugins.cmip6.cmip6:Cmip6ProjectCheck"
 plugin_cmip6plus = "plugins.cmip6plus.cmip6plus:Cmip6PlusProjectCheck"
+plugin_c3scmip6 = "plugins.c3scmip6.c3scmip6.c3scmip6:C3SCmip6ProjectCheck"
 plugin_cc6 = "plugins.cordex_cmip6.cordex_cmip6:CordexCmip6ProjectCheck"
 plugin_cmip7 = "plugins.cmip7.cmip7:Cmip7ProjectCheck"
 plugin_data = "plugins.data_plausibility.wcrp_data:DatapluginProjectCheck"

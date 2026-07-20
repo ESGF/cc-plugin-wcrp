@@ -1,0 +1,6 @@
+# ==============================================================================
+# C3S CMIP6 Configuration FILE 
+# ==============================================================================
+# Documentation & check inventory at https://esgf.github.io/cc-plugin-wcrp/checks/
+project_name = "cmip6"
+project_version = "1.0"

@@ -510,3 +510,186 @@ def resolve_member_id(ds):
     if sub_exp and sub_exp.lower() != "none":
         return f"{sub_exp}-{variant}"
     return variant
+
+# =============================================================================
+# Experiment term resolution + parent/sub presence helpers (esgvoc-backed)
+# =============================================================================
+# Grounded on ACTUAL esgvoc output:
+#
+#   CMIP6 / cmip6plus (ExperimentLegacy):
+#     parent_experiment_id -> list[str]  (attribute ABSENT means "no parent")
+#     sub_experiment_id    -> list[str]  (['none'] means "no sub-experiment")
+#     e.g. historical: parent_experiment_id=['picontrol'], sub_experiment_id=['none']
+#
+#   CMIP7 (ExperimentCMIP7):
+#     parent_experiment -> nested Experiment object (or absent) == has parent
+#     (there is NO sub_experiment_id in CMIP7)
+#
+# Term ids are stored lowercase internally while NetCDF files carry DRS casing
+# ('piControl'). get_term_in_collection(term_id='piControl') can return an
+# EMPTY shell term in CMIP7 (casing mismatch), hence the drs_name fallback.
+
+try:
+    import esgvoc.api as _voc_api
+    _ESG_VOCAB_PROJECT_API = True
+except ImportError:
+    _voc_api = None
+    _ESG_VOCAB_PROJECT_API = False
+
+# experiment collection name differs per project
+_EXPERIMENT_COLLECTION = {
+    "cmip6": "experiment_id",
+    "cmip6plus": "experiment_id",
+    "cmip7": "experiment",
+}
+
+# tokens that mean "no value" inside a CV list or a file attribute
+NO_VALUE_TOKENS = {"none", "no parent", "no_parent", ""}
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
+
+
+def _lower_str_list(values):
+    return [str(v).strip().lower() for v in _as_list(values) if v is not None]
+
+
+def _experiment_collection(project_id):
+    return _EXPERIMENT_COLLECTION.get(str(project_id).strip().lower(), "experiment_id")
+
+
+def _term_is_empty(term):
+    """A resolved term is unusable if it exposes neither id nor drs_name
+    (the CMIP7 casing-mismatch case returns such a shell object)."""
+    if term is None:
+        return True
+    return not (getattr(term, "id", None) or getattr(term, "drs_name", None))
+
+
+def resolve_experiment_term(ds, project_id):
+    """
+    Resolve the CV experiment term for the file's experiment_id, robust to DRS
+    casing (direct -> lowercase -> exact drs_name match). Returns term or None.
+    """
+    if not _ESG_VOCAB_PROJECT_API:
+        return None
+    if "experiment_id" not in ds.ncattrs():
+        return None
+
+    exp_id = str(ds.getncattr("experiment_id")).strip()
+    collection_id = _experiment_collection(project_id)
+
+    term = _voc_api.get_term_in_collection(
+        project_id=project_id, collection_id=collection_id, term_id=exp_id
+    )
+    if not _term_is_empty(term):
+        return term
+
+    term = _voc_api.get_term_in_collection(
+        project_id=project_id, collection_id=collection_id, term_id=exp_id.lower()
+    )
+    if not _term_is_empty(term):
+        return term
+
+    try:
+        candidates = _voc_api.find_terms_in_collection(
+            project_id=project_id,
+            collection_id=collection_id,
+            expression=exp_id,
+            selected_term_fields=["id", "drs_name"],
+        )
+    except Exception:
+        candidates = []
+
+    for item in candidates or []:
+        if str(getattr(item, "drs_name", "")).strip() == exp_id:
+            resolved_id = str(getattr(item, "id", "")).strip()
+            if resolved_id:
+                term = _voc_api.get_term_in_collection(
+                    project_id=project_id,
+                    collection_id=collection_id,
+                    term_id=resolved_id,
+                )
+                if not _term_is_empty(term):
+                    return term
+    return None
+
+
+def has_parent_experiment(term, project_id):
+    """Does the CV declare a parent experiment for this experiment?"""
+    if term is None:
+        return False
+    if str(project_id).strip().lower() == "cmip7":
+        return getattr(term, "parent_experiment", None) is not None
+    parents = getattr(term, "parent_experiment_id", None)
+    norm = [p for p in _lower_str_list(parents) if p not in NO_VALUE_TOKENS]
+    return bool(norm)
+
+
+def has_sub_experiment(term, project_id):
+    """Does the CV declare a sub-experiment? (CMIP6/plus only; CMIP7 -> False)"""
+    if term is None:
+        return False
+    if str(project_id).strip().lower() == "cmip7":
+        return False
+    subs = getattr(term, "sub_experiment_id", None)
+    norm = [s for s in _lower_str_list(subs) if s not in NO_VALUE_TOKENS]
+    return bool(norm)
+
+
+def has_parent_experiment_for_ds(ds, project_id):
+    """Convenience: resolve term from ds then evaluate has_parent_experiment."""
+    return has_parent_experiment(resolve_experiment_term(ds, project_id), project_id)
+
+
+def has_sub_experiment_for_ds(ds, project_id):
+    """Convenience: resolve term from ds then evaluate has_sub_experiment."""
+    return has_sub_experiment(resolve_experiment_term(ds, project_id), project_id)
+
+
+def has_parent_activity(term, project_id):
+    """
+    Does the CV declare a parent ACTIVITY for this experiment?
+
+      CMIP7: parent_activity is a nested Activity object (or None).
+      CMIP6/plus: parent_activity_id is its own list field (separate from
+      parent_experiment_id in the model) -- read independently rather than
+      reusing has_parent_experiment(), in case the two ever diverge in the CV data.
+    """
+    if term is None:
+        return False
+    if str(project_id).strip().lower() == "cmip7":
+        return getattr(term, "parent_activity", None) is not None
+    parents = getattr(term, "parent_activity_id", None)
+    norm = [p for p in _lower_str_list(parents) if p not in NO_VALUE_TOKENS]
+    return bool(norm)
+
+
+def has_parent_activity_for_ds(ds, project_id):
+    """Convenience: resolve term from ds then evaluate has_parent_activity."""
+    return has_parent_activity(resolve_experiment_term(ds, project_id), project_id)
+
+
+# parent_mip_era: only modeled in CV for CMIP7 (ExperimentCMIP7.parent_mip_era).
+# The CMIP6/plus legacy model has NO such field -- for those projects there is
+# no CV data to read, so this keyword must not be used in cmip6/cmip6plus TOMLs
+# (no inference, no fallback to has_parent: that would not be a CV-derived value).
+def has_parent_mip_era(term, project_id):
+    if term is None:
+        return False
+    if str(project_id).strip().lower() == "cmip7":
+        return getattr(term, "parent_mip_era", None) is not None
+    # CMIP6/plus: no CV field for this -> cannot resolve, fail safe to required.
+    return True
+
+
+def has_parent_mip_era_for_ds(ds, project_id):
+    return has_parent_mip_era(resolve_experiment_term(ds, project_id), project_id)
+
+
+# has_parent_variant_label REMOVED: no CV field exists for this attribute in either CMIP6 or CMIP7 (verified against esgvoc output and the ExperimentLegacy/ExperimentCMIP7 models). No dynamic rule without a real CV field to read.

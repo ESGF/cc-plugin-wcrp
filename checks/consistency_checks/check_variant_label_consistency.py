@@ -1,11 +1,25 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Atomic variant_label consistency checks (ATTR006a-d).
+
+Split from the monolithic ATTR006 into one function per index so each has its
+own severity and Result:
+
+  ATTR006a  variant_label vs realization_index
+  ATTR006b  variant_label vs initialization_index
+  ATTR006c  variant_label vs physics_index
+  ATTR006d  variant_label vs forcing_index
+
+CMIP6 stores indices as numeric ("1"/1). CMIP7 stores them prefixed
+("r1"/"i1"/"p1"/"f3"). Both are supported.
+"""
 
 import re
 from compliance_checker.base import TestCtx
 
 
 def _is_cmip7(ds) -> bool:
-    """Detect CMIP7 from global attrs when available."""
     try:
         if str(ds.getncattr("mip_era")).upper() == "CMIP7":
             return True
@@ -20,113 +34,88 @@ def _is_cmip7(ds) -> bool:
 
 
 def _to_int_index(attr_value, prefix: str, is_cmip7: bool):
-    """
-    Convert index attribute to int.
-    CMIP6: often "1" (or int 1)
-    CMIP7: often "r1"/"i1"/"p1"/"f3" (string with prefix)
-    """
     if attr_value is None:
         return None
-
-    # Already numeric
     if isinstance(attr_value, int):
         return attr_value
-
     s = str(attr_value).strip()
     if not s:
         return None
-
-    # CMIP7 prefixed form (e.g. "r1")
     if is_cmip7 and s.lower().startswith(prefix.lower()):
         s = s[len(prefix):].strip()
-
-    # Some files may still store numeric as string
     try:
         return int(s)
     except Exception:
         return None
 
 
-def check_variant_label_consistency(ds, severity):
+def _parsed_variant_indices(ds):
     """
-    [ATTR006] Consistency: variant_label vs index attributes
-
-    Checks if variant_label (r<i>i<j>p<k>f<l>) is consistent with:
-      realization_index, initialization_index, physics_index, forcing_index
-
-    CMIP6 commonly stores index attributes as numeric (e.g. "1" or 1).
-    CMIP7 commonly stores index attributes prefixed (e.g. "r1","i1","p1","f3").
-    This check supports both.
+    Return (indices_dict, error_message).
+    indices_dict maps each *_index attr name to the int implied by variant_label.
     """
-    fixed_check_id = "ATTR006"
-    description = f"[{fixed_check_id}] Consistency: variant_label vs index attributes"
-    ctx = TestCtx(severity, description)
-
-    required_attrs = [
-        "variant_label",
-        "realization_index",
-        "initialization_index",
-        "physics_index",
-        "forcing_index",
-    ]
-
-    try:
-        attributes = {attr: ds.getncattr(attr) for attr in required_attrs}
-        variant_label = str(attributes["variant_label"])
-
-        match = re.match(r"^r(\d+)i(\d+)p(\d+)f(\d+)$", variant_label)
-        if not match:
-            ctx.add_failure(
-                f"The format of 'variant_label' ('{variant_label}') is invalid. "
-                "Expected format is 'r<k>i<l>p<m>f<n>'."
-            )
-            return [ctx.to_result()]
-
-        parsed_indices = {
-            "realization_index": int(match.group(1)),
-            "initialization_index": int(match.group(2)),
-            "physics_index": int(match.group(3)),
-            "forcing_index": int(match.group(4)),
-        }
-
-        is_cmip7 = _is_cmip7(ds)
-
-        # Normalize attribute values to ints
-        normalized_attrs = {
-            "realization_index": _to_int_index(attributes["realization_index"], "r", is_cmip7),
-            "initialization_index": _to_int_index(attributes["initialization_index"], "i", is_cmip7),
-            "physics_index": _to_int_index(attributes["physics_index"], "p", is_cmip7),
-            "forcing_index": _to_int_index(attributes["forcing_index"], "f", is_cmip7),
-        }
-
-        failures = []
-        for key, parsed_value in parsed_indices.items():
-            attr_raw = attributes[key]
-            attr_int = normalized_attrs[key]
-
-            if attr_int is None:
-                failures.append(
-                    f"Could not interpret '{key}' attribute value '{attr_raw}' as an integer."
-                )
-                continue
-
-            if parsed_value != attr_int:
-                failures.append(
-                    f"Inconsistency for '{key}': variant_label implies '{parsed_value}', but attribute is '{attr_raw}'."
-                )
-
-        if not failures:
-            ctx.add_pass()
-        else:
-            for f in failures:
-                ctx.add_failure(f)
-
-    except AttributeError as e:
-        # missing attributes should be handled elsewhere (attribute suite)
-        ctx.messages.append(
-            f"Missing a required attribute for this check: {e}. Check skipped."
+    if "variant_label" not in ds.ncattrs():
+        return None, "Missing required global attribute: 'variant_label'."
+    variant_label = str(ds.getncattr("variant_label")).strip()
+    m = re.match(r"^r(\d+)i(\d+)p(\d+)f(\d+)$", variant_label)
+    if not m:
+        return None, (
+            f"The format of 'variant_label' ('{variant_label}') is invalid. "
+            "Expected 'r<k>i<l>p<m>f<n>'."
         )
-    except Exception as e:
-        ctx.add_failure(f"An unexpected error occurred: {e}")
+    return {
+        "realization_index": int(m.group(1)),
+        "initialization_index": int(m.group(2)),
+        "physics_index": int(m.group(3)),
+        "forcing_index": int(m.group(4)),
+    }, None
 
+
+def _check_one_index(ds, severity, check_id, index_name, prefix):
+    label = f"Consistency: variant_label vs {index_name}"
+    ctx = TestCtx(severity, f"[{check_id}] {label}")
+
+    parsed, err = _parsed_variant_indices(ds)
+    if err:
+        ctx.add_failure(err)
+        return [ctx.to_result()]
+
+    if index_name not in ds.ncattrs():
+        ctx.add_failure(f"Missing required global attribute: '{index_name}'.")
+        return [ctx.to_result()]
+
+    raw = ds.getncattr(index_name)
+    is7 = _is_cmip7(ds)
+    attr_int = _to_int_index(raw, prefix, is7)
+
+    if attr_int is None:
+        ctx.add_failure(
+            f"Could not interpret '{index_name}' value '{raw}' as an integer."
+        )
+        return [ctx.to_result()]
+
+    implied = parsed[index_name]
+    if implied == attr_int:
+        ctx.add_pass()
+    else:
+        ctx.add_failure(
+            f"Inconsistency for '{index_name}': variant_label implies "
+            f"'{implied}', but attribute is '{raw}'."
+        )
     return [ctx.to_result()]
+
+
+def check_variant_vs_realization_index(ds, severity):
+    return _check_one_index(ds, severity, "ATTR006a", "realization_index", "r")
+
+
+def check_variant_vs_initialization_index(ds, severity):
+    return _check_one_index(ds, severity, "ATTR006b", "initialization_index", "i")
+
+
+def check_variant_vs_physics_index(ds, severity):
+    return _check_one_index(ds, severity, "ATTR006c", "physics_index", "p")
+
+
+def check_variant_vs_forcing_index(ds, severity):
+    return _check_one_index(ds, severity, "ATTR006d", "forcing_index", "f")
