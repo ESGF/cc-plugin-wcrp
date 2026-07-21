@@ -48,6 +48,7 @@ severity = "M"
 
 [time_checks.check_time_range_cordex]
 severity = "H"
+time_range_label_precision = { default = "yyyyMMddhhmm", mon = "yyyyMM", day = "yyyyMMdd", "6hr" = "yyyyMMddhhmm", "3hr" = "yyyyMMddhhmm", "1hr" = "yyyyMMddhhmm" }
 
 [time_checks.check_calendar_cordex]
 severity = "M"

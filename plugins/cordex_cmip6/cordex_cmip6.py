@@ -48,9 +48,11 @@ from checks.format_checks.check_format import check_format
 from checks.time_checks.check_time_cordex_cmip6 import (
     check_calendar,
     check_time_chunking,
-    check_time_range,
     check_time_units,
 )
+from checks.time_checks.check_time_range_vs_filename import (
+        check_time_range_vs_filename,
+    )
 from checks.utils import retrieve
 from checks.variable_checks.check_coords_cordex_cmip6 import (
     check_horizontal_axes_bounds,
@@ -298,7 +300,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
 
     def check_time_range(self, ds):
         """
-        [CDXT002] Checks if the time range is as expected according to the CORDEX-CMIP6 Archive Specifications.
+        [TIME003] Checks if the time range is as expected according to the CORDEX-CMIP6 Archive Specifications.
         """
         results = []
         if "time_checks" not in self.config:
@@ -308,10 +310,14 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
 
         if "check_time_range_cordex" in config:
             check_config = config["check_time_range_cordex"]
+            precision_by_frequency = None
+            if isinstance(check_config.get("time_range_label_precision"), dict):
+                precision_by_frequency = check_config.get("time_range_label_precision")
             results.extend(
-                check_time_range(
-                    self,
+                check_time_range_vs_filename(
+                    ds,
                     severity=self.get_severity(check_config.get("severity")),
+                    precision_by_frequency=precision_by_frequency,
                 )
             )
 
