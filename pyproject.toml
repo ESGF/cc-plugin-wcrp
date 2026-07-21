@@ -30,7 +30,7 @@ dependencies = [
   "pyfive >= 1.1.1",
   "pydantic>=2.12.5",
 ]
-version = "2.3.3"
+version = "2.3.4"
 
 [project.entry-points."compliance_checker.suites"]
 
