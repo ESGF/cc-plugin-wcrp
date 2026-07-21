@@ -31,7 +31,7 @@ direction = "increasing"
 
 [coordinates.latitude.attributes.axis]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
+severity = "M"
 value_type = "str"
 is_required = true
 constant = "Y"
@@ -78,7 +78,7 @@ direction = "increasing"
 
 [coordinates.longitude.attributes.axis]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
+severity = "M"
 value_type = "str"
 is_required = true
 constant = "X"
