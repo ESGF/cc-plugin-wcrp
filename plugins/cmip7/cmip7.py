@@ -122,6 +122,22 @@ def _load_toml(path: str) -> dict:
         return toml.load(f)
 
 
+def _is_flag_variable(ds, var_name):
+    """Return True iff ``var_name`` carries CF flag semantics
+    (``flag_values`` or ``flag_meanings``). CMIP7 region-selector
+    variables like ``basin`` and ``siline`` are integer flag variables
+    per CF §7.5 and CMIP7 data descriptor ``type: integer``. The default
+    geophysical_variable.toml rules assume continuous float fields
+    (float ``_FillValue = 1e20`` and float type check) and cannot
+    describe the flag case.
+    """
+    try:
+        attrs = ds.variables[var_name].ncattrs()
+    except Exception:
+        return False
+    return "flag_values" in attrs or "flag_meanings" in attrs
+
+
 class Cmip7ProjectCheck(WCRPBaseCheck):
     _cc_spec = "wcrp_cmip7"
     _cc_spec_version = "1.0"
@@ -254,6 +270,19 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         ctx = TestCtx(severity, "Geophysical Variable Detection")
 
         if len(geo_vars) == 0:
+            # CF detection returns zero candidates for files whose data
+            # variable carries flag_meanings (compliance-checker's
+            # is_geophysical heuristic treats those as QC flags). CMIP7
+            # region-selector fx files (basin, siline, ...) are flag-valued
+            # by spec but ARE the geophysical variable of the file. Fall
+            # back to the global variable_id attribute, which CMIP7 defines
+            # as the single geophysical variable of the file, when the
+            # named variable exists in the dataset.
+            vid = getattr(ds, "variable_id", None)
+            vid = str(vid) if vid else None
+            if vid and vid in ds.variables:
+                self._geo_var_cache = vid
+                return vid, res
             ctx.add_failure("No geophysical variable detected in the file.")
             res.append(ctx.to_result())
             return None, res
@@ -519,6 +548,13 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return res
 
         vcfg = self.config.variable
+        # CF flag-valued variables (basin, siline, similar CMIP7 region
+        # selectors) are integer by construction. The default TOML rules
+        # (float type, _FillValue = 1e20, missing_value = 1e20) do not
+        # fit them. Gate the float type check and the two fill/missing
+        # attribute rules on ``is_flag``; everything else still applies.
+        # See #59.
+        is_flag = _is_flag_variable(ds, geo)
 
         # existence
         if vcfg.existence:
@@ -526,7 +562,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             res.extend(check_variable_existence(ds, geo, sev))
 
         # type
-        if vcfg.type:
+        if vcfg.type and not is_flag:
             sev = self.get_severity(vcfg.type.severity)
             dt = (vcfg.type.data_type or "").lower()
             allowed = ["f"] if dt in {"float", "double", "real"} else None
@@ -559,6 +595,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         for attr_key, rule in vcfg.attributes.items():
             sev = self.get_severity(rule.severity)
             name_in_file = rule.attribute_name or attr_key
+            if is_flag and name_in_file in ("_FillValue", "missing_value"):
+                continue
             res.extend(
                 check_attribute_suite(
                     ds=ds,
