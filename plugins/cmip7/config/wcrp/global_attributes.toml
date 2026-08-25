@@ -337,7 +337,7 @@ severity = "M"
 
 [global.consistency.institution_id_vs_institution]
 # ATTR009
-severity = "H"
+severity = "M"
 
 [global.consistency.variant_label_vs_realization_index]
 # ATTR006a
