@@ -6,8 +6,6 @@ dependencies:
   - python=3.12
   - numpy
   - setuptools
-  - xarray
-  - cf_xarray
   - cftime
   - netCDF4
   - cdo
@@ -18,4 +16,3 @@ dependencies:
   - pytest
   - pytest-cov
   - pytest-env
-

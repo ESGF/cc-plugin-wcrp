@@ -5,9 +5,16 @@ import re
 from datetime import timedelta
 
 import cftime
+import numpy as np
 from compliance_checker.base import BaseCheck, TestCtx
 
 from checks.utils import deltdic, severity_word
+
+
+def _time_value(variable, index):
+    """Read one NetCDF time value as a scalar."""
+    value = np.ma.asarray(variable[index])
+    return value.item()
 
 
 def check_time_chunking(CheckerObject, severity=BaseCheck.MEDIUM):
@@ -76,8 +83,8 @@ def check_time_chunking(CheckerObject, severity=BaseCheck.MEDIUM):
         return [testctx.to_result()]
 
     # Get the first and last time values
-    first_time = CheckerObject.time[0].values
-    last_time = CheckerObject.time[-1].values
+    first_time = _time_value(CheckerObject.time, 0)
+    last_time = _time_value(CheckerObject.time, -1)
 
     # Convert the first and last time values to cftime.datetime objects
     first_time = cftime.num2date(
@@ -237,8 +244,8 @@ def check_time_range(CheckerObject, severity=BaseCheck.MEDIUM):
         return [testctx.to_result()]
 
     # Get the first and last time values
-    first_time = CheckerObject.time[0].values
-    last_time = CheckerObject.time[-1].values
+    first_time = _time_value(CheckerObject.time, 0)
+    last_time = _time_value(CheckerObject.time, -1)
 
     # Convert the first and last time values to cftime.datetime objects
     first_time = cftime.num2date(

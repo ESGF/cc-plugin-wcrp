@@ -48,7 +48,9 @@ def check_required_global_attributes_value_cv(
 
     required_attributes = CheckerObject.CV.get("required_global_attributes", {})
     file_attrs = {
-        k: v for k, v in CheckerObject.xrds.attrs.items() if k in required_attributes
+        key: CheckerObject.dataset.getncattr(key)
+        for key in CheckerObject.dataset.ncattrs()
+        if key in required_attributes
     }
     for k in required_attributes:
         if k not in file_attrs:

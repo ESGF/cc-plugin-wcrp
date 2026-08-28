@@ -11,7 +11,7 @@ def check_format(ds, expected_format, allowed_data_models, severity=BaseCheck.ME
 
     Parameters
     ----------
-    ds : xarray.Dataset
+    ds : netCDF4.Dataset
         The dataset being checked.
     expected_format : str
         The expected disk format, e.g. "HDF5".
