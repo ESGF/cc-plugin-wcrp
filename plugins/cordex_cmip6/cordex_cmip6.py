@@ -91,6 +91,8 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
     _cc_description = "WCRP CORDEX-CMIP6 Project Checks"
     _cc__url = "https://doi.org/10.5281/zenodo.15047096"
     _cc_display_headers = {3: "Required", 2: "Recommended", 1: "Suggested"}
+    # Consistency output must include metadata initialized from the CMOR tables.
+    _defer_consistency_output = True
 
     def __init__(self, options=None):
         super().__init__(options)
@@ -108,7 +110,10 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
     def setup(self, ds):
         """Loads the main configuration and the variable mapping file before running checks."""
         super().setup(ds)
-        self._load_project_config()
+        self._run_setup_step(
+            "load the CORDEX-CMIP6 project configuration",
+            self._load_project_config,
+        )
         # print(self.config)
         # for k,v in vars(self).items(): print(k,v); print()
 
@@ -121,11 +126,16 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 self.variable_mapping = toml.load(f).get("mapping_variables", {})
 
         except FileNotFoundError:
-            print(f"Mapping file '{mapping_filepath}' not found.")
             self.variable_mapping = {}
+            self._record_setup_warning(
+                f"Variable mapping file not found at '{mapping_filepath}'"
+            )
         except Exception as e:
-            print(f"Error while loading variable mapping: {e}")
             self.variable_mapping = {}
+            self._record_setup_warning(
+                f"Could not load variable mapping file '{mapping_filepath}'",
+                e,
+            )
 
         # Make use of CMOR tables for variable checks
         #  at a later time ESGVOC will be used for variable checks
@@ -149,51 +159,67 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 tables_path = self.options.get(
                     "tables_dir", "~/.wcrp_metadata/cordex-cmip6-cmor-tables"
                 )
-                for table in [
-                    "coordinate",
-                    "grids",
-                    "formula_terms",
-                    "CV",
-                    "1hr",
-                    "3hr",
-                    "6hr",
-                    "day",
-                    "mon",
-                    "fx",
-                ]:
-                    filename = "CORDEX-CMIP6_" + table + ".json"
-                    url = CORDEX_CMIP6_CMOR_TABLES_URL + filename
-                    filename_retrieved = retrieve(
-                        CORDEX_CMIP6_CMOR_TABLES_URL
-                        + "CORDEX-CMIP6_"
-                        + table
-                        + ".json",
-                        filename,
-                        tables_path,
-                        force="force_table_download" in self.options
-                        and (
-                            self.options["force_table_download"] is None
-                            or (
-                                isinstance(self.options["force_table_download"], bool)
-                                and self.options["force_table_download"]
-                            )
-                            or (
-                                isinstance(self.options["force_table_download"], str)
-                                and self.options["force_table_download"].lower()
-                                != "false"
-                            )
-                        ),
-                    )
-                    if (
-                        os.path.basename(os.path.realpath(filename_retrieved))
-                        != filename
-                    ):
-                        raise AssertionError(
-                            f"Download failed for CV table '{filename_retrieved}' (source: '{url}')."
+                try:
+                    for table in [
+                        "coordinate",
+                        "grids",
+                        "formula_terms",
+                        "CV",
+                        "1hr",
+                        "3hr",
+                        "6hr",
+                        "day",
+                        "mon",
+                        "fx",
+                    ]:
+                        filename = "CORDEX-CMIP6_" + table + ".json"
+                        url = CORDEX_CMIP6_CMOR_TABLES_URL + filename
+                        filename_retrieved = retrieve(
+                            CORDEX_CMIP6_CMOR_TABLES_URL
+                            + "CORDEX-CMIP6_"
+                            + table
+                            + ".json",
+                            filename,
+                            tables_path,
+                            force="force_table_download" in self.options
+                            and (
+                                self.options["force_table_download"] is None
+                                or (
+                                    isinstance(
+                                        self.options["force_table_download"], bool
+                                    )
+                                    and self.options["force_table_download"]
+                                )
+                                or (
+                                    isinstance(
+                                        self.options["force_table_download"], str
+                                    )
+                                    and self.options[
+                                        "force_table_download"
+                                    ].lower()
+                                    != "false"
+                                )
+                            ),
                         )
-                self._initialize_CV_info(tables_path)
-                self._initialize_time_info()
-                self._initialize_coords_info()
+                        if (
+                            os.path.basename(os.path.realpath(filename_retrieved))
+                            != filename
+                        ):
+                            raise AssertionError(
+                                f"Download failed for CV table "
+                                f"'{filename_retrieved}' (source: '{url}')."
+                            )
+                except Exception as exc:
+                    self._record_setup_warning(
+                        "Could not retrieve the CORDEX-CMIP6 CMOR tables",
+                        exc,
+                    )
+                else:
+                    self._run_setup_step(
+                        "initialize metadata from the CORDEX-CMIP6 CMOR tables",
+                        self._initialize_CV_info,
+                        tables_path,
+                    )
             if self.consistency_output:
                 self._write_consistency_output()
 

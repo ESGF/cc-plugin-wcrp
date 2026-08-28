@@ -17,6 +17,7 @@ AVERAGE_CORRECTION_FREQ = [
 # (table_id, frequency) -> (value, unit)
 
 FREQ_INC = {
+    # For inference this is the inclusive maximum; the step must divide 1 hour.
     ("None", "subhr"): (30, "minutes"),
     ("None", "subhrPt"): (30, "minutes"),
     ("None", "1hr"): (1, "hours"),
@@ -27,6 +28,7 @@ FREQ_INC = {
     ("None", "6hr"): (6, "hours"),
     ("None", "6hrPt"): (6, "hours"),
     ("None", "day"): (1, "days"),
+    ("None", "cen"): (100, "years"),
     ("None", "dec"): (10, "years"),
     ("None", "mon"): (1, "months"),
     ("None", "monC"): (1, "months"),

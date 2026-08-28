@@ -3,19 +3,23 @@
 import json
 import os
 import re
-from collections import ChainMap
 from hashlib import md5
 from pathlib import Path
 
-import cf_xarray  # noqa
-import cftime
 import numpy as np
 import toml
-import xarray as xr
-from compliance_checker.base import BaseCheck
+from compliance_checker.base import BaseCheck, TestCtx
+from compliance_checker.cf import util as cfutil
 from netCDF4 import Dataset
 
-from checks.utils import deltdic, flatten, sanitize
+from checks.utils import infer_frequency, sanitize
+
+# Compliance Checker 6 moved these helpers from compliance_checker.cfutil.
+if not hasattr(cfutil, "get_geophysical_variables"):
+    from compliance_checker import cfutil
+
+
+FORMULA_TERM_PATTERN = re.compile(r"(\w+)\s*:\s*([^\s]+)")
 
 # --- Esgvoc universe import ---
 try:
@@ -25,13 +29,6 @@ try:
     ESG_VOCAB_AVAILABLE = True
 except ImportError:
     ESG_VOCAB_AVAILABLE = False
-
-
-# Define helper functions for serializing across time axis
-get_tseconds = lambda t: t.total_seconds()  # noqa
-get_tseconds_vector = np.vectorize(get_tseconds)
-get_abs_tseconds = lambda t: abs(t.total_seconds())  # noqa
-get_abs_tseconds_vector = np.vectorize(get_abs_tseconds)
 
 
 class WCRPBaseCheck(BaseCheck):
@@ -56,16 +53,13 @@ class WCRPBaseCheck(BaseCheck):
     # cc_plugin attributes
     _cc_spec = "wcrp_base"
     _cc_display_headers = {3: "Mandatory", 2: "Warning", 1: "Optional"}
+    # A subclass may defer writing until it has initialized additional metadata.
+    _defer_consistency_output = False
 
     def __init__(self, options=None):
         super().__init__(options)
         self.config = None
         self.project_config_path = None  # To be set by the specific WCRP plugin class
-
-    def __del__(self):
-        xrds = getattr(self, "xrds", None)
-        if xrds is not None and hasattr(xrds, "close"):
-            xrds.close()
 
     def setup(self, dataset):
         """
@@ -91,113 +85,132 @@ class WCRPBaseCheck(BaseCheck):
         self.filepath = os.path.realpath(
             os.path.normpath(os.path.expanduser(self.dataset.filepath()))
         )
-        # xarray.Dataset
-        self.xrds = xr.open_dataset(
-            self.filepath, decode_coords=True, decode_times=False
-        )
-
         # === Options ===
         # Input options
         # - Output for consistency checks across files
         self.consistency_output = self.options.get("consistency_output", False)
+        self.consistency_output_error = None
+        self.setup_warnings = []
+        self.frequency_inferred = False
+        self.varname = []
+        self.time = None
+        self.calendar = None
+        self.timeunits = None
+        self.timebnds = None
+        self.coords = []
+        self.bounds = set()
+        self.formula_terms = {}
+        self.external_variables = []
+        self.frequency = "unknown"
+        self.cell_methods = "unknown"
+        self.drs_fn = {}
+        self._run_setup_step(
+            "identify the main climate data variable(s)",
+            self._initialize_data_variables,
+        )
         # - If tables are specified, get path to the tables and initialize
         if self.options.get("tables", False):
             tables_path = self.options["tables"]
-            self._initialize_CV_info(tables_path)
-            self._initialize_time_info()
-            self._initialize_coords_info()
-            if self.consistency_output and self._cc_spec == "wcrp_base":
-                self._write_consistency_output()
+            self._run_setup_step(
+                "load the requested CV and CMOR tables",
+                self._initialize_CV_info,
+                tables_path,
+            )
+            self._run_setup_step(
+                "identify the time coordinate",
+                self._initialize_time_info,
+            )
+            self._run_setup_step(
+                "identify coordinate and bounds variables",
+                self._initialize_coords_info,
+            )
         # if only the time checks should be run (so no verification against CV / MIP tables)
         else:
-            self.varname = [
-                var
-                for var in flatten(list(self.xrds.cf.standard_names.values()))
-                if var
-                not in flatten(
-                    list(self.xrds.cf.coordinates.values())
-                    + list(self.xrds.cf.axes.values())
-                    + list(self.xrds.cf.bounds.values())
-                    + list(self.xrds.cf.formula_terms.values())
-                )
-            ]
-            self._initialize_time_info()
-            self._initialize_coords_info()
-            self.frequency = self._get_attr("frequency")
+            self._run_setup_step(
+                "identify the time coordinate",
+                self._initialize_time_info,
+            )
+            self._run_setup_step(
+                "identify coordinate and bounds variables",
+                self._initialize_coords_info,
+            )
+            self.frequency = self._get_attr("frequency", None)
             if self.varname != []:
-                self.cell_methods = self.xrds[self.varname[0]].attrs.get(
-                    "cell_methods", "unknown"
+                self.cell_methods = getattr(
+                    self.dataset.variables[self.varname[0]],
+                    "cell_methods",
+                    "unknown",
                 )
             else:
                 self.cell_methods = "unknown"
             self.drs_fn = {}
-            if self.frequency == "unknown" and self.time is not None:
-                if self.time.sizes[self.time.dims[0]] > 1 and 1 == 2:
-                    for ifreq in [
-                        fkey
-                        for fkey in deltdic.keys()
-                        if "max" not in fkey and "min" not in fkey
-                    ]:
-                        try:
-                            intv = abs(
-                                get_tseconds(
-                                    cftime.num2date(
-                                        self.time.values[1],
-                                        units=self.timeunits,
-                                        calendar=self.calendar,
-                                    )
-                                    - cftime.num2date(
-                                        self.time.values[0],
-                                        units=self.timeunits,
-                                        calendar=self.calendar,
-                                    )
-                                )
-                            )
-                            if (
-                                intv <= deltdic[ifreq + "max"]
-                                and intv >= deltdic[ifreq + "min"]
-                            ):
-                                self.frequency = ifreq
-                                break
-                        except (AttributeError, ValueError):
-                            continue
-                elif self.timebnds and len(self.xrds[self.timebnds].dims) == 2:
-                    for ifreq in [
-                        fkey
-                        for fkey in deltdic.keys()
-                        if "max" not in fkey and "min" not in fkey
-                    ]:
-                        try:
-                            intv = abs(
-                                get_tseconds(
-                                    cftime.num2date(
-                                        self.xrds[self.timebnds].values[0, 1],
-                                        units=self.timeunits,
-                                        calendar=self.calendar,
-                                    )
-                                    - cftime.num2date(
-                                        self.xrds[self.timebnds].values[0, 0],
-                                        units=self.timeunits,
-                                        calendar=self.calendar,
-                                    )
-                                )
-                            )
-                            if (
-                                intv <= deltdic[ifreq + "max"]
-                                and intv >= deltdic[ifreq + "min"]
-                            ):
-                                self.frequency = ifreq
-                                break
-                        except (AttributeError, ValueError):
-                            continue
-            if self.consistency_output:
-                self._write_consistency_output()
+            if self.frequency is None:
+                time_bounds = self.dataset.variables.get(self.timebnds)
+                self.frequency = infer_frequency(
+                    self.time,
+                    time_bounds=time_bounds,
+                    units=self.timeunits,
+                    calendar=self.calendar,
+                )
+                self.frequency_inferred = self.frequency != "unknown"
+        if self.consistency_output and not self._defer_consistency_output:
+            self._write_consistency_output()
+
+    def _record_setup_warning(self, message, exc=None):
+        """Record a recoverable setup problem without aborting the checker."""
+        detail = f"{message}: {exc}" if exc is not None else message
+        if detail not in self.setup_warnings:
+            self.setup_warnings.append(detail)
+
+    def _record_consistency_output_error(self, message, exc=None):
+        """Record a unique problem affecting the cross-file summary."""
+        detail = f"{message}: {exc}" if exc is not None else message
+        if self.consistency_output_error is None:
+            self.consistency_output_error = detail
+            return
+        recorded = self.consistency_output_error.split("; ")
+        if detail not in recorded:
+            self.consistency_output_error += f"; {detail}"
+
+    def _run_setup_step(self, description, function, *args, **kwargs):
+        """Run one initialization step without allowing it to abort setup."""
+        try:
+            function(*args, **kwargs)
+        except Exception as exc:
+            self._record_setup_warning(f"Could not {description}", exc)
+            return False
+        return True
+
+    def _cf_names(self, function, label):
+        """Call a Compliance Checker CF discovery function defensively."""
+        try:
+            return list(function(self.dataset) or [])
+        except Exception as exc:
+            self._record_setup_warning(f"Could not identify {label}", exc)
+            return []
+
+    def _initialize_data_variables(self):
+        """Identify geophysical variables without requiring standard_name."""
+        self.varname = self._cf_names(
+            cfutil.get_geophysical_variables,
+            "geophysical variables",
+        )
+
+        # Project metadata can disambiguate files containing cell measures or
+        # other geophysical-looking support variables. It is only a preference:
+        # CF discovery remains the source of the candidate set.
+        preferred = []
+        for attr in ("variable_id", "branded_variable"):
+            value = self._get_attr(attr, "")
+            if isinstance(value, str) and value in self.varname:
+                preferred.append(value)
+        self.varname = preferred + [v for v in self.varname if v not in preferred]
 
     def _load_project_config(self):
         """Loads the project-specific TOML configuration file using self.project_config_path."""
         if not self.project_config_path or not os.path.exists(self.project_config_path):
-            print(
-                f"Warning: Configuration file path not set or file not found at {self.project_config_path}"
+            self._record_setup_warning(
+                f"Project configuration file not found at '{self.project_config_path}'"
             )
             self.config = {}
             return
@@ -206,8 +219,10 @@ class WCRPBaseCheck(BaseCheck):
                 self.config = toml.load(f)
         except Exception as e:
             self.config = {}
-            print(
-                f"Error parsing TOML configuration from {self.project_config_path}: {e}"
+            self._record_setup_warning(
+                f"Could not parse project configuration file "
+                f"'{self.project_config_path}'",
+                e,
             )
 
     def get_severity(self, severity_str, default_severity_str="MEDIUM"):
@@ -319,68 +334,116 @@ class WCRPBaseCheck(BaseCheck):
     def _initialize_time_info(self):
         """Get information about the infile time axis."""
         try:
-            self.time = self.xrds.cf["time"]
-        except KeyError:
+            time_name = cfutil.get_time_variable(self.dataset)
+        except Exception as exc:
+            self._record_setup_warning("Could not identify the time coordinate", exc)
+            time_name = None
+
+        if time_name in self.dataset.variables:
+            self.time = self.dataset.variables[time_name]
+        else:
             self.time = None
+
         if self.time is not None:
-            time_attrs = ChainMap(self.time.attrs, self.time.encoding)
-            self.calendar = time_attrs.get("calendar", None)
-            self.timeunits = time_attrs.get("units", None)
-            self.timebnds = time_attrs.get("bounds", None)
-            self.time_invariant_vars = [
-                var
-                for var in list(self.xrds.data_vars.keys())
-                + list(self.xrds.coords.keys())
-                if self.time.name not in self.xrds[var].dims and var not in self.varname
-            ]
+            self.calendar = getattr(self.time, "calendar", None)
+            self.timeunits = getattr(self.time, "units", None)
+            self.timebnds = getattr(self.time, "bounds", None)
         else:
             self.calendar = None
             self.timeunits = None
             self.timebnds = None
-            self.time_invariant_vars = [
-                var
-                for var in list(self.xrds.data_vars.keys())
-                + list(self.xrds.coords.keys())
-                if var not in self.varname
-            ]
+
+    def _get_time_invariant_vars(self):
+        """Return variables whose values are compared across files."""
+        time_dim = None
+        if self.time is not None and self.time.dimensions:
+            time_dim = self.time.dimensions[0]
+        return [
+            var
+            for var, ncvar in self.dataset.variables.items()
+            if time_dim not in ncvar.dimensions and var not in self.varname
+        ]
 
     def _initialize_coords_info(self):
         """Get information about the infile coordinates."""
-        # Compile list of coordinates from coords, axes and formula_terms
-        #  also check for redundant bounds / coordinates
-        self.coords = []
-        self.bounds = set()
-        self.coords_redundant = dict()
-        self.bounds_redundant = dict()
-        for bkey, bval in self.xrds.cf.bounds.items():
-            if len(bval) > 1:
-                self.bounds_redundant[bkey] = bval
-            self.bounds.update(bval)
-        # ds.cf.coordinates
-        # {'longitude': ['lon'], 'latitude': ['lat'], 'vertical': ['height'], 'time': ['time']}
-        for ckey, clist in self.xrds.cf.coordinates.items():
-            _clist = [c for c in clist if c not in self.bounds]
-            if len(_clist) > 1:
-                self.coords_redundant[ckey] = _clist
-            if _clist[0] not in self.coords:
-                self.coords.append(_clist[0])
-        # ds.cf.axes
-        # {'X': ['rlon'], 'Y': ['rlat'], 'Z': ['height'], 'T': ['time']}
-        for ckey, clist in self.xrds.cf.axes.items():
-            if len(clist) > 1:
-                if ckey not in self.coords_redundant:
-                    self.coords_redundant[ckey] = clist
-            if clist[0] not in self.coords:
-                self.coords.append(clist[0])
-        # ds.cf.formula_terms
-        # {"lev": {"a":"ab", "ps": "ps",...}}
-        for akey in self.xrds.cf.formula_terms.keys():
-            for ckey, cval in self.xrds.cf.formula_terms[akey].items():
-                if cval not in self.coords:
-                    self.coords.append(cval)
+        self.coords_redundant = {}
+        self.bounds_redundant = {}
+
+        try:
+            bounds_map = cfutil.get_cell_boundary_map(self.dataset)
+        except Exception as exc:
+            self._record_setup_warning("Could not identify coordinate bounds", exc)
+            bounds_map = {}
+        self.bounds = set(bounds_map.values())
+
+        coordinate_groups = {
+            "longitude": self._cf_names(
+                cfutil.get_longitude_variables,
+                "longitude coordinates",
+            ),
+            "latitude": self._cf_names(
+                cfutil.get_latitude_variables,
+                "latitude coordinates",
+            ),
+            "vertical": self._cf_names(
+                cfutil.get_z_variables,
+                "vertical coordinates",
+            ),
+            "time": self._cf_names(
+                cfutil.get_time_variables,
+                "time coordinates",
+            ),
+        }
+        for key, candidates in coordinate_groups.items():
+            candidates = list(dict.fromkeys(candidates))
+            if len(candidates) > 1:
+                self.coords_redundant[key] = candidates
+            group_bounds = list(
+                dict.fromkeys(
+                    bounds_map[name] for name in candidates if name in bounds_map
+                )
+            )
+            if len(group_bounds) > 1:
+                self.bounds_redundant[key] = group_bounds
+
+        coord_names = set(
+            self._cf_names(
+                cfutil.get_coordinate_variables,
+                "coordinate variables",
+            )
+        )
+        coord_names.update(
+            self._cf_names(
+                cfutil.get_auxiliary_coordinate_variables,
+                "auxiliary coordinate variables",
+            )
+        )
+        coord_names.update(self._cf_names(cfutil.get_axis_variables, "axis variables"))
+        for candidates in coordinate_groups.values():
+            coord_names.update(candidates)
+
+        self.formula_terms = {}
+        for name, var in self.dataset.variables.items():
+            value = getattr(var, "formula_terms", None)
+            if not isinstance(value, str):
+                continue
+            terms = {
+                match.group(1): match.group(2)
+                for match in FORMULA_TERM_PATTERN.finditer(value)
+                if match.group(2) in self.dataset.variables
+            }
+            if terms:
+                self.formula_terms[name] = terms
+                coord_names.update(terms.values())
+
+        coord_names.difference_update(self.bounds)
+        self.coords = [name for name in self.dataset.variables if name in coord_names]
 
         # Get the external variables
-        self.external_variables = self._get_attr("external_variables", "").split()
+        external_variables = self._get_attr("external_variables", "")
+        self.external_variables = (
+            external_variables.split() if isinstance(external_variables, str) else []
+        )
 
         # Update list of variables
         self.varname = [
@@ -418,13 +481,76 @@ class WCRPBaseCheck(BaseCheck):
             ) from e
 
     def _write_consistency_output(self):
-        """Write output for consistency checks across files."""
+        """Write consistency output without allowing failures to abort setup."""
+        try:
+            payload = self._build_consistency_output()
+        except Exception as exc:
+            self._record_consistency_output_error(
+                "Could not build the requested consistency summary",
+                exc,
+            )
+            return False
+
+        try:
+            serialized = json.dumps(sanitize(payload), indent=4)
+        except Exception as exc:
+            self._record_consistency_output_error(
+                "Could not serialize the requested consistency summary as JSON",
+                exc,
+            )
+            return False
+
+        output_path = Path(self.consistency_output).expanduser()
+        try:
+            output_path.write_text(serialized, encoding="utf-8")
+        except Exception as exc:
+            self._record_consistency_output_error(
+                f"Could not write the requested consistency summary to "
+                f"'{output_path}'",
+                exc,
+            )
+            return False
+        return True
+
+    def check_setup_warnings(self, ds):
+        """Report recoverable setup problems as low-severity findings."""
+        testctx = TestCtx(
+            BaseCheck.LOW,
+            "[TOOL001] Plugin initialization and file metadata discovery",
+        )
+        if self.setup_warnings:
+            for warning in self.setup_warnings:
+                testctx.add_failure(
+                    "The plugin encountered a problem while examining the file "
+                    "structure and metadata. Some compliance checks may have "
+                    f"been skipped or may be incomplete. Technical details: {warning}"
+                )
+        else:
+            testctx.add_pass()
+        return [testctx.to_result()]
+
+    def check_consistency_output(self, ds):
+        """Report a recoverable consistency-output error as low severity."""
+        testctx = TestCtx(BaseCheck.LOW, "[TOOL002] Cross-file consistency summary")
+        if self.consistency_output_error:
+            testctx.add_failure(
+                "The plugin could not fully prepare or write the JSON summary "
+                "used to compare metadata across files. The consistency summary "
+                "may therefore be missing or incomplete. Technical details: "
+                f"{self.consistency_output_error}"
+            )
+        else:
+            testctx.add_pass()
+        return [testctx.to_result()]
+
+    def _build_consistency_output(self):
+        """Build the cross-file consistency payload from the NetCDF4 dataset."""
         # Dictionaries of global attributes and their data types
         required_attributes = []
         # Read from CV
         if required_attributes == []:
-            required_attributes = getattr(self, "CV", {}).get(
-                "required_global_attributes", []
+            required_attributes = list(
+                getattr(self, "CV", {}).get("required_global_attributes", [])
             )
         # required_attributes = []
         # Retrieve via esgvoc
@@ -441,18 +567,19 @@ class WCRPBaseCheck(BaseCheck):
         required_attributes.sort(key=lambda x: x.lower())
         # print("Required attributes:", required_attributes)
 
+        global_attrs = {
+            name: self.dataset.getncattr(name) for name in self.dataset.ncattrs()
+        }
         file_attrs_req = {
-            k: str(v) for k, v in self.xrds.attrs.items() if k in required_attributes
+            k: str(v) for k, v in global_attrs.items() if k in required_attributes
         }
         file_attrs_nreq = {
             k: str(v)
-            for k, v in self.xrds.attrs.items()
+            for k, v in global_attrs.items()
             if k not in required_attributes
             if k not in ["history"]
         }
-        file_attrs_dtypes = {
-            k: type(v).__qualname__ for k, v in self.xrds.attrs.items()
-        }
+        file_attrs_dtypes = {k: type(v).__qualname__ for k, v in global_attrs.items()}
         for k in required_attributes:
             if k not in file_attrs_req:
                 file_attrs_req[k] = "unset"
@@ -461,15 +588,16 @@ class WCRPBaseCheck(BaseCheck):
         # Dictionaries of variable attributes and their data types
         var_attrs = {}
         var_attrs_dtypes = {}
-        for var in list(self.xrds.data_vars.keys()) + list(self.xrds.coords.keys()):
-            var_attrs[var] = {
+        for var_name, var in self.dataset.variables.items():
+            attrs = {name: var.getncattr(name) for name in var.ncattrs()}
+            var_attrs[var_name] = {
                 key: str(value)
-                for key, value in self.xrds[var].attrs.items()
+                for key, value in attrs.items()
                 if key not in ["history"]
             }
-            var_attrs_dtypes[var] = {
+            var_attrs_dtypes[var_name] = {
                 key: type(value).__qualname__
-                for key, value in self.xrds[var].attrs.items()
+                for key, value in attrs.items()
                 if key not in ["history"]
             }
         # Dictionary of time information
@@ -479,56 +607,51 @@ class WCRPBaseCheck(BaseCheck):
             #  (ignoring possible flaws in its definition)
             bound0 = None
             boundn = None
-            if self.timebnds is not None:
+            if self.timebnds in self.dataset.variables:
                 try:
-                    bound0 = self.xrds[self.timebnds].values[0, 0]
-                    boundn = self.xrds[self.timebnds].values[-1, -1]
-                except IndexError:
+                    bounds_var = self.dataset.variables[self.timebnds]
+                    bound0 = bounds_var[0, 0]
+                    boundn = bounds_var[-1, -1]
+                except (IndexError, TypeError):
                     pass
-            time_info = {
-                "frequency": self.frequency,
-                "units": self.timeunits,
-                "calendar": self.calendar,
-                "bound0": bound0,
-                "boundn": boundn,
-                "time0": self.time.values[0],
-                "timen": self.time.values[-1],
-            }
+            if self.time.size:
+                time_info = {
+                    "frequency": self.frequency,
+                    "units": self.timeunits,
+                    "calendar": self.calendar,
+                    "bound0": bound0,
+                    "boundn": boundn,
+                    "time0": self.time[0],
+                    "timen": self.time[-1],
+                }
         # Dictionary of time_invariant variable checksums
         coord_checksums = {}
-        for coord_var in self.time_invariant_vars:
+        for coord_var in self._get_time_invariant_vars():
+            values = np.ma.asarray(self.dataset.variables[coord_var][:])
             coord_checksums[coord_var] = md5(
-                str(self.xrds[coord_var].values.tobytes()).encode("utf-8")
+                str(values.tobytes()).encode("utf-8")
             ).hexdigest()
         # Dictionary of dimension sizes
-        dims = dict(self.xrds.sizes)
+        dims = {name: len(dim) for name, dim in self.dataset.dimensions.items()}
         # Do not compare time dimension size, only name
-        if self.time is not None:
-            dimt = self.time.dims[0]
+        if self.time is not None and self.time.dimensions:
+            dimt = self.time.dimensions[0]
             dims[dimt] = "n"
         # Dictionary of variable data types
-        var_dtypes = {}
-        for var in list(self.xrds.data_vars.keys()) + list(self.xrds.coords.keys()):
-            var_dtypes[var] = str(self.xrds[var].dtype)
-        # Write combined dictionary
-        with open(self.consistency_output, "w") as f:
-            json.dump(
-                sanitize(
-                    {
-                        "global_attributes": file_attrs_req,
-                        "global_attributes_non_required": file_attrs_nreq,
-                        "global_attributes_dtypes": file_attrs_dtypes,
-                        "variable_attributes": var_attrs,
-                        "variable_attributes_dtypes": var_attrs_dtypes,
-                        "variable_dtypes": var_dtypes,
-                        "dimensions": dims,
-                        "coordinates": coord_checksums,
-                        "time_info": time_info,
-                    }
-                ),
-                f,
-                indent=4,
-            )
+        var_dtypes = {
+            name: str(var.dtype) for name, var in self.dataset.variables.items()
+        }
+        return {
+            "global_attributes": file_attrs_req,
+            "global_attributes_non_required": file_attrs_nreq,
+            "global_attributes_dtypes": file_attrs_dtypes,
+            "variable_attributes": var_attrs,
+            "variable_attributes_dtypes": var_attrs_dtypes,
+            "variable_dtypes": var_dtypes,
+            "dimensions": dims,
+            "coordinates": coord_checksums,
+            "time_info": time_info,
+        }
 
     def _map_drs_blocks(self):
         """Maps the file metadata, name and location to the DRS building blocks and required attributes."""

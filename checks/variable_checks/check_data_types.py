@@ -46,53 +46,57 @@ def check_coord_data_types(
 
     # Verify coordinate data types
     for c in set(CheckerObject.coords) | set(CheckerObject.bounds):
+        if c not in CheckerObject.ds.variables:
+            continue
+        coord = CheckerObject.ds.variables[c]
         if (
             ctype == "character"
-            and CheckerObject.xrds[c].dtype.kind != dtypesdict[ctype].kind
-        ) or CheckerObject.xrds[c].dtype != dtypesdict[ctype]:
+            and coord.dtype.kind != np.dtype(dtypesdict[ctype]).kind
+        ) or coord.dtype != dtypesdict[ctype]:
             if len(CheckerObject.varname) > 0 and c == getattr(
                 CheckerObject.ds.variables[CheckerObject.varname[0]],
                 "grid_mapping",
                 None,
             ):
                 pass
-            elif (
-                c
-                in {
-                    k: CheckerObject.xrds.cf.formula_terms.get(k, None)
-                    for k in ("ps", "orog")
-                }.values()
-            ):
+            elif c in {
+                value
+                for terms in CheckerObject.formula_terms.values()
+                for key, value in terms.items()
+                if key in ("ps", "orog")
+            }:
                 pass
             else:
                 try:
                     testctx.add_failure(
-                        f"The coordinate variable '{c}' must be of the data type '{dtypesdict[ctype].__name__}', is of type '{CheckerObject.xrds[c].dtype}'."
+                        f"The coordinate variable '{c}' must be of the data type '{dtypesdict[ctype].__name__}', is of type '{coord.dtype}'."
                     )
                 except AttributeError:
                     testctx.add_failure(
-                        f"The coordinate variable '{c}' must be of the data type '{dtypesdict[ctype]}', is of type '{CheckerObject.xrds[c].dtype}'."
+                        f"The coordinate variable '{c}' must be of the data type '{dtypesdict[ctype]}', is of type '{coord.dtype}'."
                     )
                 failure_registered = True
         elif (
             c
             in {
-                k: CheckerObject.xrds.cf.formula_terms.get(k, None)
-                for k in ("ps", "orog")
-            }.values()
-            and CheckerObject.xrds[c].dtype != dtypesdict[auxtype]
+                value
+                for terms in CheckerObject.formula_terms.values()
+                for key, value in terms.items()
+                if key in ("ps", "orog")
+            }
+            and coord.dtype != dtypesdict[auxtype]
             or (
                 auxtype == "character"
-                and CheckerObject.xrds[c].dtype.kind != dtypesdict[auxtype]
+                and coord.dtype.kind != np.dtype(dtypesdict[auxtype]).kind
             )
         ):
             try:
                 testctx.add_failure(
-                    f"The auxiliary coordinate variable '{c}' must be of the data type '{dtypesdict[auxtype].__name__}', is of type '{CheckerObject.xrds[c].dtype}'."
+                    f"The auxiliary coordinate variable '{c}' must be of the data type '{dtypesdict[auxtype].__name__}', is of type '{coord.dtype}'."
                 )
             except AttributeError:
                 testctx.add_failure(
-                    f"The auxiliary coordinate variable '{c}' must be of the data type '{dtypesdict[auxtype]}', is of type '{CheckerObject.xrds[c].dtype}'."
+                    f"The auxiliary coordinate variable '{c}' must be of the data type '{dtypesdict[auxtype]}', is of type '{coord.dtype}'."
                 )
             failure_registered = True
 
@@ -140,22 +144,23 @@ def check_var_data_type(
         else:
             testctx.add_failure("No main variable found.")
             return [testctx.to_result()]
-    elif var not in CheckerObject.xrds:
+    elif var not in CheckerObject.ds.variables:
         testctx.add_failure(f"Variable '{var}' not found.")
         return [testctx.to_result()]
 
     # Verify variable data type
-    if CheckerObject.xrds[var].dtype != dtypesdict[vartype] or (
+    variable = CheckerObject.ds.variables[var]
+    if variable.dtype != dtypesdict[vartype] or (
         vartype == "character"
-        and CheckerObject.xrds[var].dtype.kind != dtypesdict[vartype]
+        and variable.dtype.kind != np.dtype(dtypesdict[vartype]).kind
     ):
         try:
             testctx.add_failure(
-                f"The variable '{var}' must be of data type '{dtypesdict[vartype].__name__}', is of type '{CheckerObject.xrds[var].dtype.__name__}'."
+                f"The variable '{var}' must be of data type '{dtypesdict[vartype].__name__}', is of type '{variable.dtype.name}'."
             )
         except AttributeError:
             testctx.add_failure(
-                f"The variable '{var}' must be of data type '{dtypesdict[vartype]}', is of type '{CheckerObject.xrds[var].dtype}'."
+                f"The variable '{var}' must be of data type '{dtypesdict[vartype]}', is of type '{variable.dtype}'."
             )
     else:
         testctx.add_pass()
