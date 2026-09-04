@@ -9,8 +9,26 @@ from compliance_checker.base import BaseCheck, TestCtx
 from datetime import timedelta as py_timedelta
 from checks.time_checks.time_constants import FREQ_INC, AVERAGE_CORRECTION_FREQ
 
-NDECIMALS = 6
+TOL_SECONDS = 0.1
+NDECIMALS = 8  # display precision for failure messages; must resolve well below TOL_SECONDS
 _TIME_RANGE_RE = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$", re.IGNORECASE)
+
+def _tolerance(start: cftime.datetime, units: str, calendar: str) -> float:
+    """TOL_SECONDS in the file's original units via cftime."""
+    # start time is only used to get the correct calendar for cftime.date2num
+    n0 = cftime.date2num(start, units=units, calendar=calendar)
+    # Add TOL_SECONDS to start time, convert to numeric, and return the difference in the file's units.
+    n1 = cftime.date2num(start + py_timedelta(seconds=TOL_SECONDS), units=units, calendar=calendar)
+    return float(n1 - n0)
+
+
+def _to_seconds(diff_units: float, tol_units: float) -> float:
+    """Convert a difference in the file's own time units back to seconds,
+    using the same tol/TOL_SECONDS ratio ``_tolerance`` computed -- so a
+    failure message can report a physically meaningful offset instead of raw
+    axis values, which can print identically at NDECIMALS while still
+    differing by more than the tolerance."""
+    return diff_units * TOL_SECONDS / tol_units
 
 
 def _round(arr: np.ndarray, ndecs: int) -> np.ndarray:
@@ -289,10 +307,14 @@ def check_time_squareness(
             )
             cur = nxt
 
-    # Compare after rounding to NDECIMALS places. See _round docstring
-    # for why this is np.round and not np.trunc.
-    a_t = _round(actual, NDECIMALS)
-    t_t = _round(theo, NDECIMALS)
+    # Construct tolerance in file units for comparison
+    # use a unit-based tolerance to avoid floating-point
+    # drift issues (see https://github.com/ESGF/cc-plugin-wcrp/issues/77)
+    # when rounding to an absolute number of decimal places, sufficiently
+    # large time values can lose precision and cause false positives.
+    tol = _tolerance(start_boundary, units, cal)
+    # keep names so the rest of the function reads as before
+    a_t, t_t = actual, theo
 
     # For monthly instantaneous data, allow three valid timestamp conventions,
     # but require consistency across the whole file (single convention per file):
@@ -317,36 +339,45 @@ def check_time_squareness(
             theo_center[i] = _midpoint_num(cur, nxt, units, cal)
             cur = nxt
 
-        t_mid = _round(theo_mid, NDECIMALS)
-        t_center = _round(theo_center, NDECIMALS)
-
-        # A file passes only if the full axis matches one convention end-to-end.
-        full_match_start = np.array_equal(a_t, t_t)
-        full_match_mid = np.array_equal(a_t, t_mid)
-        full_match_center = np.array_equal(a_t, t_center)
+        # retain the full original precision of the actual axis for comparison
+        # to a tolerance
+        t_mid, t_center = theo_mid, theo_center
+        # create a tolerance mask for each candidate axis,
+        # and a full-match check for each candidate
+        ok_start = np.abs(a_t - t_t) <= tol
+        ok_mid = np.abs(a_t - t_mid) <= tol
+        ok_center = np.abs(a_t - t_center) <= tol
+        full_match_start, full_match_mid, full_match_center = ok_start.all(), ok_mid.all(), ok_center.all()
 
         if not (full_match_start or full_match_mid or full_match_center):
-            bad = np.where((a_t != t_t) & (a_t != t_mid) & (a_t != t_center))[0]
+            # Concstruct composite mask of points that match at least one candidate axis
+            bad = np.where(~ok_start & ~ok_mid & ~ok_center)[0]
             if bad.size:
                 i = int(bad[0])
             else:
                 # Mixed-convention axis: every point matches at least one candidate,
                 # but no single candidate matches the entire file.
-                first_start = np.where(a_t != t_t)[0]
+                first_start = np.where(~ok_start)[0]
                 i = int(first_start[0]) if first_start.size else 0
+            off_start = _to_seconds(a_t[i] - t_t[i], tol)
+            off_mid = _to_seconds(a_t[i] - t_mid[i], tol)
+            off_center = _to_seconds(a_t[i] - t_center[i], tol)
             ctx.add_failure(
-                f"Mismatch at index {i}: expected {t_t[i]:.{NDECIMALS}f} (month-start) "
-                f"or {t_mid[i]:.{NDECIMALS}f} (day-15) "
-                f"or {t_center[i]:.{NDECIMALS}f} (exact center), got {a_t[i]:.{NDECIMALS}f}. "
+                f"Mismatch at index {i}: actual={a_t[i]:.{NDECIMALS}f} is off by "
+                f"{off_start:+.{NDECIMALS}f}s (month-start), {off_mid:+.{NDECIMALS}f}s (day-15), "
+                f"{off_center:+.{NDECIMALS}f}s (exact center); tolerance is {TOL_SECONDS:.{NDECIMALS}f}s. "
                 "The full file must consistently follow one of these conventions. "
                 f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
             )
     else:
-        bad = np.where(a_t != t_t)[0]
+        # For all other cases, check against the single candidate axis
+        bad = np.where(np.abs(a_t - t_t) > tol)[0]
         if bad.size:
             i = int(bad[0])
+            off = _to_seconds(a_t[i] - t_t[i], tol)
             ctx.add_failure(
-                f"Mismatch at index {i}: expected {t_t[i]:.{NDECIMALS}f}, got {a_t[i]:.{NDECIMALS}f}. "
+                f"Mismatch at index {i}: actual={a_t[i]:.{NDECIMALS}f}, expected={t_t[i]:.{NDECIMALS}f} "
+                f"(off by {off:+.{NDECIMALS}f}s; tolerance is {TOL_SECONDS:.{NDECIMALS}f}s). "
                 f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
             )
 
