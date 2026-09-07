@@ -2,8 +2,11 @@ import os
 import re
 from datetime import timedelta
 
+import cftime
 import numpy as np
 from compliance_checker.base import BaseCheck
+
+from checks.time_checks.time_constants import FREQ_INC
 
 try:
     from esgvoc.api.universe import find_terms_in_data_descriptor
@@ -179,40 +182,309 @@ def flatten(lst):
     return result
 
 
-# Definition of maximum deviations from the given frequency
-deltdic = {}
-deltdic["monmax"] = timedelta(days=31.5).total_seconds()
-deltdic["monmin"] = timedelta(days=27.5).total_seconds()
-deltdic["mon"] = timedelta(days=31).total_seconds()
-deltdic["daymax"] = timedelta(days=1.1).total_seconds()
-deltdic["daymin"] = timedelta(days=0.9).total_seconds()
-deltdic["day"] = timedelta(days=1).total_seconds()
-deltdic["1hrmin"] = timedelta(hours=0.9).total_seconds()
-deltdic["1hrmax"] = timedelta(hours=1.1).total_seconds()
-deltdic["1hr"] = timedelta(hours=1).total_seconds()
-deltdic["3hrmin"] = timedelta(hours=2.9).total_seconds()
-deltdic["3hrmax"] = timedelta(hours=3.1).total_seconds()
-deltdic["3hr"] = timedelta(hours=3).total_seconds()
-deltdic["6hrmin"] = timedelta(hours=5.9).total_seconds()
-deltdic["6hrmax"] = timedelta(hours=6.1).total_seconds()
-deltdic["6hr"] = timedelta(hours=6).total_seconds()
-deltdic["yrmax"] = timedelta(days=366.1).total_seconds()
-deltdic["yrmin"] = timedelta(days=359.9).total_seconds()
-deltdic["yr"] = timedelta(days=360).total_seconds()
-deltdic["subhr"] = timedelta(seconds=600).total_seconds()
-deltdic["subhrmax"] = timedelta(seconds=601).total_seconds()
-deltdic["subhrmin"] = timedelta(seconds=599).total_seconds()
-deltdic["dec"] = timedelta(days=3600).total_seconds()
-deltdic["decmax"] = timedelta(days=3599.99).total_seconds()
-deltdic["decmin"] = timedelta(days=3660.01).total_seconds()
-deltdic["cen"] = timedelta(days=36000).total_seconds()
-deltdic["cenmax"] = timedelta(days=35999.99).total_seconds()
-deltdic["cenmin"] = timedelta(days=36600.01).total_seconds()
-# CMIP-style frequencies for "time: point":
-for l_freq in ["subhr", "1hr", "3hr", "6hr", "day", "mon", "yr"]:
+# Only base labels whose increments are unique can be inferred. Variants such
+# as monPt and monClim intentionally remain ambiguous.
+_INFERABLE_FREQUENCIES = (
+    "subhr",
+    "1hr",
+    "3hr",
+    "6hr",
+    "day",
+    "mon",
+    "sem",
+    "yr",
+    "dec",
+    "cen",
+)
+_FIXED_INCREMENT_TOLERANCE_SECONDS = 1.0
+_CALENDAR_COORDINATE_TOLERANCE_SECONDS = timedelta(days=2).total_seconds()
+
+
+def _read_unmasked_values(variable):
+    """Read a variable as an ndarray, rejecting missing or unreadable values."""
+    try:
+        values = np.ma.asarray(variable[:])
+    except Exception:
+        return None
+    if values.size == 0 or np.ma.getmaskarray(values).any():
+        return None
+    return np.asarray(values)
+
+
+def _decoded_datetimes(values, units, calendar):
+    """Decode numeric time values, returning None for invalid metadata/data."""
+    if not isinstance(units, str) or not units.strip():
+        return None
+    try:
+        decoded = cftime.num2date(
+            values,
+            units=units,
+            calendar=calendar or "standard",
+            only_use_cftime_datetimes=True,
+        )
+    except Exception:
+        return None
+    return np.asarray(decoded, dtype=object)
+
+
+def _coordinate_date_pairs(time, units, calendar):
+    """Return consecutive decoded time-coordinate pairs."""
+    values = _read_unmasked_values(time)
+    if values is None or values.ndim > 1:
+        return []
+    values = values.reshape(-1)
+    if values.size < 2:
+        return []
+    dates = _decoded_datetimes(values, units, calendar)
+    if dates is None:
+        return []
+    pairs = list(zip(dates[:-1], dates[1:]))
+    for start, end in pairs:
+        try:
+            increasing = (end - start).total_seconds() > 0
+        except Exception:
+            return []
+        if not increasing:
+            return []
+    return pairs
+
+
+def _bounds_date_pairs(time, time_bounds, units, calendar):
+    """Return decoded start/end pairs from two-dimensional time bounds."""
+    if time_bounds is None or getattr(time_bounds, "ndim", None) != 2:
+        return []
+    values = _read_unmasked_values(time_bounds)
+    if values is None:
+        return []
+
+    time_dimensions = getattr(time, "dimensions", ())
+    bounds_dimensions = getattr(time_bounds, "dimensions", ())
+    time_dimension = time_dimensions[0] if time_dimensions else None
+    if time_dimension in bounds_dimensions:
+        time_axis = bounds_dimensions.index(time_dimension)
+    elif values.shape[0] == getattr(time, "size", None):
+        time_axis = 0
+    elif values.shape[1] == getattr(time, "size", None):
+        time_axis = 1
+    else:
+        return []
+
+    values = np.moveaxis(values, time_axis, 0)
+    if values.shape[0] != getattr(time, "size", values.shape[0]):
+        return []
+    if values.shape[1] < 2:
+        return []
+
+    starts = _decoded_datetimes(values[:, 0], units, calendar)
+    ends = _decoded_datetimes(values[:, -1], units, calendar)
+    if starts is None or ends is None:
+        return []
+
+    pairs = list(zip(starts, ends))
+    for start, end in pairs:
+        try:
+            increasing = (end - start).total_seconds() > 0
+        except Exception:
+            return []
+        if not increasing:
+            return []
+    return pairs
+
+
+def add_time_increment(date, value, unit, calendar):
+    """Add a fixed or calendar-dependent FREQ_INC increment to a CF date."""
+    value = int(value)
+    unit = str(unit)
+    calendar = calendar or "standard"
+    if unit in ("seconds", "minutes", "hours", "days"):
+        return date + timedelta(**{unit: value})
+
+    year = int(date.year)
+    month = int(date.month)
+    day = int(date.day)
+    if unit == "years":
+        year += value
+    elif unit == "months":
+        total_months = month + value
+        year_delta, zero_based_month = divmod(total_months - 1, 12)
+        year += year_delta
+        month = zero_based_month + 1
+    else:
+        raise ValueError(f"Unsupported time increment unit: {unit}")
+
+    date_components = (
+        year,
+        month,
+        day,
+        date.hour,
+        date.minute,
+        date.second,
+        getattr(date, "microsecond", 0),
+    )
+    for candidate_day in range(day, 0, -1):
+        try:
+            return cftime.datetime(
+                date_components[0],
+                date_components[1],
+                candidate_day,
+                *date_components[3:],
+                calendar=calendar,
+            )
+        except ValueError:
+            continue
+    raise ValueError(f"Could not add {value} {unit} to {date}")
+
+
+def _matches_subhourly_frequency(pairs, calendar, increment):
+    """Check for a regular step that divides one hour and is within the limit."""
+    value, unit = increment
+    observed_intervals = []
+    for start, end in pairs:
+        try:
+            observed = (end - start).total_seconds()
+            maximum_end = add_time_increment(start, value, unit, calendar)
+            maximum = (maximum_end - start).total_seconds()
+        except Exception:
+            return False
+        if (
+            not np.isfinite(observed)
+            or not np.isfinite(maximum)
+            or observed <= 0
+            or observed > maximum + _FIXED_INCREMENT_TOLERANCE_SECONDS
+        ):
+            return False
+        steps_per_hour = round(timedelta(hours=1).total_seconds() / observed)
+        if steps_per_hour < 1 or (
+            abs(steps_per_hour * observed - timedelta(hours=1).total_seconds())
+            > _FIXED_INCREMENT_TOLERANCE_SECONDS
+        ):
+            return False
+        observed_intervals.append(observed)
+
+    return (
+        max(observed_intervals) - min(observed_intervals)
+        <= _FIXED_INCREMENT_TOLERANCE_SECONDS
+    )
+
+
+def _frequency_for_date_pairs(pairs, calendar, *, coordinate_values):
+    """Return the unique FREQ_INC base label matching all decoded pairs."""
+    if not pairs:
+        return "unknown"
+    matches = []
+    for frequency in _INFERABLE_FREQUENCIES:
+        increment = FREQ_INC.get(("None", frequency))
+        if not increment:
+            continue
+        value, unit = increment
+        if frequency == "subhr":
+            if _matches_subhourly_frequency(pairs, calendar, increment):
+                matches.append(frequency)
+            continue
+        tolerance = _FIXED_INCREMENT_TOLERANCE_SECONDS
+        if coordinate_values and unit in ("months", "years"):
+            # Monthly/annual means can shift by half the change in adjacent
+            # cell widths while still representing a regular calendar step.
+            tolerance = _CALENDAR_COORDINATE_TOLERANCE_SECONDS
+        matched = True
+        for start, end in pairs:
+            try:
+                expected = add_time_increment(start, value, unit, calendar)
+                difference = abs((end - expected).total_seconds())
+            except Exception:
+                matched = False
+                break
+            if not np.isfinite(difference) or difference > tolerance:
+                matched = False
+                break
+        if matched:
+            matches.append(frequency)
+    return matches[0] if len(matches) == 1 else "unknown"
+
+
+def infer_frequency(time, time_bounds=None, units=None, calendar=None):
+    """Infer a WCRP base frequency from a numeric CF time coordinate.
+
+    Time-cell widths and consecutive coordinate intervals are evaluated
+    independently. If both are available, they must resolve to the same
+    frequency. A single time value can therefore only be inferred when valid
+    bounds are available. Missing, irregular, decreasing, contradictory, or
+    otherwise unsupported input returns ``"unknown"`` rather than raising.
+
+    Specialized labels such as ``monPt``, ``monClim``, and ``1hrCM`` are not
+    inferred because interval lengths alone cannot identify their semantics.
+    ``subhr`` denotes any regular positive interval up to the maximum stored
+    in its generic ``FREQ_INC`` entry that divides one hour exactly.
+
+    Parameters
+    ----------
+    time : netCDF4.Variable
+        Numeric CF time coordinate.
+    time_bounds : netCDF4.Variable, optional
+        Associated two-dimensional time bounds variable.
+    units : str, optional
+        CF time units. Defaults to the time variable's ``units`` attribute.
+    calendar : str, optional
+        CF calendar. Defaults to the time variable's ``calendar`` attribute or
+        ``"standard"``.
+
+    Returns
+    -------
+    str
+        One of the supported base-frequency labels, or ``"unknown"``.
+    """
+    if time is None:
+        return "unknown"
+    units = units if units is not None else getattr(time, "units", None)
+    calendar = (
+        calendar if calendar is not None else getattr(time, "calendar", "standard")
+    )
+
+    coordinate_pairs = _coordinate_date_pairs(time, units, calendar)
+    bounds_pairs = _bounds_date_pairs(
+        time,
+        time_bounds,
+        units,
+        calendar,
+    )
+    coordinate_frequency = _frequency_for_date_pairs(
+        coordinate_pairs,
+        calendar,
+        coordinate_values=True,
+    )
+    bounds_frequency = _frequency_for_date_pairs(
+        bounds_pairs,
+        calendar,
+        coordinate_values=False,
+    )
+
+    if coordinate_pairs and bounds_pairs:
+        if coordinate_frequency == bounds_frequency:
+            return coordinate_frequency
+        return "unknown"
+    if bounds_pairs:
+        return bounds_frequency
+    if coordinate_pairs:
+        return coordinate_frequency
+    return "unknown"
+
+
+# Nominal durations retained for the legacy CORDEX file-chunking check. They
+# are not frequency-inference tolerances; inference uses FREQ_INC above.
+deltdic = {
+    "subhr": timedelta(minutes=10).total_seconds(),
+    "1hr": timedelta(hours=1).total_seconds(),
+    "3hr": timedelta(hours=3).total_seconds(),
+    "6hr": timedelta(hours=6).total_seconds(),
+    "day": timedelta(days=1).total_seconds(),
+    "mon": timedelta(days=31).total_seconds(),
+    "yr": timedelta(days=360).total_seconds(),
+    "dec": timedelta(days=3600).total_seconds(),
+    "cen": timedelta(days=36000).total_seconds(),
+}
+# CMIP-style frequencies for "time: point" share these nominal durations.
+for l_freq in ("subhr", "1hr", "3hr", "6hr", "day", "mon", "yr"):
     deltdic[l_freq + "Pt"] = deltdic[l_freq]
-    deltdic[l_freq + "Ptmax"] = deltdic[l_freq + "max"]
-    deltdic[l_freq + "Ptmin"] = deltdic[l_freq + "min"]
 
 
 def retrieve(url, fname, path, force=False):
@@ -511,6 +783,7 @@ def resolve_member_id(ds):
         return f"{sub_exp}-{variant}"
     return variant
 
+
 # =============================================================================
 # Experiment term resolution + parent/sub presence helpers (esgvoc-backed)
 # =============================================================================
@@ -531,6 +804,7 @@ def resolve_member_id(ds):
 
 try:
     import esgvoc.api as _voc_api
+
     _ESG_VOCAB_PROJECT_API = True
 except ImportError:
     _voc_api = None

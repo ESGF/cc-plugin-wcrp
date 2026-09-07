@@ -55,21 +55,30 @@ class DatapluginProjectCheck(WCRPBaseCheck):
     
         """Loads the TOML configuration file."""
         if not self.project_config_path or not os.path.exists(self.project_config_path):
-            print(f"Warning: Configuration file path not set or file not found at {self.project_config_path}")
             self.config = {}
+            self._record_setup_warning(
+                f"Project configuration file not found at '{self.project_config_path}'"
+            )
             return
         try:
             with open(self.project_config_path, 'r', encoding="utf-8") as f:
                 self.config = toml.load(f)
         except Exception as e:
             self.config = {}
-            print(f"Error parsing TOML configuration from {self.project_config_path}: {e}")
+            self._record_setup_warning(
+                f"Could not parse project configuration file "
+                f"'{self.project_config_path}'",
+                e,
+            )
 
     def setup(self, ds):
         
         """Loads the main configuration and the variable mapping file before running checks."""
         super().setup(ds)
-        self._load_project_config()
+        self._run_setup_step(
+            "load the data-plausibility project configuration",
+            self._load_project_config,
+        )
 
         # Load variable mapping directly from 'mapping_variables.toml' located in the same folder as the config
         base_dir = os.path.dirname(self.project_config_path)
@@ -81,16 +90,18 @@ class DatapluginProjectCheck(WCRPBaseCheck):
                 self.variable_mapping = toml.load(f).get('mapping_variables', {})
                 
         except FileNotFoundError:
-            print(f"Mapping file '{mapping_filepath}' not found.")
             self.variable_mapping = {}
+            self._record_setup_warning(
+                f"Variable mapping file not found at '{mapping_filepath}'"
+            )
         except Exception as e:
-            print(f"Error while loading variable mapping: {e}")
             self.variable_mapping = {}
+            self._record_setup_warning(
+                f"Could not load variable mapping file '{mapping_filepath}'",
+                e,
+            )
         
         
-        if self.consistency_output:
-            self._write_consistency_output()
-
     def check_Data_Plausibility(self, ds):
         """
         Runs all DATAxxx plausibility checks on CMIP6 variables.

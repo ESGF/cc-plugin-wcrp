@@ -18,12 +18,10 @@ The **cc-plugin-wcrp**  provides plugins that call automated **quality and consi
 **Dependencies** (installed automatically):
 
   - `netCDF4`
-  - `xarray`
   - `cfchecker`
   - `compliance-checker>=5.1.2`
   - `esgvoc`
   - `cftime`
-  - `cf_xarray`
   - `pooch`
 
 ## 🛠️ Installation

@@ -5,8 +5,13 @@ import re
 
 import numpy as np
 from compliance_checker.base import BaseCheck, TestCtx
+from compliance_checker.cf import util as cfutil
 
 from checks.utils import severity_word
+
+# Compliance Checker 6 moved these helpers from compliance_checker.cfutil.
+if not hasattr(cfutil, "get_geophysical_variables"):
+    from compliance_checker import cfutil
 
 
 def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
@@ -29,7 +34,12 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
     testctx = TestCtx(severity, desc)
 
     # The allowed grid_mapping_name attribute values in CORDEX-CMIP6
-    gmallowed = ["lambert_conformal_conic", "rotated_latitude_longitude", "mercator", "latitude_longitude"]
+    gmallowed = [
+        "lambert_conformal_conic",
+        "rotated_latitude_longitude",
+        "mercator",
+        "latitude_longitude",
+    ]
     # The allowed exception for omitting the grid_mapping attribute, based on the global attribute 'grid'
     gmomittedtext = "(no grid_mapping)"
     grid_description = str(getattr(CheckerObject.ds, "grid", "") or "").lower()
@@ -92,10 +102,10 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
                 )
         else:
             has_1d_lat_lon = (
-                "lat" in CheckerObject.xrds
-                and "lon" in CheckerObject.xrds
-                and CheckerObject.xrds["lat"].ndim == 1
-                and CheckerObject.xrds["lon"].ndim == 1
+                "lat" in CheckerObject.ds.variables
+                and "lon" in CheckerObject.ds.variables
+                and CheckerObject.ds.variables["lat"].ndim == 1
+                and CheckerObject.ds.variables["lon"].ndim == 1
             )
             if has_1d_lat_lon:
                 grid_mapping_name = "latitude_longitude"
@@ -120,13 +130,19 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
     # lat and lon must be present for all grid mappings. For regular
     # latitude-longitude grids they are 1D; for all other mappings they are 2D.
     if grid_mapping_name and grid_mapping_name in gmallowed:
-        if "lat" not in CheckerObject.xrds or "lon" not in CheckerObject.xrds:
+        if (
+            "lat" not in CheckerObject.ds.variables
+            or "lon" not in CheckerObject.ds.variables
+        ):
             testctx.add_failure(
                 f"The grid_mapping_name '{grid_mapping_name}' requires the variables"
                 " 'lat' and 'lon' to be present in the file."
             )
         elif grid_mapping_name == "latitude_longitude":
-            if CheckerObject.xrds["lat"].ndim != 1 or CheckerObject.xrds["lon"].ndim != 1:
+            if (
+                CheckerObject.ds.variables["lat"].ndim != 1
+                or CheckerObject.ds.variables["lon"].ndim != 1
+            ):
                 testctx.add_failure(
                     "The grid_mapping_name 'latitude_longitude' requires the variables"
                     " 'lat' and 'lon' to be 1D."
@@ -134,7 +150,10 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
             else:
                 testctx.add_pass()
         else:
-            if CheckerObject.xrds["lat"].ndim != 2 or CheckerObject.xrds["lon"].ndim != 2:
+            if (
+                CheckerObject.ds.variables["lat"].ndim != 2
+                or CheckerObject.ds.variables["lon"].ndim != 2
+            ):
                 testctx.add_failure(
                     f"The grid_mapping_name '{grid_mapping_name}' requires the variables"
                     " 'lat' and 'lon' to be 2D."
@@ -145,7 +164,10 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
     # rlat, rlon or y, x must be present in file, depending on the grid_mapping_name
     if grid_mapping_name and grid_mapping_name in gmallowed:
         if grid_mapping_name in ["lambert_conformal_conic", "mercator"]:
-            if "y" not in CheckerObject.xrds or "x" not in CheckerObject.xrds:
+            if (
+                "y" not in CheckerObject.ds.variables
+                or "x" not in CheckerObject.ds.variables
+            ):
                 testctx.add_failure(
                     f"The grid_mapping_name '{grid_mapping_name}' requires the variables"
                     " 'y' and 'x' to be present in the file defining the native coordinate"
@@ -154,7 +176,10 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
             else:
                 testctx.add_pass()
         elif grid_mapping_name == "rotated_latitude_longitude":
-            if "rlat" not in CheckerObject.xrds or "rlon" not in CheckerObject.xrds:
+            if (
+                "rlat" not in CheckerObject.ds.variables
+                or "rlon" not in CheckerObject.ds.variables
+            ):
                 testctx.add_failure(
                     "The grid_mapping_name 'rotated_latitude_longitude' requires the variables"
                     " 'rlat' and 'rlon' to be present in the file defining the native"
@@ -164,10 +189,10 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
                 testctx.add_pass()
         elif grid_mapping_name == "latitude_longitude":
             if (
-                "rlat" in CheckerObject.xrds
-                or "rlon" in CheckerObject.xrds
-                or "y" in CheckerObject.xrds
-                or "x" in CheckerObject.xrds
+                "rlat" in CheckerObject.ds.variables
+                or "rlon" in CheckerObject.ds.variables
+                or "y" in CheckerObject.ds.variables
+                or "x" in CheckerObject.ds.variables
             ):
                 testctx.add_failure(
                     "The grid_mapping_name 'latitude_longitude' does not require"
@@ -179,9 +204,10 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
     else:
         if grid_mapping_optional:
             testctx.add_pass()
-        elif ("rlat" in CheckerObject.xrds and "rlon" in CheckerObject.xrds) or (
-            "y" in CheckerObject.xrds and "x" in CheckerObject.xrds
-        ):
+        elif (
+            "rlat" in CheckerObject.ds.variables
+            and "rlon" in CheckerObject.ds.variables
+        ) or ("y" in CheckerObject.ds.variables and "x" in CheckerObject.ds.variables):
             testctx.add_pass()
         else:
             testctx.add_failure(
@@ -221,22 +247,27 @@ def check_domain_id(CheckerObject, severity=BaseCheck.MEDIUM, use_esgvoc=False):
         return [testctx.to_result()]
 
     # If the grid is rectilinear, the domain_id needs to include the suffix "i"
-    try:
-        lat = CheckerObject.xrds.cf.coordinates["latitude"][0]
-        lon = CheckerObject.xrds.cf.coordinates["longitude"][0]
-    except KeyError:
+    latitudes = cfutil.get_true_latitude_variables(CheckerObject.ds)
+    longitudes = cfutil.get_true_longitude_variables(CheckerObject.ds)
+    if not latitudes or not longitudes:
         testctx.add_failure(
             "Cannot check 'domain_id' as latitude and longitude coordinate variables could not be identified."
         )
         return [testctx.to_result()]
+    lat = latitudes[0]
+    lon = longitudes[0]
 
-    # If the domain_id ends in "i" (interpolated grid), we expect 1D lat and lon coordinates 
+    # If the domain_id ends in "i" (interpolated grid), we expect 1D lat and lon coordinates
     if domain_id.endswith("i"):
-        if CheckerObject.xrds[lat].ndim != 1 or CheckerObject.xrds[lon].ndim != 1:
+        if (
+            CheckerObject.ds.variables[lat].ndim != 1
+            or CheckerObject.ds.variables[lon].ndim != 1
+        ):
             testctx.add_failure(
                 "The global attribute 'domain_id' indicates an interpolated grid (suffix 'i'), "
                 f"which requires 1D latitude and longitude coordinate variables. "
-                f"Found lat ndim={CheckerObject.xrds[lat].ndim}, lon ndim={CheckerObject.xrds[lon].ndim}."
+                f"Found lat ndim={CheckerObject.ds.variables[lat].ndim}, "
+                f"lon ndim={CheckerObject.ds.variables[lon].ndim}."
             )
         else:
             testctx.add_pass()

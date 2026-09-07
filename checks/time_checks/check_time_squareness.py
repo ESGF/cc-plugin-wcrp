@@ -6,8 +6,8 @@ import re
 import numpy as np
 import cftime
 from compliance_checker.base import BaseCheck, TestCtx
-from datetime import timedelta as py_timedelta
 from checks.time_checks.time_constants import FREQ_INC, AVERAGE_CORRECTION_FREQ
+from checks.utils import add_time_increment
 
 NDECIMALS = 6
 _TIME_RANGE_RE = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$", re.IGNORECASE)
@@ -104,45 +104,6 @@ def _is_instantaneous(ds, target_var: str | None, freq_id: str) -> bool:
     if freq_id in set(AVERAGE_CORRECTION_FREQ):
         return False
     return True
-
-
-def _add_time_increment(
-    date: cftime.datetime, value: int, unit: str, calendar: str
-) -> cftime.datetime:
-    if unit in ("seconds", "minutes", "hours", "days"):
-        return date + py_timedelta(**{unit: int(value)})
-
-    y = int(date.year)
-    m = int(date.month)
-    d = int(date.day)
-
-    if unit == "years":
-        y += int(value)
-    elif unit == "months":
-        tot = m + int(value)
-        div, mod = divmod(tot - 1, 12)
-        y += div
-        m = mod + 1
-    else:
-        return date
-
-    if calendar == "360_day":
-        d = min(d, 30)
-        return cftime.datetime(
-            y, m, d, date.hour, date.minute, date.second, calendar=calendar
-        )
-
-    for dd in range(d, 0, -1):
-        try:
-            return cftime.datetime(
-                y, m, dd, date.hour, date.minute, date.second, calendar=calendar
-            )
-        except ValueError:
-            continue
-
-    return cftime.datetime(
-        y, m, 1, date.hour, date.minute, date.second, calendar=calendar
-    )
 
 
 def _midpoint_num(d0, d1, units: str, calendar: str) -> float:
@@ -272,7 +233,7 @@ def check_time_squareness(
 
     if not variable_step:
         d0 = start_boundary
-        d1 = _add_time_increment(d0, inc_val, inc_unit, cal)
+        d1 = add_time_increment(d0, inc_val, inc_unit, cal)
         n0 = float(cftime.date2num(d0, units=units, calendar=cal))
         n1 = float(cftime.date2num(d1, units=units, calendar=cal))
         step_num = n1 - n0
@@ -281,7 +242,7 @@ def check_time_squareness(
     else:
         cur = start_boundary
         for i in range(actual.size):
-            nxt = _add_time_increment(cur, inc_val, inc_unit, cal)
+            nxt = add_time_increment(cur, inc_val, inc_unit, cal)
             theo[i] = (
                 _midpoint_num(cur, nxt, units, cal)
                 if use_midpoint
@@ -311,7 +272,7 @@ def check_time_squareness(
         theo_center = np.zeros(actual.size, dtype=float)
         cur = start_boundary
         for i in range(actual.size):
-            nxt = _add_time_increment(cur, inc_val, inc_unit, cal)
+            nxt = add_time_increment(cur, inc_val, inc_unit, cal)
             mid = cftime.datetime(cur.year, cur.month, 15, 0, 0, 0, calendar=cal)
             theo_mid[i] = float(cftime.date2num(mid, units=units, calendar=cal))
             theo_center[i] = _midpoint_num(cur, nxt, units, cal)

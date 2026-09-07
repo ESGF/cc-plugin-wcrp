@@ -173,6 +173,9 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
         for fn in files:
             p = os.path.join(base, fn)
             if not os.path.isfile(p):
+                self._record_setup_warning(
+                    f"Project configuration file not found at '{p}'"
+                )
                 continue
             merged = _deep_merge(merged, _load_toml(p))
 
@@ -182,17 +185,24 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
     def _load_mappings(self) -> None:
         mdir = os.path.join(self.project_config_dir, "mappings")
         if not os.path.isdir(mdir):
+            self._record_setup_warning(
+                f"Project mapping directory not found at '{mdir}'"
+            )
             return
 
         p = os.path.join(mdir, "table_id_to_frequency.toml")
         if os.path.isfile(p):
             d = _load_toml(p)
             self.table_id_to_frequency = d.get("table_id_to_frequency", {}) or {}
+        else:
+            self._record_setup_warning(f"Project mapping file not found at '{p}'")
 
         p = os.path.join(mdir, "table_id_to_time_increment.toml")
         if os.path.isfile(p):
             d = _load_toml(p)
             self.table_id_to_time_increment = d.get("time_increment_mapping", {}) or {}
+        else:
+            self._record_setup_warning(f"Project mapping file not found at '{p}'")
 
         p = os.path.join(mdir, "variable_id_to_branded_variable.toml")
         if os.path.isfile(p):
@@ -200,6 +210,8 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
             self.variable_id_to_branded_variable = (
                 d.get("variable_id_to_branded_variable", {}) or {}
             )
+        else:
+            self._record_setup_warning(f"Project mapping file not found at '{p}'")
 
 
     def _install_time_increment_mapping(self) -> None:
@@ -211,16 +223,26 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
 
         for k, v in (self.table_id_to_time_increment or {}).items():
             if not isinstance(k, str) or "." not in k:
+                self._record_setup_warning(
+                    f"Ignored invalid time-increment mapping key {k!r}"
+                )
                 continue
             table_id, freq = k.split(".", 1)
 
             if not isinstance(v, (list, tuple)) or len(v) != 2:
+                self._record_setup_warning(
+                    f"Ignored invalid time-increment mapping for '{k}': {v!r}"
+                )
                 continue
 
             try:
                 inc_val = int(str(v[0]).strip())
                 inc_unit = str(v[1]).strip()
-            except Exception:
+            except Exception as exc:
+                self._record_setup_warning(
+                    f"Could not interpret time-increment mapping for '{k}'",
+                    exc,
+                )
                 continue
 
             mapping[(table_id, freq)] = (inc_val, inc_unit)
@@ -230,9 +252,15 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
 
     def setup(self, ds):
         super().setup(ds)
-        self._load_split_config()
-        self._load_mappings()
-        self._install_time_increment_mapping()
+        self._run_setup_step(
+            "load the CMIP6 project configuration",
+            self._load_split_config,
+        )
+        self._run_setup_step("load the CMIP6 mappings", self._load_mappings)
+        self._run_setup_step(
+            "install the CMIP6 time-increment mapping",
+            self._install_time_increment_mapping,
+        )
         self._geo_var_cache = None
         self._expected_term_cache = None
 
