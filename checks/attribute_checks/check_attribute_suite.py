@@ -7,6 +7,8 @@ from typing import Any, Iterable, Optional
 import numpy as np
 from compliance_checker.base import TestCtx
 
+from checks.utils import severity_word
+
 # ESGVOC
 try:
     from esgvoc import api as voc  # type: ignore
@@ -61,7 +63,7 @@ def check_attribute_suite(
     attribute_name: str,
     severity: int,
     value_type: Optional[str] = None,
-    is_required = True,  # bool OR "has_parent_experiment"/"has_sub_experiment"/... (resolved via esgvoc)
+    is_required=True,  # bool OR "has_parent_experiment"/"has_sub_experiment"/... (resolved via esgvoc)
     na_value: Optional[Any] = None,
     pattern: Optional[str] = None,
     constant: Any = None,
@@ -143,6 +145,7 @@ def check_attribute_suite(
                 has_parent_activity_for_ds,
                 has_parent_mip_era_for_ds,
             )
+
             if keyword == "has_parent_experiment":
                 is_required = has_parent_experiment_for_ds(ds, project_name or "cmip6")
             elif keyword == "has_sub_experiment":
@@ -320,9 +323,7 @@ def check_attribute_suite(
             ctx.add_pass()
         else:
             operator = ">=" if is_above_threshold else "<="
-            ctx.add_failure(
-                f"Expected a value {operator} {limit}, got {value}."
-            )
+            ctx.add_failure(f"Expected a value {operator} {limit}, got {value}.")
 
         results.append(ctx.to_result())
         return results
@@ -333,15 +334,16 @@ def check_attribute_suite(
         allowed = [str(x) for x in enum]
         if str(attr_value) in allowed:
             ctx.add_pass()
-            # Non-blocking advisory for time:calendar="standard"
+            # Non-blocking advisory for time:calendar="gregorian"
             if (
-            var_name == "time"
-            and str(attribute_name).lower() == "calendar"
-            and str(attr_value).strip().lower() == "gregorian"
-        ):
+                var_name == "time"
+                and str(attribute_name).lower() == "calendar"
+                and str(attr_value).strip().lower() == "gregorian"
+            ):
                 ctx.messages.append(
-                "Value 'gregorian' is accepted for variable 'time' attribute "
-                "'calendar', but 'proleptic_gregorian' is recommended."
+                    "Value 'gregorian' is accepted for variable 'time' attribute "
+                    f"'calendar', but it is {severity_word(severity)} to use "
+                    "'proleptic_gregorian'."
                 )
         else:
             ctx.add_failure(f"Value '{attr_value}' not in allowed values {allowed}.")
@@ -430,7 +432,9 @@ def check_attribute_suite(
                         if candidate is None:
                             continue
 
-                        candidate_norm = " ".join(str(candidate).strip().lower().split())
+                        candidate_norm = " ".join(
+                            str(candidate).strip().lower().split()
+                        )
 
                         if val_norm == candidate_norm or val_norm in candidate_norm:
                             found = True

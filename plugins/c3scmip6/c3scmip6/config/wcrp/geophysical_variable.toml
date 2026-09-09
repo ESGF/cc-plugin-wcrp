@@ -38,7 +38,7 @@ cv_source_term_key = "cf_standard_name"
 severity = "H"
 value_type = "str"
 is_required = true
-cv_source_term_key = "cf_units"
+cv_source_term_key = "units"
 
 [variable.attributes.cell_methods]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004

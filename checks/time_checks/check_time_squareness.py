@@ -7,7 +7,7 @@ import numpy as np
 import cftime
 from compliance_checker.base import BaseCheck, TestCtx
 from checks.time_checks.time_constants import FREQ_INC, AVERAGE_CORRECTION_FREQ
-from checks.utils import add_time_increment
+from checks.utils import add_time_increment, severity_word
 
 NDECIMALS = 6
 _TIME_RANGE_RE = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$", re.IGNORECASE)
@@ -101,6 +101,10 @@ def _is_instantaneous(ds, target_var: str | None, freq_id: str) -> bool:
 
     if "time: point" in cm:
         return True
+    # Any explicit non-point time cell method describes an interval statistic
+    # (mean, minimum, maximum, sum, etc.) whose representative time is centered.
+    if "time:" in cm:
+        return False
     if freq_id in set(AVERAGE_CORRECTION_FREQ):
         return False
     return True
@@ -110,6 +114,53 @@ def _midpoint_num(d0, d1, units: str, calendar: str) -> float:
     n0 = float(cftime.date2num(d0, units=units, calendar=calendar))
     n1 = float(cftime.date2num(d1, units=units, calendar=calendar))
     return 0.5 * (n0 + n1)
+
+
+def _check_declared_bounds_midpoints(ctx, ds, time_var) -> bool:
+    """Check time values against declared regular or climatological bounds.
+
+    Returns ``True`` when a structurally usable bounds variable was checked.
+    Presence, existence, and shape errors remain owned by the coordinate and
+    CF bounds checks; TIME001 does not repeat them.
+    """
+    climatology_name = str(getattr(time_var, "climatology", "") or "")
+    bounds_name = climatology_name or str(getattr(time_var, "bounds", "") or "")
+    if not bounds_name or bounds_name not in ds.variables:
+        return False
+    bounds_var = ds.variables[bounds_name]
+    if (
+        bounds_var.ndim != 2
+        or bounds_var.shape != (time_var.shape[0], 2)
+        or bounds_var.dimensions[0] != time_var.dimensions[0]
+    ):
+        return False
+    try:
+        actual = np.ma.asarray(time_var[:], dtype="float64")
+        bounds = np.ma.asarray(bounds_var[:], dtype="float64")
+    except (TypeError, ValueError, IndexError):
+        return False
+    if np.ma.is_masked(actual) or np.ma.is_masked(bounds):
+        ctx.add_failure(
+            f"Cannot verify time midpoints because 'time' or {bounds_name!r} "
+            "contains missing values."
+        )
+        return True
+    actual = np.asarray(actual, dtype="float64").reshape(-1)
+    bounds = np.asarray(bounds, dtype="float64")
+    expected = 0.5 * (bounds[:, 0] + bounds[:, 1])
+    rounded_actual = _round(actual, NDECIMALS)
+    rounded_expected = _round(expected, NDECIMALS)
+    bad = np.where(rounded_actual != rounded_expected)[0]
+    if bad.size:
+        index = int(bad[0])
+        kind = "climatology" if climatology_name else "bounds"
+        ctx.add_failure(
+            f"Time value at index {index} is {rounded_actual[index]:.{NDECIMALS}f}; "
+            f"the midpoint of its {kind} interval "
+            f"[{bounds[index, 0]}, {bounds[index, 1]}] is "
+            f"{rounded_expected[index]:.{NDECIMALS}f}."
+        )
+    return True
 
 
 def _parse_freq_token(token: str):
@@ -162,6 +213,7 @@ def check_time_squareness(
     """
     TIME001: Time axis check for a single file.
 
+    - Declared regular/climatological bounds: coordinate midpoint
     - Primary: FREQ_INC (table_id, frequency)
     - Start: filename start boundary
     - Average data: midpoint convention for AVERAGE_CORRECTION_FREQ
@@ -173,6 +225,8 @@ def check_time_squareness(
         return []
 
     time_var = ds.variables["time"]
+    if time_var.ndim != 1:
+        return []  # Coordinate identity checks own the invalid time shape.
     units = getattr(time_var, "units", "") or ""
     cal = getattr(time_var, "calendar", "standard") or "standard"
 
@@ -185,6 +239,16 @@ def check_time_squareness(
 
     if not units:
         ctx.add_failure("Missing time.units; cannot rebuild theoretical axis.")
+        return [ctx.to_result()]
+
+    is_climatology = bool(getattr(time_var, "climatology", "") or "")
+    midpoint_checked = _check_declared_bounds_midpoints(ctx, ds, time_var)
+    if is_climatology:
+        # A climatological coordinate can represent an averaging interval
+        # spanning many years. Its correct value is determined by the declared
+        # climatology bounds, not by advancing once from the filename start.
+        if midpoint_checked and not ctx.messages:
+            ctx.add_pass()
         return [ctx.to_result()]
 
     freq_id = _resolve_frequency(ds)
@@ -203,6 +267,12 @@ def check_time_squareness(
         return [ctx.to_result()]
 
     inc_val, inc_unit = int(inc[0]), str(inc[1])
+    # Avoid adding a second midpoint offset when the filename label already
+    # represents the sample time, exactly for subdaily data or approximately
+    # for multi-unit intervals such as decadal means.
+    subdaily_label = inc_unit in {"hours", "minutes", "seconds"}
+    coarse_representative_label = inc_val > 1 and not subdaily_label
+    label_is_representative = subdaily_label or coarse_representative_label
 
     # Start boundary from filename
     start_tuple = _parse_filename_start(_get_ds_path(ds))
@@ -215,7 +285,7 @@ def check_time_squareness(
     # Instantaneous vs average
     target = _resolve_target_variable(ds)
     instantaneous = _is_instantaneous(ds, target, freq_id)
-    use_midpoint = (not instantaneous) and (freq_id in set(AVERAGE_CORRECTION_FREQ))
+    use_midpoint = not instantaneous
 
     # Read actual time axis
     raw = time_var[:]
@@ -237,15 +307,25 @@ def check_time_squareness(
         n0 = float(cftime.date2num(d0, units=units, calendar=cal))
         n1 = float(cftime.date2num(d1, units=units, calendar=cal))
         step_num = n1 - n0
-        first = (n0 + n1) / 2.0 if use_midpoint else n0
+        first = (
+            float(actual[0])
+            if use_midpoint and coarse_representative_label
+            else (n0 + n1) / 2.0
+            if use_midpoint and not label_is_representative
+            else n0
+        )
         theo = first + np.arange(actual.size, dtype=float) * float(step_num)
     else:
-        cur = start_boundary
+        cur = (
+            cftime.num2date(actual[0], units=units, calendar=cal)
+            if use_midpoint and coarse_representative_label
+            else start_boundary
+        )
         for i in range(actual.size):
             nxt = add_time_increment(cur, inc_val, inc_unit, cal)
             theo[i] = (
                 _midpoint_num(cur, nxt, units, cal)
-                if use_midpoint
+                if use_midpoint and not label_is_representative
                 else float(cftime.date2num(cur, units=units, calendar=cal))
             )
             cur = nxt
@@ -299,7 +379,8 @@ def check_time_squareness(
                 f"Mismatch at index {i}: expected {t_t[i]:.{NDECIMALS}f} (month-start) "
                 f"or {t_mid[i]:.{NDECIMALS}f} (day-15) "
                 f"or {t_center[i]:.{NDECIMALS}f} (exact center), got {a_t[i]:.{NDECIMALS}f}. "
-                "The full file must consistently follow one of these conventions. "
+                f"It is {severity_word(severity)} for the full file to consistently "
+                "follow one of these conventions. "
                 f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
             )
     else:

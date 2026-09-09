@@ -10,20 +10,19 @@ bounds (*time_bnds*) and that shapes are consistent.
 import numpy as np
 from compliance_checker.base import BaseCheck, TestCtx
 
+from checks.utils import severity_word
 
-def check_time_bounds(ds, severity=BaseCheck.MEDIUM):
-    """
-    
-    """
+
+def check_time_bounds(ds, severity=BaseCheck.MEDIUM, coord_name="time"):
+    """Check regular bounds shape and containment for one time coordinate."""
     check_id = "TIME002"
-    ctx = TestCtx(severity, f"[{check_id}] Check Time bounds")
+    ctx = TestCtx(severity, f"[{check_id}] Check time bounds for '{coord_name}'")
 
-    if "time" not in ds.variables:
+    if coord_name not in ds.variables:
         return [ctx.to_result()]
 
-    time_var = ds.variables["time"]
+    time_var = ds.variables[coord_name]
 
-    
     bnds_name = getattr(time_var, "bounds", None)
     if bnds_name is None or bnds_name not in ds.variables:
         # Presence of bounds is checked elsewhere – we are only interested
@@ -33,26 +32,39 @@ def check_time_bounds(ds, severity=BaseCheck.MEDIUM):
     bnds_var = ds.variables[bnds_name]
 
     # Shape consistency: (n, 2)
-    if bnds_var.ndim != 2 or bnds_var.shape[1] != 2 \
-       or bnds_var.shape[0] != time_var.shape[0]:
+    if (
+        time_var.ndim != 1
+        or bnds_var.ndim != 2
+        or bnds_var.shape[1] != 2
+        or bnds_var.shape[0] != time_var.shape[0]
+    ):
         ctx.add_failure(
-            f"{bnds_name} must have shape (n, 2) with n == len(time)"
+            f"It is {severity_word(severity)} for {bnds_name} to have shape (n, 2) with "
+            f"n == len({coord_name})"
         )
         return [ctx.to_result()]
 
     # Numerical consistency
-    time_vals  = time_var[:].compressed()
-    lower, upper = bnds_var[:, 0], bnds_var[:, 1]
+    time_vals = np.ma.asarray(time_var[:]).filled(np.nan)
+    pairs = np.ma.asarray(bnds_var[:]).filled(np.nan)
+    lower = np.minimum(pairs[:, 0], pairs[:, 1])
+    upper = np.maximum(pairs[:, 0], pairs[:, 1])
 
-    outside = np.logical_or(time_vals < lower, time_vals > upper)
+    outside = (
+        np.logical_or(time_vals < lower, time_vals > upper)
+        | ~np.isfinite(time_vals)
+        | ~np.isfinite(lower)
+        | ~np.isfinite(upper)
+    )
 
     if outside.any():
-        idx = np.where(outside)[0][:5]   # show only first offenders
+        all_indices = np.where(outside)[0]
+        examples = all_indices[:5]
         ctx.add_failure(
-            f"{len(idx)} time value(s) lie outside declared bounds, "
+            f"{len(all_indices)} '{coord_name}' value(s) lie outside declared bounds, "
             f"example index/val/bnds: "
             + ", ".join(
-                f"{i}/{time_vals[i]}∉[{lower[i]}, {upper[i]}]" for i in idx
+                f"{i}/{time_vals[i]}∉[{lower[i]}, {upper[i]}]" for i in examples
             )
         )
     else:

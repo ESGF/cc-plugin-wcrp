@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, Optional, Tuple, List
-from types import SimpleNamespace
 
 import toml
 from netCDF4 import Dataset
@@ -73,29 +72,24 @@ from checks.variable_checks.check_coordinate_monotonicity import (
 from checks.variable_checks.check_variable_shape_vs_dimensions import (
     check_variable_shape,
 )
-
-try:
-    from checks.variable_checks.check_bounds_value_consistency import (
-        check_bounds_value_consistency,
-    )
-except Exception:
-    check_bounds_value_consistency = None
-
-try:
-    from checks.variable_checks.check_bounds_shape import (
-        check_bounds_shape,
-    )
-except Exception:
-    check_bounds_shape = None
+from checks.variable_checks.known_branded_variable import (
+    KnownBrandedVariableLookupError,
+    lookup_expected_variable_metadata,
+)
+from checks.coordinate_checks import (
+    CoordinateMetadataError,
+    GridTopologyConfigError,
+    check_coordinate_catalog,
+    load_catalog,
+    load_grid_topology_config,
+    resolve_grid_topology,
+)
+from checks.coordinate_checks.utils import coordinate_type
 
 
 # --- CF Checker helpers ---
 try:
-    from compliance_checker.cf.util import (
-        get_geophysical_variables,
-        get_coordinate_variables,
-        get_auxiliary_coordinate_variables,
-    )
+    from compliance_checker.cf.util import get_geophysical_variables
 except ImportError as e:
     raise ImportError("Unable to import utils from compliance_checker.cf.util.") from e
 
@@ -141,6 +135,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         # Cache
         self._geo_var_cache: Optional[str] = None
         self._expected_term_cache: Any = None
+        self._coordinate_catalog = None
+        self._coordinate_setup_error: Optional[str] = None
+        self._grid_topology_config = None
+        self._grid_topology_config_error: Optional[str] = None
+        self._coordinate_grid_topology: Optional[str] = None
+        self._coordinate_grid_error: Optional[str] = None
 
         # Config directory
         if options and "project_config_dir" in options:
@@ -178,7 +178,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
 
     def _load_mappings(self) -> None:
         mdir = os.path.join(self.project_config_dir, "mappings")
+        self._grid_topology_config = None
+        self._grid_topology_config_error = None
         if not os.path.isdir(mdir):
+            self._grid_topology_config_error = (
+                f"Project mapping directory does not exist: '{mdir}'."
+            )
             self._record_setup_warning(
                 f"Project mapping directory not found at '{mdir}'"
             )
@@ -190,6 +195,14 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             self.table_id_to_time_increment = d.get("time_increment_mapping", {}) or {}
         else:
             self._record_setup_warning(f"Project mapping file not found at '{p}'")
+
+        topology_path = os.path.join(mdir, "grid_topology.toml")
+        try:
+            self._grid_topology_config = load_grid_topology_config(topology_path)
+        except GridTopologyConfigError as exc:
+            # This is reported by the dedicated HIGH grid result only when the
+            # branded variable actually requires generic horizontal coordinates.
+            self._grid_topology_config_error = str(exc)
 
     def _install_time_increment_mapping(self, ds: Dataset) -> None:
         """
@@ -254,6 +267,52 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         )
         self._geo_var_cache = None
         self._expected_term_cache = None
+        self._coordinate_catalog = None
+        self._coordinate_setup_error = None
+        self._coordinate_grid_topology = None
+        self._coordinate_grid_error = None
+        registry = (
+            self.config.coordinates.registry
+            if self.config and self.config.coordinates
+            else None
+        )
+        if registry is not None:
+            try:
+                branded = self._get_attr("branded_variable", "")
+                self._coordinate_catalog = load_catalog(
+                    str(branded or ""), project_id=self.project_name
+                )
+                if any(
+                    coordinate_type(entry) == "generic_horizontal"
+                    for entry in self._coordinate_catalog.data_coordinates.values()
+                    if entry.get("id") in self._coordinate_catalog.coordinate_ids
+                ):
+                    if self._grid_topology_config_error:
+                        self._coordinate_grid_error = (
+                            "The CMIP7 grid-topology mapping could not be loaded. "
+                            f"Technical reason: {self._grid_topology_config_error}"
+                        )
+                    elif self._grid_topology_config is None:
+                        self._coordinate_grid_error = (
+                            "The CMIP7 grid-topology mapping is unavailable for an "
+                            "unknown reason."
+                        )
+                    else:
+                        self._coordinate_grid_topology, self._coordinate_grid_error = (
+                            resolve_grid_topology(
+                                self._grid_topology_config,
+                                grid_label=self._get_attr("grid_label", ""),
+                            )
+                        )
+            except Exception as exc:
+                # Report separately from setup_warnings: coordinate metadata
+                # has one dedicated HIGH result only to be reported once
+                # and not repeated for every coordinate-family result or by TOOL001.
+                self._coordinate_setup_error = (
+                    str(exc)
+                    if isinstance(exc, CoordinateMetadataError)
+                    else f"Unexpected {type(exc).__name__}: {exc}"
+                )
 
     # -------------------------------------------------------------------------
     # CF-based geophysical variable identification
@@ -346,87 +405,25 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             results.append(ctx.to_result())
             return None, results
 
-        expected_kbv = None
-        expected_var = None
-
-        # 1) known_branded_variable lookup
         try:
-            kbv_terms = find_terms_in_data_descriptor(
-                expression=str(branded),
-                data_descriptor_id="known_branded_variable",
-                only_id=True,
-                selected_term_fields=[
-                    "cf_standard_name",
-                    "cf_units",
-                    "dimensions",
-                    "cell_methods",
-                    "cell_measures",
-                    "description",
-                ],
+            lookup = lookup_expected_variable_metadata(
+                find_terms_in_data_descriptor,
+                str(branded),
+                fallback_variable_id=str(variable_id).lower(),
             )
-            if kbv_terms:
-                expected_kbv = kbv_terms[0]
-        except Exception as e:
+        except KnownBrandedVariableLookupError as e:
             ctx = TestCtx(severity, "Variable Registry")
-            ctx.add_failure(
-                f"Registry lookup error for known_branded_variable '{branded}': {e}"
-            )
+            ctx.add_failure(str(e))
             results.append(ctx.to_result())
             return None, results
 
-        if not expected_kbv:
+        if lookup.warning:
             ctx = TestCtx(severity, "Variable Registry")
-            ctx.add_failure(
-                f"Known branded variable '{branded}' was not found in the registry."
-            )
-            results.append(ctx.to_result())
-            return None, results
-
-        # 2) variable lookup for long_name only
-        try:
-            var_id_lower = str(variable_id).lower()
-            var_terms = find_terms_in_data_descriptor(
-                expression=var_id_lower,
-                data_descriptor_id="variable",
-                selected_term_fields=["long_name"],
-            )
-            if var_terms:
-                for term in var_terms:
-                    if getattr(term, "id", None) == var_id_lower :
-                        expected_var = term
-                        break
-        except Exception as e:
-            ctx = TestCtx(severity, "Variable Registry")
-            ctx.add_failure(
-                f"Registry lookup error for variable '{variable_id}': {e}"
-            )
-            results.append(ctx.to_result())
-            return None, results
-
-        # Important: do NOT return None if variable lookup fails.
-        # Only long_name depends on expected_var.
-        if not expected_var:
-            ctx = TestCtx(severity, "Variable Registry")
-            ctx.add_failure(
-                f"Variable '{variable_id}' was not found in the registry data descriptor 'variable'. "
-                "Only 'long_name' may be unavailable."
-            )
+            ctx.add_failure(lookup.warning)
             results.append(ctx.to_result())
 
-        merged = {
-            "cf_standard_name": getattr(expected_kbv, "cf_standard_name", None),
-            "cf_units": getattr(expected_kbv, "cf_units", None),
-            "dimensions": getattr(expected_kbv, "dimensions", None),
-            "cell_methods": getattr(expected_kbv, "cell_methods", None),
-            "cell_measures": getattr(expected_kbv, "cell_measures", None),
-            "description": getattr(expected_kbv, "description", None),
-            "long_name": getattr(expected_var, "long_name", None) if expected_var else None,
-        }
-
-        expected = SimpleNamespace(**merged)
-
-        self._expected_term_cache = expected
-        return expected, results
+        self._expected_term_cache = lookup.expected
+        return lookup.expected, results
 
     # -------------------------------------------------------------------------
     # 1) File checks
@@ -450,7 +447,11 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return check_compression(ds, sev)
 
     def check_File_Internal_Packing(self, ds):
-        if not self.config or not self.config.file or not self.config.file.internal_packing:
+        if (
+            not self.config
+            or not self.config.file
+            or not self.config.file.internal_packing
+        ):
             return []
 
         r = self.config.file.internal_packing
@@ -626,31 +627,49 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
 
         if c.filename_vs_attributes:
             sev = self.get_severity(c.filename_vs_attributes.severity)
-            res.extend(check_filename_vs_global_attrs(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_filename_vs_global_attrs(ds, sev, project_id=self.project_name)
+            )
 
         # --- Experiment consistency (atomic ATTR007a-c ; no sub in CMIP7) ---
         if c.experiment_id_vs_activity_id:
             sev = self.get_severity(c.experiment_id_vs_activity_id.severity)
-            res.extend(check_experiment_id_vs_activity_id(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_experiment_id_vs_activity_id(
+                    ds, sev, project_id=self.project_name
+                )
+            )
 
         if c.experiment_id_vs_experiment:
             sev = self.get_severity(c.experiment_id_vs_experiment.severity)
-            res.extend(check_experiment_id_vs_experiment(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_experiment_id_vs_experiment(ds, sev, project_id=self.project_name)
+            )
 
         if c.experiment_id_vs_parent_experiment_id:
             sev = self.get_severity(c.experiment_id_vs_parent_experiment_id.severity)
-            res.extend(check_experiment_id_vs_parent_experiment_id(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_experiment_id_vs_parent_experiment_id(
+                    ds, sev, project_id=self.project_name
+                )
+            )
 
         # sub_experiment_id has no meaning in CMIP7; the key is absent from its
         # TOML, so this simply never runs. Kept for symmetry / robustness.
         if c.experiment_id_vs_sub_experiment_id:
             sev = self.get_severity(c.experiment_id_vs_sub_experiment_id.severity)
-            res.extend(check_experiment_id_vs_sub_experiment_id(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_experiment_id_vs_sub_experiment_id(
+                    ds, sev, project_id=self.project_name
+                )
+            )
 
         # --- Institution / source ---
         if c.institution_id_vs_institution:
             sev = self.get_severity(c.institution_id_vs_institution.severity)
-            res.extend(check_institution_consistency(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_institution_consistency(ds, sev, project_id=self.project_name)
+            )
 
         if c.source_id_vs_institution_id:
             sev = self.get_severity(c.source_id_vs_institution_id.severity)
@@ -680,6 +699,118 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
     # -------------------------------------------------------------------------
     # 6) Coordinates checks
     # -------------------------------------------------------------------------
+    def _coordinate_entries_for_axis(self, axis):
+        if self._coordinate_catalog is None:
+            return []
+        return [
+            (identifier, self._coordinate_catalog.data_coordinates[identifier])
+            for identifier in self._coordinate_catalog.coordinate_ids
+            if self._coordinate_catalog.data_coordinates[identifier].get("axis") == axis
+        ]
+
+    def check_Coordinate_Metadata_Setup(self, ds):
+        registry = (
+            self.config.coordinates.registry
+            if self.config and self.config.coordinates
+            else None
+        )
+        if registry is None or registry.setup is None:
+            return []
+        severity = self.get_severity(registry.setup.severity, "HIGH")
+        ctx = TestCtx(
+            severity,
+            "[COORD000] ESGVoc coordinate metadata initialization",
+        )
+        if self._coordinate_setup_error:
+            ctx.add_failure(
+                "The CMIP7 coordinate checks could not be initialized, so all "
+                "vocabulary-driven coordinate checks were skipped for this file. "
+                f"Technical reason: {self._coordinate_setup_error}"
+            )
+        elif self._coordinate_catalog is None:
+            ctx.add_failure(
+                "The CMIP7 coordinate catalog is unavailable for an unknown reason; "
+                "all vocabulary-driven coordinate checks were skipped."
+            )
+        else:
+            ctx.add_pass()
+        return [ctx.to_result()]
+
+    def check_Coordinate_Standard(self, ds):
+        registry = (
+            self.config.coordinates.registry
+            if self.config and self.config.coordinates
+            else None
+        )
+        if registry is None or self._coordinate_catalog is None:
+            return []
+        severities = {
+            family: self.get_severity(rule.severity, "HIGH")
+            for family in (
+                "identity",
+                "dimension_order",
+                "attributes",
+                "recommendations",
+                "direction",
+                "valid_range",
+                "requested_values",
+                "bounds",
+                "bounds_name",
+                "associations",
+                "grid",
+                "formula",
+            )
+            if (rule := getattr(registry, family)) is not None
+        }
+        naming = registry.bounds_name
+        coverage_rule = next(
+            (
+                rule.coverage
+                for rule in self.config.coordinates.variables.values()
+                if rule.coverage is not None
+            ),
+            None,
+        )
+        results = check_coordinate_catalog(
+            ds,
+            self._coordinate_catalog,
+            severities=severities,
+            grid_topology=self._coordinate_grid_topology,
+            grid_resolution_error=self._coordinate_grid_error,
+            allow_standard_name_fallback=(
+                self._grid_topology_config.allow_standard_name_fallback
+                if self._grid_topology_config is not None
+                else True
+            ),
+            bounds_dimension_name=(
+                naming.bounds_dimension_name if naming is not None else "bnds"
+            ),
+            vertices_dimension_name=(
+                naming.vertices_dimension_name if naming is not None else "vertices"
+            ),
+            climatology_bounds_name=(
+                naming.climatology_bounds_name
+                if naming is not None
+                else "climatology_bnds"
+            ),
+            time_bounds_delegated=coverage_rule is not None,
+        )
+
+        if coverage_rule is not None:
+            severity = self.get_severity(coverage_rule.severity, "HIGH")
+            for identifier, entry in self._coordinate_entries_for_axis("T"):
+                if entry.get("is_climatology"):
+                    continue
+                coord_name = str(entry.get("out_name") or identifier)
+                results.extend(
+                    check_time_bounds(
+                        ds,
+                        severity=severity,
+                        coord_name=coord_name,
+                    )
+                )
+        return results
+
     def check_Coordinates(self, ds):
         res: list = []
 
@@ -687,89 +818,19 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return res
 
         coords_cfg = self.config.coordinates
+        time_coordinate_names = {
+            str(entry.get("out_name") or identifier)
+            for identifier, entry in self._coordinate_entries_for_axis("T")
+        }
 
-        # Build mapping: netCDF coord name -> rule
-        rule_by_nc: dict = {}
+        # The ESGVoc catalogue owns general coordinate validation. Retain only
+        # the established time checks that are not replaced by that suite.
         for key, rule in (coords_cfg.variables or {}).items():
-            nc_name = rule.name.variable_name if rule.name else key
-            rule_by_nc[str(nc_name)] = rule
-
-        # CF detected coords 
-        try:
-            cf_coords = set(get_coordinate_variables(ds) or [])
-        except Exception:
-            cf_coords = set()
-        try:
-            cf_aux = set(get_auxiliary_coordinate_variables(ds) or [])
-        except Exception:
-            cf_aux = set()
-
-        # TOML-declared coords that exist in file
-        toml_present = {n for n in rule_by_nc.keys() if n in ds.variables}
-
-        coord_set = sorted(cf_coords | cf_aux | toml_present)
-
-        # Global dimension checks
-        if coords_cfg.dimensions:
-            sev = self.get_severity(coords_cfg.dimensions.severity)
-            for cname in coord_set:
-                if cname not in ds.variables:
-                    continue
-                var = ds.variables[cname]
-                for dim in getattr(var, "dimensions", ()):
-                    res.extend(check_dimension_existence(ds, dim, sev))
-                    res.extend(check_dimension_positive(ds, dim, sev))
-
-        
-        if coords_cfg.bounds:
-            sev = self.get_severity(coords_cfg.bounds.severity)
-            for cname in coord_set:
-                if cname not in ds.variables:
-                    continue
-
-                cvar = ds.variables[cname]
-                if not getattr(cvar, "bounds", None):
-                    continue
-
-                if check_bounds_shape is not None:
-                    res.extend(check_bounds_shape(ds, cname, severity=sev))
-
-                if check_bounds_value_consistency is not None:
-                    res.extend(check_bounds_value_consistency(ds, cname, severity=sev))
-
-        # Per-coordinate TOML rules
-        for cname in coord_set:
-            if cname not in ds.variables:
-                continue
-            rule = rule_by_nc.get(cname)
-            if not rule:
+            cname = str(rule.name.variable_name if rule.name else key)
+            if cname not in time_coordinate_names or cname not in ds.variables:
                 continue
 
-            var = ds.variables[cname]
-
-            # type
-            if rule.type:
-                sev = self.get_severity(rule.type.severity)
-                dt = (rule.type.data_type or "").lower()
-                allowed = ["f"] if dt in {"float", "double", "real"} else None
-                if allowed:
-                    res.extend(
-                        check_variable_type(
-                            ds, cname, allowed_types=allowed, severity=sev
-                        )
-                    )
-
-            # dimensions
-            if rule.dimensions:
-                sev = self.get_severity(rule.dimensions.severity)
-                for dim in getattr(var, "dimensions", ()):
-                    res.extend(check_dimension_existence(ds, dim, sev))
-                    res.extend(check_dimension_positive(ds, dim, sev))
-
-            # monotonicity
-            if rule.monotonicity:
-                if cname not in ds.dimensions:
-                    continue    
+            if rule.monotonicity and cname in ds.dimensions:
                 sev = self.get_severity(rule.monotonicity.severity)
                 res.extend(
                     check_coordinate_monotonicity(
@@ -780,7 +841,6 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     )
                 )
 
-            # TIME001
             if rule.squareness:
                 sev = self.get_severity(rule.squareness.severity)
                 res.extend(
@@ -793,53 +853,44 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     )
                 )
 
-            # TIME002
-            if rule.coverage:
-                sev = self.get_severity(rule.coverage.severity)
-                res.extend(check_time_bounds(ds, severity=sev))
-            # TIME003a (calendar recommendation)
             if getattr(rule, "calendar_recommendation", None):
                 sev = self.get_severity(rule.calendar_recommendation.severity)
                 res.extend(check_calendar_recommendation(ds, severity=sev))
-            # coordinate variable attributes
+
             for attr_key, arule in (rule.attributes or {}).items():
+                if (arule.attribute_name or attr_key) != "calendar" or not arule.enum:
+                    continue
                 sev = self.get_severity(arule.severity)
                 name_in_file = arule.attribute_name or attr_key
+                attribute_results = check_attribute_suite(
+                    ds=ds,
+                    var_name=cname,
+                    attribute_name=name_in_file,
+                    severity=sev,
+                    is_required=False,
+                    enum=arule.enum,
+                    project_name=self.project_name,
+                    context="Coordinate",
+                )
                 res.extend(
-                    check_attribute_suite(
-                        ds=ds,
-                        var_name=cname,
-                        attribute_name=name_in_file,
-                        severity=sev,
-                        value_type=arule.value_type,
-                        is_required=arule.is_required,
-                        na_value=arule.na_value,
-                        pattern=arule.pattern,
-                        constant=arule.constant,
-                        threshold=arule.threshold,
-                        is_above_threshold=arule.is_above_threshold,
-                        enum=arule.enum,
-                        as_variable=arule.as_variable,
-                        is_positive=arule.is_positive,
-                        cv_source_collection=arule.cv_source_collection,
-                        cv_source_collection_key=arule.cv_source_collection_key,
-                        cv_source_term_key=arule.cv_source_term_key,
-                        project_name=self.project_name,
-                        expected_term=None,
-                        context="Coordinate",
-                    )
+                    result for result in attribute_results if "[ATTR004]" in result.name
                 )
 
-        
         if check_time_range_vs_filename is not None:
             precision_map = None
+            climatology_suffix = ""
+            severity = BaseCheck.HIGH
             if self.config and self.config.drs:
-                precision_map = self.config.drs.time_range_label_precision
+                time_range = self.config.drs.time_range
+                precision_map = time_range.label_precision
+                climatology_suffix = time_range.climatology_suffix
+                severity = self.get_severity(time_range.severity, "HIGH")
             res.extend(
                 check_time_range_vs_filename(
                     ds,
-                    BaseCheck.HIGH,
+                    severity,
                     precision_by_frequency=precision_map,
+                    climatology_suffix=climatology_suffix,
                 )
             )
 
