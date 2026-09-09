@@ -362,6 +362,8 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
                 only_id=True,
                 selected_term_fields=[
                     "cf_standard_name",
+                    # ESGVOC subsets omit fields absent from the registry.
+                    "units",
                     "cf_units",
                     "dimensions",
                     "cell_methods",
@@ -417,9 +419,14 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
             )
             results.append(ctx.to_result())
 
+        # Universe 2.x+ uses units; older releases use cf_units.
+        registry_units = getattr(expected_kbv, "units", None)
+        if registry_units is None:
+            registry_units = getattr(expected_kbv, "cf_units", None)
+
         merged = {
             "cf_standard_name": getattr(expected_kbv, "cf_standard_name", None),
-            "cf_units": getattr(expected_kbv, "cf_units", None),
+            "cf_units": registry_units,
             "dimensions": getattr(expected_kbv, "dimensions", None),
             "cell_methods": getattr(expected_kbv, "cell_methods", None),
             "cell_measures": getattr(expected_kbv, "cell_measures", None),
