@@ -19,6 +19,10 @@ AVERAGE_CORRECTION_FREQ = [
     "yrPt",
     "1hrCM",
     "sem",
+    "1hr",
+    "3hr",
+    "6hr",
+    "dec",
 ]
 
 

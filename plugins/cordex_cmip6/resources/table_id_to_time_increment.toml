@@ -1,0 +1,15 @@
+# ==============================================================================
+# == Mappings to get time increment from table_id + frequency
+# ==============================================================================
+
+[time_increment_mapping]
+"None.1hr" = ["1", "hours"]
+"None.3hr" = ["3", "hours"]
+"None.6hr" = ["6", "hours"]
+"None.day" = ["1", "days"]
+"None.mon" = ["1", "months"]
+"1hr.1hr" = ["1", "hours"]
+"3hr.3hr" = ["3", "hours"]
+"6hr.6hr" = ["6", "hours"]
+"day.day" = ["1", "days"]
+"mon.mon" = ["1", "months"]
