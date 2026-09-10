@@ -24,7 +24,7 @@ dependencies = [
   "toml",
   "esgvoc",
   "pooch",
-  "pyfive >= 1.1.1",
+  "pyfive >= 1.1.2",
   "pydantic>=2.12.5",
 ]
 version = "2.3.5"
