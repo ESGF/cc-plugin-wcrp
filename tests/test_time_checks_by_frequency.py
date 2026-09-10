@@ -81,20 +81,19 @@ def _label(date, precision):
     return "".join(f"{value:0{width}d}" for value, width in zip(fields, widths))
 
 
-def _time_definition(frequency):
+def _time_definition(frequency, calendar="360_day"):
     increment, unit, point, climatology, table_id = FREQUENCIES[frequency]
-    calendar = "360_day"
     units = "days since 1800-01-01 00:00:00"
 
     if climatology:
         bounds_dates = [
             (
-                cftime.Datetime360Day(2000, 1, 1),
-                cftime.Datetime360Day(2101, 1, 1),
+                cftime.datetime(2000, 1, 1, calendar=calendar),
+                cftime.datetime(2101, 1, 1, calendar=calendar),
             ),
             (
-                cftime.Datetime360Day(2000, 2, 1),
-                cftime.Datetime360Day(2101, 2, 1),
+                cftime.datetime(2000, 2, 1, calendar=calendar),
+                cftime.datetime(2101, 2, 1, calendar=calendar),
             ),
         ]
         precision = PRECISION["climatology"]
@@ -103,9 +102,9 @@ def _time_definition(frequency):
         end_label = "210101"
     else:
         start = (
-            cftime.Datetime360Day(1990, 1, 1)
+            cftime.datetime(1990, 1, 1, calendar=calendar)
             if frequency == "dec"
-            else cftime.Datetime360Day(2000, 1, 1)
+            else cftime.datetime(2000, 1, 1, calendar=calendar)
         )
         starts = [start, _advance(start, increment, unit)]
         bounds_dates = [
@@ -131,7 +130,7 @@ def _time_definition(frequency):
     return table_id, units, times, bounds, start_label, end_label, climatology, point
 
 
-def _make_file(tmp_path, frequency, *, wrong_end=False):
+def _make_file(tmp_path, frequency, *, calendar="360_day", wrong_end=False):
     (
         table_id,
         units,
@@ -141,7 +140,7 @@ def _make_file(tmp_path, frequency, *, wrong_end=False):
         end_label,
         climatology,
         point,
-    ) = _time_definition(frequency)
+    ) = _time_definition(frequency, calendar)
     filename_end = start_label if wrong_end else end_label
     path = tmp_path / f"tas_{frequency}_test_{start_label}-{filename_end}.nc"
     dataset = Dataset(path, "w")
@@ -151,7 +150,7 @@ def _make_file(tmp_path, frequency, *, wrong_end=False):
     dataset.createDimension("time", 2)
     time = dataset.createVariable("time", "f8", ("time",))
     time.units = units
-    time.calendar = "360_day"
+    time.calendar = calendar
     time[:] = times
     bounds_name = None
     if not point:
@@ -186,9 +185,13 @@ def test_frequency_matrix_matches_configured_precisions():
     )
 
 
-def test_decadal_mean_uses_representative_year_labels():
-    _, _, _, _, start, end, _, _ = _time_definition("dec")
-    assert f"{start}-{end}" == "1995-2005"
+@pytest.mark.parametrize(
+    ("calendar", "expected"),
+    [("360_day", "1995-2005"), ("gregorian", "1995-2004")],
+)
+def test_decadal_mean_uses_time_value_year_labels(calendar, expected):
+    _, _, _, _, start, end, _, _ = _time_definition("dec", calendar)
+    assert f"{start}-{end}" == expected
 
 
 def test_fixed_frequency_has_no_time_range_checks(tmp_path):
@@ -201,15 +204,21 @@ def test_fixed_frequency_has_no_time_range_checks(tmp_path):
 
 
 @pytest.mark.parametrize("frequency", FREQUENCIES, ids=FREQUENCIES)
-def test_time001_and_time003_pass_for_supported_frequency(tmp_path, frequency):
-    with _make_file(tmp_path, frequency)[0] as dataset:
+@pytest.mark.parametrize("calendar", ["360_day", "gregorian"])
+def test_time001_and_time003_pass_for_supported_frequency(
+    tmp_path,
+    frequency,
+    calendar,
+):
+    with _make_file(tmp_path, frequency, calendar=calendar)[0] as dataset:
         assert _messages(check_time_squareness(dataset)) == []
         assert _messages(_time003(dataset)) == []
 
 
 @pytest.mark.parametrize("frequency", FREQUENCIES, ids=FREQUENCIES)
-def test_bad_midpoint_fails_time001_only(tmp_path, frequency):
-    dataset, bounds_name = _make_file(tmp_path, frequency)
+@pytest.mark.parametrize("calendar", ["360_day", "gregorian"])
+def test_bad_midpoint_fails_time001_only(tmp_path, frequency, calendar):
+    dataset, bounds_name = _make_file(tmp_path, frequency, calendar=calendar)
     with dataset:
         if bounds_name:
             dataset.variables[bounds_name][0, 1] += 1.0
@@ -218,7 +227,7 @@ def test_bad_midpoint_fails_time001_only(tmp_path, frequency):
             # TIME003 only compares the endpoints at filename precision. A
             # sub-second displacement is nevertheless visible to TIME001.
             dataset.variables["time"][1] += 0.25 / 86400.0
-            expected_message = "Mismatch at index 1"
+            expected_message = "First incident at index 1"
         assert any(
             expected_message in message
             for message in _messages(check_time_squareness(dataset))
@@ -226,8 +235,27 @@ def test_bad_midpoint_fails_time001_only(tmp_path, frequency):
         assert _messages(_time003(dataset)) == []
 
 
+def test_irregular_gregorian_decadal_bounds_fail_with_unchanged_midpoint(tmp_path):
+    dataset, bounds_name = _make_file(tmp_path, "dec", calendar="gregorian")
+    with dataset:
+        bounds = dataset.variables[bounds_name]
+        bounds[1, 0] = bounds[1, 0] - 1.0
+        bounds[1, 1] = bounds[1, 1] + 1.0
+
+        found = _messages(check_time_squareness(dataset))
+
+        assert any("First incident at index 1" in message for message in found)
+        assert _messages(_time003(dataset)) == []
+
+
 @pytest.mark.parametrize("frequency", FREQUENCIES, ids=FREQUENCIES)
-def test_wrong_filename_end_fails_time003_only(tmp_path, frequency):
-    with _make_file(tmp_path, frequency, wrong_end=True)[0] as dataset:
+@pytest.mark.parametrize("calendar", ["360_day", "gregorian"])
+def test_wrong_filename_end_fails_time003_only(tmp_path, frequency, calendar):
+    with _make_file(
+        tmp_path,
+        frequency,
+        calendar=calendar,
+        wrong_end=True,
+    )[0] as dataset:
         assert _messages(check_time_squareness(dataset)) == []
         assert _messages(_time003(dataset))

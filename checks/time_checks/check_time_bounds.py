@@ -10,6 +10,11 @@ bounds (*time_bnds*) and that shapes are consistent.
 import numpy as np
 from compliance_checker.base import BaseCheck, TestCtx
 
+from checks.time_checks.reporting import (
+    count_phrase,
+    format_time_interval,
+    format_time_value,
+)
 from checks.utils import severity_word
 
 
@@ -59,13 +64,15 @@ def check_time_bounds(ds, severity=BaseCheck.MEDIUM, coord_name="time"):
 
     if outside.any():
         all_indices = np.where(outside)[0]
-        examples = all_indices[:5]
+        index = int(all_indices[0])
+        units = getattr(time_var, "units", "") or ""
+        calendar = getattr(time_var, "calendar", "standard") or "standard"
+        agreement = "lies" if len(all_indices) == 1 else "lie"
         ctx.add_failure(
-            f"{len(all_indices)} '{coord_name}' value(s) lie outside declared bounds, "
-            f"example index/val/bnds: "
-            + ", ".join(
-                f"{i}/{time_vals[i]}∉[{lower[i]}, {upper[i]}]" for i in examples
-            )
+            f"{count_phrase(len(all_indices), repr(coord_name) + ' value')} {agreement} outside "
+            f"declared bounds. First incident at index {index}: "
+            f"the file contains {format_time_value(time_vals[index], units=units, calendar=calendar)}. "
+            f"The bounds are {format_time_interval(pairs[index], units=units, calendar=calendar)}."
         )
     else:
         ctx.add_pass()

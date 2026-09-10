@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from compliance_checker.base import BaseCheck
-from netCDF4 import Dataset, stringtochar
+from netCDF4 import Dataset
 
 from checks.attribute_checks.check_attribute_suite import check_attribute_suite
 from checks.coordinate_checks.esgvoc import (
@@ -136,6 +136,36 @@ def test_setup_failure_is_one_verbose_high_result(nc, monkeypatch):
     assert setup_results[0].weight == BaseCheck.HIGH
     assert "database is locked" in setup_results[0].msgs[0]
     assert checker.check_Coordinate_Standard(nc) == []
+
+
+def test_time001_still_runs_when_coordinate_catalogue_is_unavailable(nc):
+    nc.frequency = "monC"
+    nc.table_id = "Amon"
+    nc.variable_id = "tas"
+    nc.createDimension("time", 3)
+    nc.createDimension("bnds", 2)
+    time = nc.createVariable("time", "f8", ("time",))
+    time.units = "days since 2000-01-01"
+    time.calendar = "standard"
+    time.climatology = "climatology_bnds"
+    time[:] = [15.0, 44.0, 74.0]
+    nc.createVariable("climatology_bnds", "f8", ("time", "bnds"))[:] = [
+        [0.0, 30.0],
+        [30.0, 60.0],
+        [60.0, 90.0],
+    ]
+    nc.createVariable("tas", "f4", ("time",))
+
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    checker._coordinate_catalog = None
+    checker._coordinate_setup_error = "coordinate catalogue unavailable"
+
+    results = checker.check_Coordinates(nc)
+
+    time001 = next(result for result in results if "TIME001" in result.name)
+    assert "2 time values" in time001.msgs[0]
+    assert "First incident at index 1" in time001.msgs[0]
 
 
 def test_calendar_message_wording_follows_configured_severity(nc):
@@ -416,7 +446,7 @@ def test_time002_uses_esgvoc_time_out_name_without_duplicating_coord008(nc):
 
     time002 = next(item for item in result if "TIME002" in item.name)
     assert time002.weight == BaseCheck.HIGH
-    assert any("'forecast_time' value(s) lie outside" in msg for msg in time002.msgs)
+    assert any("'forecast_time' value lies outside" in msg for msg in time002.msgs)
     coord008 = next(item for item in result if "COORD008" in item.name)
     assert not any("outside its bounds" in msg for msg in coord008.msgs)
 
@@ -805,8 +835,8 @@ def test_text_auxiliary_requires_sector_but_accepts_extra_unordered_labels(nc):
     nc.createDimension("basin", 3)
     nc.createDimension("strlen", 8)
     sector = nc.createVariable("sector", "S1", ("basin", "strlen"))
-    sector[:] = stringtochar(
-        np.asarray(["atlantic", "pacific", "indian  "], dtype="S8")
+    sector[:] = np.asarray(
+        [list("atlantic"), list("pacific "), list("indian  ")], dtype="S1"
     )
     sector.standard_name = "region"
     ta = nc.createVariable("ta", "f4", ("basin",))

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import cftime
 import numpy as np
 import pytest
 from netCDF4 import Dataset
 
 from checks.time_checks.check_time_squareness import check_time_squareness
+from checks.time_checks.check_time_bounds import check_time_bounds
 from checks.time_checks.check_time_range_vs_filename import check_time_range_vs_filename
 
 
@@ -99,7 +101,7 @@ def test_subdaily_mean_time_checks_agree_and_detect_wrong_spacing(
         dataset.variables["time"][1] += step
         dataset.variables["time_bnds"][1, :] += step
         assert any(
-            "Mismatch at index 1" in msg
+            "First incident at index 1" in msg
             for msg in messages(check_time_squareness(dataset))
         )
 
@@ -132,3 +134,131 @@ def test_climatology_reports_non_midpoint_time(tmp_path):
     ) as dataset:
         found = messages(check_time_squareness(dataset))
     assert any("midpoint of its climatology interval" in message for message in found)
+
+
+def test_time001_reports_count_numeric_and_decoded_first_incident(tmp_path):
+    path = tmp_path / "tas_day_model_exp_r1i1p1f1_gn_20000101-20000103.nc"
+    with Dataset(path, "w") as dataset:
+        dataset.frequency = "day"
+        dataset.table_id = "day"
+        dataset.variable_id = "tas"
+        dataset.createDimension("time", 3)
+        time = dataset.createVariable("time", "f8", ("time",))
+        time.units = "days since 2000-01-01 00:00:00"
+        time.calendar = "standard"
+        time[:] = [0.0, 2.0, 4.0]
+        data = dataset.createVariable("tas", "f4", ("time",))
+        data.cell_methods = "time: point"
+
+        found = messages(check_time_squareness(dataset))
+
+    assert len(found) == 1
+    assert "2 time values" in found[0]
+    assert "First incident at index 1" in found[0]
+    assert "file contains 2.0 (decoded: 2000-01-03 00:00)" in found[0]
+    assert "expected value is 1.0 (decoded: 2000-01-02 00:00)" in found[0]
+
+
+def test_time002_reports_count_numeric_and_decoded_first_incident(tmp_path):
+    path = tmp_path / "tas_day_model_exp_r1i1p1f1_gn_20000101-20000103.nc"
+    with Dataset(path, "w") as dataset:
+        dataset.createDimension("time", 3)
+        dataset.createDimension("bnds", 2)
+        time = dataset.createVariable("time", "f8", ("time",))
+        time.units = "days since 2000-01-01 00:00:00"
+        time.calendar = "standard"
+        time.bounds = "time_bnds"
+        time[:] = [1.0, 4.0, 5.0]
+        bounds = dataset.createVariable("time_bnds", "f8", ("time", "bnds"))
+        bounds[:] = [[0.0, 2.0], [2.0, 3.0], [6.0, 7.0]]
+
+        found = messages(check_time_bounds(dataset))
+
+    assert len(found) == 1
+    assert "2 'time' values lie outside declared bounds" in found[0]
+    assert "First incident at index 1" in found[0]
+    assert "file contains 4.0 (decoded: 2000-01-05 00:00)" in found[0]
+    assert "bounds are [2.0, 3.0] (decoded: [2000-01-03 00:00" in found[0]
+
+
+def test_time001_reports_multiple_irregular_bounds_with_first_incident(tmp_path):
+    path = tmp_path / "tas_Amon_model_exp_r1i1p1f1_gn_200001-200003.nc"
+    with make_time_file(
+        path,
+        frequency="mon",
+        table_id="Amon",
+        times=[15.0, 45.0, 75.0],
+        bounds=[[0.0, 30.0], [29.0, 61.0], [59.0, 91.0]],
+    ) as dataset:
+        found = messages(check_time_squareness(dataset))
+
+    assert len(found) == 1
+    assert "2 time-bounds intervals do not match regular 1-month cells" in found[0]
+    assert "First incident at index 1" in found[0]
+    assert "file contains [29.0, 61.0] (decoded: [2000-01-30 00:00" in found[0]
+    assert "expected interval is [30.0, 60.0] (decoded: [2000-02-01 00:00" in found[0]
+
+
+@pytest.mark.parametrize("year", [1000, 3000])
+def test_time_checks_support_gregorian_dates_outside_datetime64_ns_range(
+    tmp_path, year
+):
+    path = tmp_path / f"tas_Amon_test_{year:04d}01-{year:04d}03.nc"
+    units = "days since 0001-01-01 00:00:00"
+    calendar = "proleptic_gregorian"
+    edges = [
+        cftime.datetime(year, month, 1, calendar=calendar)
+        for month in range(1, 5)
+    ]
+    numeric_edges = cftime.date2num(edges, units=units, calendar=calendar)
+    bounds_values = np.column_stack((numeric_edges[:-1], numeric_edges[1:]))
+
+    with Dataset(path, "w") as dataset:
+        dataset.frequency = "mon"
+        dataset.table_id = "Amon"
+        dataset.variable_id = "tas"
+        dataset.createDimension("time", 3)
+        dataset.createDimension("bnds", 2)
+        time = dataset.createVariable("time", "f8", ("time",))
+        time.units = units
+        time.calendar = calendar
+        time.bounds = "time_bnds"
+        time[:] = bounds_values.mean(axis=1)
+        dataset.createVariable("time_bnds", "f8", ("time", "bnds"))[:] = (
+            bounds_values
+        )
+        data = dataset.createVariable("tas", "f4", ("time",))
+        data.cell_methods = "time: mean"
+
+        assert messages(check_time_squareness(dataset)) == []
+        assert messages(check_time_range_vs_filename(dataset)) == []
+
+
+def test_million_year_offsets_do_not_raise_datetime_overflow(tmp_path):
+    path = tmp_path / "tas_day_test_00010101-00010102.nc"
+    base = 360_000_000.0
+    with Dataset(path, "w") as dataset:
+        dataset.frequency = "day"
+        dataset.table_id = "day"
+        dataset.variable_id = "tas"
+        dataset.createDimension("time", 2)
+        dataset.createDimension("bnds", 2)
+        time = dataset.createVariable("time", "f8", ("time",))
+        time.units = "days since 0001-01-01 00:00:00"
+        time.calendar = "360_day"
+        time.bounds = "time_bnds"
+        time[:] = [base + 0.5, base + 1.75]
+        dataset.createVariable("time_bnds", "f8", ("time", "bnds"))[:] = [
+            [base, base + 1.0],
+            [base + 1.0, base + 2.0],
+        ]
+        data = dataset.createVariable("tas", "f4", ("time",))
+        data.cell_methods = "time: mean"
+
+        time001 = messages(check_time_squareness(dataset))
+        time003 = messages(check_time_range_vs_filename(dataset))
+
+    assert time001
+    assert any("decoded: unavailable" in message for message in time001)
+    assert time003
+    assert any("Error converting time values" in message for message in time003)

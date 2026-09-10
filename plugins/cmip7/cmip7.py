@@ -860,6 +860,16 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             str(entry.get("out_name") or identifier)
             for identifier, entry in self._coordinate_entries_for_axis("T")
         }
+        # Established time checks must remain runnable when the ESGVoc
+        # coordinate catalogue cannot be loaded. Their configured rules are
+        # independent of the catalogue and already identify the time variable.
+        time_coordinate_names.update(
+            str(rule.name.variable_name if rule.name else key)
+            for key, rule in (coords_cfg.variables or {}).items()
+            if rule.squareness
+            or rule.coverage
+            or getattr(rule, "calendar_recommendation", None)
+        )
 
         # The ESGVoc catalogue owns general coordinate validation. Retain only
         # the established time checks that are not replaced by that suite.

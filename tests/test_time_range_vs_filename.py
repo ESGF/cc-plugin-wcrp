@@ -96,7 +96,9 @@ def test_declared_climatology_requires_named_bounds_variable(tmp_path):
         result = check_time_range_vs_filename(ds, severity=BaseCheck.HIGH)[0]
 
     assert result.value[0] < result.value[1]
-    assert any("Missing climatology bounds variable" in msg for msg in _messages(result))
+    assert any(
+        "Missing climatology bounds variable" in msg for msg in _messages(result)
+    )
 
 
 def test_exact_next_month_boundary_uses_preceding_end_label(tmp_path):
@@ -155,4 +157,22 @@ def test_climatology_suffix_requires_file_attribute(tmp_path):
         )[0]
 
     assert result.value[0] < result.value[1]
-    assert any("does not define a climatology attribute" in msg for msg in _messages(result))
+    assert any(
+        "does not define a climatology attribute" in msg for msg in _messages(result)
+    )
+
+
+def test_time003_reports_endpoint_count_numeric_and_decoded_first_incident(tmp_path):
+    path = tmp_path / "tas_Amon_199901-201107.nc"
+    _make_climatology_file(path, climatology_attribute=None)
+
+    with Dataset(path) as ds:
+        result = check_time_range_vs_filename(ds, severity=BaseCheck.HIGH)[0]
+
+    found = _messages(result)
+    assert len(found) == 1
+    assert "filename time range '199901-201107'" in found[0]
+    assert "resolve to '200007-201007'" in found[0]
+    assert "first endpoint is" in found[0]
+    assert "last endpoint is" in found[0]
+    assert found[0].count("(decoded:") == 2

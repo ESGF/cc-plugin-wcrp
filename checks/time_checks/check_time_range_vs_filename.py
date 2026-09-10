@@ -21,6 +21,8 @@ from datetime import timedelta
 from compliance_checker.base import BaseCheck, TestCtx
 from netCDF4 import num2date
 
+from checks.time_checks.reporting import format_time_value
+
 # -----------------------------------------------------------------------------
 # Optional esgvoc DRS validator
 # -----------------------------------------------------------------------------
@@ -377,6 +379,26 @@ def _coverage_at_precision(ds, tuple_length, freq, is_climatology=False):
     return cov_start_full[:tuple_length], cov_end_full[:tuple_length], None
 
 
+def _coverage_endpoint_values(ds, is_climatology=False):
+    """Return the stored numeric values used for the two coverage endpoints."""
+    tvar = ds.variables["time"]
+    if is_climatology:
+        bname = getattr(tvar, "climatology", None)
+        bvals = ds.variables[bname][:]
+        return bvals[0, 0], bvals[-1, -1]
+
+    tvals = tvar[:]
+    if hasattr(tvals, "compressed"):
+        tvals = tvals.compressed()
+    return tvals[0], tvals[-1]
+
+
+def _format_coverage_label(fields):
+    """Format a coverage tuple with the same compact form as filename labels."""
+    widths = (4, 2, 2, 2, 2, 2)
+    return "".join(f"{value:0{width}d}" for value, width in zip(fields, widths))
+
+
 def check_time_range_vs_filename(
     ds,
     severity=BaseCheck.MEDIUM,
@@ -471,20 +493,19 @@ def check_time_range_vs_filename(
         ctx.add_failure(err)
         return [ctx.to_result()]
 
-    issues = []
-    if cov_start > expected_start:
-        issues.append(f"Data starts at {cov_start}, later than filename start {start_str}.")
-    elif cov_start < expected_start:
-        issues.append(f"Data starts at {cov_start}, earlier than filename start {start_str}.")
-
-    if cov_end < expected_end:
-        issues.append(f"Data ends at {cov_end}, earlier than filename end {end_str}.")
-    elif cov_end > expected_end:
-        issues.append(f"Data ends at {cov_end}, later than filename end {end_str}.")
-
-    if issues:
-        for msg in issues:
-            ctx.add_failure(msg)
+    if cov_start != expected_start or cov_end != expected_end:
+        start_value, end_value = _coverage_endpoint_values(ds, is_climatology)
+        tvar = ds.variables["time"]
+        coverage_start = _format_coverage_label(cov_start)
+        coverage_end = _format_coverage_label(cov_end)
+        ctx.add_failure(
+            f"The filename time range '{start_str}-{end_str}' does not match the "
+            f"first and last data endpoints, which resolve to "
+            f"'{coverage_start}-{coverage_end}'. The first endpoint is "
+            f"{format_time_value(start_value, units=tvar.units, calendar=getattr(tvar, 'calendar', 'standard'))}. "
+            f"The last endpoint is "
+            f"{format_time_value(end_value, units=tvar.units, calendar=getattr(tvar, 'calendar', 'standard'))}."
+        )
     else:
         ctx.add_pass()
 
