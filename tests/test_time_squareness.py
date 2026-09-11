@@ -59,7 +59,7 @@ def test_time_squareness_reports_non_midpoint_regular_time(tmp_path):
         bounds=[[0.0, 30.0], [30.0, 60.0]],
     ) as dataset:
         found = messages(check_time_squareness(dataset))
-    assert any("midpoint of its bounds interval" in message for message in found)
+    assert any("does not match the expected axis" in message for message in found)
 
 
 def test_subdaily_non_point_cell_method_uses_interval_center(tmp_path):
@@ -262,3 +262,61 @@ def test_million_year_offsets_do_not_raise_datetime_overflow(tmp_path):
     assert any("decoded: unavailable" in message for message in time001)
     assert time003
     assert any("Error converting time values" in message for message in time003)
+
+
+def test_single_decadal_mean_reconstructs_bounds_from_representative_time(tmp_path):
+    path = tmp_path / "masscello_dec_test_1855-1855.nc"
+    units = "days since 1850-01-01 00:00:00"
+    calendar = "proleptic_gregorian"
+    expected_start = cftime.datetime(1850, 1, 1, calendar=calendar)
+    expected_end = cftime.datetime(1860, 1, 1, calendar=calendar)
+    expected_values = cftime.date2num(
+        [expected_start, expected_end], units=units, calendar=calendar
+    )
+    midpoint = 0.5 * (expected_values[0] + expected_values[1])
+    wrong_end = cftime.date2num(
+        cftime.datetime(1856, 1, 1, calendar=calendar),
+        units=units,
+        calendar=calendar,
+    )
+
+    with Dataset(path, "w") as dataset:
+        dataset.frequency = "dec"
+        dataset.variable_id = "masscello"
+        dataset.createDimension("time", 1)
+        dataset.createDimension("bnds", 2)
+        time = dataset.createVariable("time", "f8", ("time",))
+        time.units = units
+        time.calendar = calendar
+        time.bounds = "time_bnds"
+        time[:] = [midpoint]
+        dataset.createVariable("time_bnds", "f8", ("time", "bnds"))[:] = [
+            [midpoint, wrong_end]
+        ]
+        data = dataset.createVariable("masscello", "f4", ("time",))
+        data.cell_methods = "time: mean"
+
+        found = messages(check_time_squareness(dataset))
+        assert messages(check_time_range_vs_filename(dataset)) == []
+
+    assert len(found) == 1
+    assert "time-bounds interval" in found[0]
+    assert "expected interval is [0.0, 3652.0]" in found[0]
+    assert "decoded: [1850-01-01 00:00, 1860-01-01 00:00]" in found[0]
+    assert "time value" not in found[0]
+
+
+def test_invalid_decadal_representative_time_has_clear_failure(tmp_path):
+    dataset = make_time_file(
+        tmp_path / "tas_dec_test_2005-2005.nc",
+        frequency="dec",
+        table_id="None",
+        times=[1801.0],
+        bounds=[[0.0, 3600.0]],
+    )
+    with dataset:
+        found = messages(check_time_squareness(dataset))
+
+    assert len(found) == 1
+    assert "does not identify a unique calendar-aligned 10-year interval" in found[0]
+    assert "Technical reason" not in found[0]

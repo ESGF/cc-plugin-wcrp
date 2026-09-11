@@ -162,7 +162,7 @@ def test_climatology_suffix_requires_file_attribute(tmp_path):
     )
 
 
-def test_time003_reports_endpoint_count_numeric_and_decoded_first_incident(tmp_path):
+def test_time003_reports_both_numeric_and_decoded_endpoints(tmp_path):
     path = tmp_path / "tas_Amon_199901-201107.nc"
     _make_climatology_file(path, climatology_attribute=None)
 

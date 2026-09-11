@@ -18,6 +18,10 @@ NDECIMALS = 6
 _TIME_RANGE_RE = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$", re.IGNORECASE)
 
 
+class RepresentativeIntervalError(ValueError):
+    """Raised when a coarse representative time has no unique interval."""
+
+
 def _round(arr: np.ndarray, ndecs: int) -> np.ndarray:
     # Round (not truncate) to ``ndecs`` decimal places before comparison.
     # ``np.trunc`` was used here previously, but it floors toward zero and
@@ -121,10 +125,68 @@ def _midpoint_num(d0, d1, units: str, calendar: str) -> float:
     return 0.5 * (n0 + n1)
 
 
+def _representative_interval_start(
+    representative_value: float,
+    increment: int,
+    unit: str,
+    units: str,
+    calendar: str,
+):
+    """Find the calendar-aligned interval represented by a coarse timestamp."""
+    representative = cftime.num2date(
+        representative_value,
+        units=units,
+        calendar=calendar,
+        only_use_cftime_datetimes=True,
+    )
+    candidates = []
+    if unit == "years":
+        for offset in range(-increment, 1):
+            try:
+                candidates.append(
+                    cftime.datetime(
+                        representative.year + offset, 1, 1, calendar=calendar
+                    )
+                )
+            except ValueError:
+                continue
+    elif unit == "months":
+        representative_month = representative.year * 12 + representative.month - 1
+        for offset in range(-increment, 1):
+            ordinal = representative_month + offset
+            try:
+                candidates.append(
+                    cftime.datetime(
+                        ordinal // 12, ordinal % 12 + 1, 1, calendar=calendar
+                    )
+                )
+            except ValueError:
+                continue
+    else:
+        raise ValueError(f"Unsupported calendar-dependent increment unit {unit!r}")
+
+    expected = _round(np.asarray([representative_value]), NDECIMALS)[0]
+    matches = []
+    for candidate in candidates:
+        interval_end = add_time_increment(candidate, increment, unit, calendar)
+        midpoint = _midpoint_num(candidate, interval_end, units, calendar)
+        if _round(np.asarray([midpoint]), NDECIMALS)[0] == expected:
+            matches.append(candidate)
+
+    if len(matches) != 1:
+        display_unit = unit[:-1] if unit.endswith("s") else unit
+        raise RepresentativeIntervalError(
+            f"found {len(matches)} calendar-aligned {increment}-{display_unit} intervals "
+            "with the first time value as their midpoint"
+        )
+    return matches[0]
+
+
 def _check_declared_bounds_midpoints(
     ctx,
     ds,
     time_var,
+    report_mismatch=True,
 ) -> tuple[bool, np.ndarray | None]:
     """Check time values against declared regular or climatological bounds.
 
@@ -167,7 +229,7 @@ def _check_declared_bounds_midpoints(
     rounded_actual = _round(actual, NDECIMALS)
     rounded_expected = _round(expected, NDECIMALS)
     bad = np.where(rounded_actual != rounded_expected)[0]
-    if bad.size:
+    if bad.size and report_mismatch:
         index = int(bad[0])
         kind = "climatology" if climatology_name else "bounds"
         units = time_var.units
@@ -284,6 +346,7 @@ def check_time_squareness(
         ctx,
         ds,
         time_var,
+        report_mismatch=is_climatology,
     )
     if is_climatology:
         # A climatological coordinate can represent an averaging interval
@@ -347,50 +410,47 @@ def check_time_squareness(
     theo = np.zeros(actual.size, dtype=float)
     theo_bounds = None
     variable_step = inc_unit in ("months", "years")
-    bounds_anchored = use_midpoint and declared_bounds is not None
+    bounds_available = use_midpoint and declared_bounds is not None
 
     try:
-        if bounds_anchored:
+        if bounds_available:
             theo_bounds = np.zeros_like(declared_bounds, dtype=float)
 
         if not variable_step:
             # The size of a fixed increment can be established near the filename
-            # date. Keep a bounds anchor numeric so very large offsets need not be
-            # decoded through cftime's finite datetime representation.
+            # date. Keep a representative-time anchor numeric so very large
+            # offsets need not pass through cftime's finite datetime range.
             d0 = start_boundary
             d1 = add_time_increment(d0, inc_val, inc_unit, cal)
             reference_n0 = float(cftime.date2num(d0, units=units, calendar=cal))
             reference_n1 = float(cftime.date2num(d1, units=units, calendar=cal))
             step_num = reference_n1 - reference_n0
             n0 = (
-                float(declared_bounds[0, 0])
-                if bounds_anchored
+                float(actual[0]) - step_num / 2.0
+                if use_midpoint and label_is_representative
                 else reference_n0
             )
             n1 = n0 + step_num
-            if bounds_anchored or (use_midpoint and not label_is_representative):
+            if use_midpoint:
                 first = (n0 + n1) / 2.0
-            elif use_midpoint and coarse_representative_label:
-                first = float(actual[0])
             else:
                 first = n0
             offsets = np.arange(actual.size, dtype=float) * float(step_num)
             theo = first + offsets
-            if bounds_anchored:
+            if bounds_available:
                 theo_bounds[:, 0] = n0 + offsets
                 theo_bounds[:, 1] = n1 + offsets
         else:
             # Advancing a midpoint can drift when adjacent calendar cells contain
             # different numbers of days; rebuild from the first cell boundary.
-            if bounds_anchored:
-                cur = cftime.num2date(
-                    declared_bounds[0, 0],
+            if use_midpoint and label_is_representative:
+                cur = _representative_interval_start(
+                    actual[0],
+                    inc_val,
+                    inc_unit,
                     units=units,
                     calendar=cal,
-                    only_use_cftime_datetimes=True,
                 )
-            elif use_midpoint and coarse_representative_label:
-                cur = cftime.num2date(actual[0], units=units, calendar=cal)
             else:
                 cur = start_boundary
             for i in range(actual.size):
@@ -400,12 +460,20 @@ def check_time_squareness(
                 theo[i] = (
                     0.5 * (cur_num + nxt_num)
                     if use_midpoint
-                    and (not label_is_representative or bounds_anchored)
                     else cur_num
                 )
-                if bounds_anchored:
+                if bounds_available:
                     theo_bounds[i] = (cur_num, nxt_num)
                 cur = nxt
+    except RepresentativeIntervalError as exc:
+        display_unit = inc_unit[:-1] if inc_unit.endswith("s") else inc_unit
+        ctx.add_failure(
+            f"The first time value "
+            f"{format_time_value(actual[0], units=units, calendar=cal, decimals=NDECIMALS)} "
+            f"does not identify a unique calendar-aligned {inc_val}-{display_unit} "
+            f"interval. The search {exc}."
+        )
+        return [ctx.to_result()]
     except Exception as exc:
         ctx.add_failure(
             f"Cannot reconstruct the expected time axis using units {units!r} "
@@ -413,7 +481,7 @@ def check_time_squareness(
         )
         return [ctx.to_result()]
 
-    if bounds_anchored:
+    if bounds_available:
         rounded_bounds = _round(declared_bounds, NDECIMALS)
         rounded_theoretical_bounds = _round(theo_bounds, NDECIMALS)
         bad_bounds = np.where(
@@ -422,7 +490,7 @@ def check_time_squareness(
         if bad_bounds.size:
             index = int(bad_bounds[0])
             agreement = "does" if bad_bounds.size == 1 else "do"
-            display_unit = inc_unit[:-1] if inc_val == 1 else inc_unit
+            display_unit = inc_unit[:-1] if inc_unit.endswith("s") else inc_unit
             ctx.add_failure(
                 f"{count_phrase(int(bad_bounds.size), 'time-bounds interval')} {agreement} not "
                 f"match regular {inc_val}-{display_unit} cells. First incident at index "

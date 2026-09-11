@@ -217,12 +217,16 @@ def test_time001_and_time003_pass_for_supported_frequency(
 
 @pytest.mark.parametrize("frequency", FREQUENCIES, ids=FREQUENCIES)
 @pytest.mark.parametrize("calendar", ["360_day", "gregorian"])
-def test_bad_midpoint_fails_time001_only(tmp_path, frequency, calendar):
+def test_bad_time_or_bounds_fails_time001_only(tmp_path, frequency, calendar):
     dataset, bounds_name = _make_file(tmp_path, frequency, calendar=calendar)
     with dataset:
         if bounds_name:
             dataset.variables[bounds_name][0, 1] += 1.0
-            expected_message = "midpoint"
+            expected_message = (
+                "midpoint"
+                if FREQUENCIES[frequency][3]
+                else "time-bounds interval"
+            )
         else:
             # TIME003 only compares the endpoints at filename precision. A
             # sub-second displacement is nevertheless visible to TIME001.
