@@ -801,6 +801,13 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             if (rule := getattr(registry, family)) is not None
         }
         naming = registry.bounds_name
+        direction = registry.direction
+        attributes = registry.attributes
+        if attributes is not None and attributes.allowed_when_unset:
+            severities["allowed_when_unset"] = self.get_severity(
+                attributes.allowed_when_unset_severity,
+                "LOW",
+            )
         coverage_rule = next(
             (
                 rule.coverage
@@ -832,6 +839,19 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 else "climatology_bnds"
             ),
             time_bounds_delegated=coverage_rule is not None,
+            check_direct_physical_values=(
+                direction.check_direct_physical_values
+                if direction is not None
+                else False
+            ),
+            check_formula_derived_profile=(
+                direction.check_formula_derived_profile
+                if direction is not None
+                else False
+            ),
+            attributes_allowed_when_unset=(
+                attributes.allowed_when_unset if attributes is not None else ()
+            ),
         )
 
         if coverage_rule is not None:

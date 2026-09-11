@@ -62,6 +62,9 @@ def check_coordinate_catalog(
     vertices_dimension_name="vertices",
     climatology_bounds_name="climatology_bnds",
     time_bounds_delegated=False,
+    check_direct_physical_values=True,
+    check_formula_derived_profile=True,
+    attributes_allowed_when_unset=(),
 ):
     """Validate all coordinate IDs required by one known branded variable."""
     findings = Findings(
@@ -73,7 +76,14 @@ def check_coordinate_catalog(
     )
     data_var = _data_variable(ds, catalog)
 
-    validate_ordinary(findings, ds, catalog, data_var)
+    validate_ordinary(
+        findings,
+        ds,
+        catalog,
+        data_var,
+        check_direct_physical_values=check_direct_physical_values,
+        attributes_allowed_when_unset=attributes_allowed_when_unset,
+    )
     horizontal_dimensions = validate_horizontal_grid(
         findings,
         ds,
@@ -93,6 +103,9 @@ def check_coordinate_catalog(
                 catalog,
                 identifier,
                 horizontal_dimensions,
+                check_direct_physical_values=check_direct_physical_values,
+                check_formula_derived_profile=check_formula_derived_profile,
+                attributes_allowed_when_unset=attributes_allowed_when_unset,
             )
         elif kind not in {
             "standard_1d",

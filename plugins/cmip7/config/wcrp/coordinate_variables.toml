@@ -15,12 +15,20 @@ severity = "H"
 
 [coordinates.registry.attributes]
 severity = "H"
+# A model may supply this CF attribute even while its coordinate-catalogue
+# field is empty. Other checked attributes with empty definitions must be absent.
+allowed_when_unset = ["computed_standard_name"]
+allowed_when_unset_severity = "L"
 
 [coordinates.registry.recommendations]
 severity = "M"
 
 [coordinates.registry.direction]
 severity = "H"
+# These physical checks can be disabled independently while retaining the
+# ordinary coordinate monotonicity and stored_direction checks in COORD005.
+check_direct_physical_values = true
+check_formula_derived_profile = true
 
 [coordinates.registry.valid_range]
 severity = "H"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from checks.coordinate_checks.formulas import formula_vertical_profile
 from checks.coordinate_checks.model import reference_id, reference_ids
 from checks.coordinate_checks.utils import (
     expected_formula_terms,
@@ -13,9 +14,12 @@ from checks.coordinate_checks.validation import (
     Findings,
     check_attributes,
     check_bounds,
+    check_direct_vertical_values,
     check_direction,
     check_dtype,
+    check_profile_direction,
     check_valid_range,
+    report_allowed_when_unset,
 )
 
 
@@ -210,6 +214,10 @@ def validate_model_level(
     catalog,
     generic_id: str,
     horizontal_dimensions,
+    *,
+    check_direct_physical_values: bool = True,
+    check_formula_derived_profile: bool = True,
+    attributes_allowed_when_unset=(),
 ):
     selected = select_model_level(findings, ds, catalog, generic_id)
     if selected is None:
@@ -232,10 +240,15 @@ def validate_model_level(
             f"'{var.name}({', '.join(var.dimensions)})'.",
         )
     check_dtype(findings, var, name, level)
-    check_attributes(findings, var, name, level)
-    expected_computed_standard_name = str(
-        level.get("computed_standard_name") or ""
+    check_attributes(
+        findings,
+        var,
+        name,
+        level,
+        empty_values_must_be_absent=True,
+        allowed_when_unset=attributes_allowed_when_unset,
     )
+    expected_computed_standard_name = str(level.get("computed_standard_name") or "")
     actual_computed_standard_name = ncattr(var, "computed_standard_name")
     if (
         expected_computed_standard_name
@@ -248,6 +261,26 @@ def validate_model_level(
             f"{findings.severity_word('attributes')} value is "
             f"{expected_computed_standard_name!r}.",
         )
+    elif (
+        not expected_computed_standard_name
+        and "computed_standard_name" in var.ncattrs()
+    ):
+        if "computed_standard_name" in attributes_allowed_when_unset:
+            report_allowed_when_unset(
+                findings,
+                var,
+                name,
+                "computed_standard_name",
+                actual_computed_standard_name,
+            )
+        else:
+            findings.add(
+                "attributes",
+                f"'{name}' defines computed_standard_name="
+                f"{formatted(actual_computed_standard_name)}; it is "
+                f"{findings.severity_word('attributes')} for the attribute to be "
+                "absent when its coordinate-definition value is empty.",
+            )
     check_direction(findings, var, name, level)
     check_valid_range(findings, var, name, level)
 
@@ -260,14 +293,23 @@ def validate_model_level(
             f"{level_id!r} has {expected_formula!r} as its "
             f"{findings.severity_word('formula')} value.",
         )
-    elif not expected_formula and actual_formula:
-        findings.add(
-            "recommendations",
-            f"'{name}' defines formula={formatted(actual_formula)}, while the selected "
-            f"model-level entry {level_id!r} does not prescribe one; it is "
-            f"{findings.severity_word('recommendations')} to verify the extra "
-            "attribute.",
-        )
+    elif not expected_formula and "formula" in var.ncattrs():
+        if "formula" in attributes_allowed_when_unset:
+            report_allowed_when_unset(
+                findings,
+                var,
+                name,
+                "formula",
+                actual_formula,
+            )
+        else:
+            findings.add(
+                "formula",
+                f"'{name}' defines formula={formatted(actual_formula)}; it is "
+                f"{findings.severity_word('formula')} for the attribute to be absent "
+                f"because selected model-level entry {level_id!r} defines an empty "
+                "value.",
+            )
 
     term_entries = {}
     expected_terms = expected_formula_terms(
@@ -277,7 +319,24 @@ def validate_model_level(
         resolved=term_entries,
     )
     actual_terms = parse_formula_terms(ncattr(var, "formula_terms"))
-    if expected_terms != actual_terms:
+    if not expected_terms and "formula_terms" in var.ncattrs():
+        if "formula_terms" in attributes_allowed_when_unset:
+            report_allowed_when_unset(
+                findings,
+                var,
+                name,
+                "formula_terms",
+                ncattr(var, "formula_terms"),
+            )
+        else:
+            findings.add(
+                "formula",
+                f"'{name}' defines formula_terms={actual_terms}; it is "
+                f"{findings.severity_word('formula')} for the attribute to be absent "
+                f"because selected model-level entry {level_id!r} defines no formula "
+                "terms.",
+            )
+    elif expected_terms != actual_terms:
         findings.add(
             "formula",
             f"'{name}' formula_terms={actual_terms}; selected model-level entry "
@@ -297,6 +356,41 @@ def validate_model_level(
             catalog,
             horizontal_dimensions,
         )
+
+    stored_direction = str(level.get("stored_direction") or "")
+    formula_inputs_are_valid = (
+        bool(expected_formula)
+        and bool(expected_terms)
+        and actual_terms == expected_terms
+        and all(term_name in ds.variables for term_name in expected_terms.values())
+    )
+    if (
+        check_formula_derived_profile
+        and formula_inputs_are_valid
+        and stored_direction in {"increasing", "decreasing"}
+    ):
+        try:
+            profile, sample = formula_vertical_profile(
+                ds,
+                var,
+                level,
+                expected_terms,
+            )
+            check_profile_direction(
+                findings,
+                profile,
+                f"Formula-derived physical profile for '{name}' at {sample}",
+                stored_direction,
+            )
+        except Exception as exc:
+            # This optional physical check must not stop the catalogue suite.
+            findings.add(
+                "direction",
+                f"Could not evaluate the physical vertical profile for '{name}': "
+                f"{type(exc).__name__}: {exc}.",
+            )
+    elif check_direct_physical_values and not expected_formula:
+        check_direct_vertical_values(findings, var, name, level)
 
     allowed_attributes = tuple(
         attribute

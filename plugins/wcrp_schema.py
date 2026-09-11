@@ -257,6 +257,20 @@ class CoordinateGlobalRule(BaseModel):
     severity: Optional[str] = None
 
 
+class CoordinateDirectionRule(CoordinateGlobalRule):
+    """Controls the optional physical parts of coordinate direction checks."""
+
+    check_direct_physical_values: bool = True
+    check_formula_derived_profile: bool = True
+
+
+class CoordinateAttributesRule(CoordinateGlobalRule):
+    """Controls exceptions to strict coordinate-attribute absence rules."""
+
+    allowed_when_unset: list[str] = Field(default_factory=list)
+    allowed_when_unset_severity: Optional[str] = "L"
+
+
 class CoordinateBoundsNameRule(CoordinateGlobalRule):
     """Recommended names for bounds-related dimensions."""
 
@@ -307,9 +321,9 @@ class CoordinateRegistrySection(BaseModel):
     setup: Optional[CoordinateGlobalRule] = None
     identity: Optional[CoordinateGlobalRule] = None
     dimension_order: Optional[CoordinateGlobalRule] = None
-    attributes: Optional[CoordinateGlobalRule] = None
+    attributes: Optional[CoordinateAttributesRule] = None
     recommendations: Optional[CoordinateGlobalRule] = None
-    direction: Optional[CoordinateGlobalRule] = None
+    direction: Optional[CoordinateDirectionRule] = None
     valid_range: Optional[CoordinateGlobalRule] = None
     requested_values: Optional[CoordinateGlobalRule] = None
     bounds: Optional[CoordinateGlobalRule] = None

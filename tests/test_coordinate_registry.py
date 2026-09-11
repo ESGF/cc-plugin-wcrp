@@ -21,6 +21,7 @@ from checks.coordinate_checks.topology import (
     resolve_grid_topology,
 )
 from checks.coordinate_checks.utils import expected_formula_terms
+from checks.coordinate_checks.validation import Findings, check_direct_vertical_values
 from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from plugins.cmip7.cmip7 import Cmip7ProjectCheck
 
@@ -38,6 +39,10 @@ FAMILIES = {
     "associations": BaseCheck.HIGH,
     "grid": BaseCheck.HIGH,
     "formula": BaseCheck.HIGH,
+}
+FAMILIES_WITH_INFORMATION = {
+    **FAMILIES,
+    "allowed_when_unset": BaseCheck.LOW,
 }
 
 
@@ -266,6 +271,26 @@ def test_cmip7_config_sets_recommended_bounds_dimension_names():
     assert naming.climatology_bounds_name == "climatology_bnds"
 
 
+def test_cmip7_config_enables_optional_physical_direction_checks():
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    direction = checker.config.coordinates.registry.direction
+    assert direction.check_direct_physical_values is True
+    assert direction.check_formula_derived_profile is True
+
+
+def test_cmip7_config_allows_unset_computed_standard_name():
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    assert checker.config.coordinates.registry.attributes.allowed_when_unset == [
+        "computed_standard_name"
+    ]
+    assert (
+        checker.config.coordinates.registry.attributes.allowed_when_unset_severity
+        == "L"
+    )
+
+
 def test_grid_without_resolvable_metadata_reports_one_decisive_failure(nc):
     result = check_coordinate_catalog(
         nc,
@@ -366,6 +391,115 @@ def test_numeric_coordinate_without_stored_direction_is_strictly_monotonic(nc):
         "'rho' is not strictly monotonic (increasing or decreasing)" in msg
         for msg in messages(result)
     )
+
+
+@pytest.mark.parametrize("attribute", ["axis", "standard_name", "units", "positive"])
+@pytest.mark.parametrize("file_value", ["unexpected", ""])
+def test_ordinary_empty_cv_attribute_requires_file_attribute_absence(
+    nc, attribute, file_value
+):
+    nc.createDimension("z", 2)
+    variable = nc.createVariable("z", "f8", ("z",))
+    variable[:] = [0.0, 1.0]
+    variable.long_name = "z coordinate"
+    variable.setncattr(attribute, file_value)
+    nc.createVariable("ta", "f4", ("z",))
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"z": coordinate("z", "standard_1d", "z")}),
+        severities=FAMILIES,
+    )
+
+    metadata = next(item for item in result if "COORD003" in item.name)
+    assert metadata.weight == BaseCheck.HIGH
+    assert any(
+        f"defines {attribute}=" in message and "attribute to be absent" in message
+        for message in metadata.msgs
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"z": coordinate("z", "standard_1d", "z")}),
+        severities=FAMILIES_WITH_INFORMATION,
+        attributes_allowed_when_unset=(attribute,),
+    )
+    assert not any(
+        f"defines {attribute}=" in message and "attribute to be absent" in message
+        for message in messages(result)
+    )
+    information = next(item for item in result if "COORD004a" in item.name)
+    assert information.weight == BaseCheck.LOW
+    assert any(
+        f"defines {attribute}=" in message
+        and "permitted by the configured allowed_when_unset" in message
+        for message in information.msgs
+    )
+
+
+@pytest.mark.parametrize(
+    ("standard_name", "positive", "coordinate_values"),
+    [
+        ("air_pressure", "down", [1000.0, -1.0]),
+        ("height", "up", [-1.0, 0.0]),
+        ("depth", "down", [-1.0, 0.0]),
+    ],
+)
+def test_direct_vertical_coordinates_have_valid_physical_values(
+    nc, standard_name, positive, coordinate_values
+):
+    nc.createDimension("z", 2)
+    variable = nc.createVariable("z", "f8", ("z",))
+    variable[:] = coordinate_values
+    variable.axis = "Z"
+    variable.standard_name = standard_name
+    variable.positive = positive
+    nc.createVariable("ta", "f4", ("z",))
+    entry = coordinate(
+        "z",
+        "standard_1d",
+        "z",
+        axis="Z",
+        cf_standard_name=standard_name,
+        positive=positive,
+        stored_direction=(
+            "decreasing" if standard_name == "air_pressure" else "increasing"
+        ),
+    )
+
+    result = check_coordinate_catalog(nc, catalog({"z": entry}), severities=FAMILIES)
+
+    assert any(
+        f"standard_name='{standard_name}'" in message and "physical values" in message
+        for message in messages(result)
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"z": entry}),
+        severities=FAMILIES,
+        check_direct_physical_values=False,
+    )
+    assert not any("physical values" in message for message in messages(result))
+
+
+def test_direct_physical_value_exception_is_contained(nc, monkeypatch):
+    variable = nc.createVariable("z", "f8")
+    findings = Findings({"direction": BaseCheck.HIGH})
+    monkeypatch.setattr(
+        "checks.coordinate_checks.validation.numeric_values",
+        lambda unused: (_ for _ in ()).throw(RuntimeError("unreadable values")),
+    )
+
+    check_direct_vertical_values(
+        findings,
+        variable,
+        "z",
+        {"cf_standard_name": "height"},
+    )
+
+    result = findings.results()[0]
+    assert any("RuntimeError: unreadable values" in message for message in result.msgs)
 
 
 def test_latitude_stored_direction_is_checked_by_coordinate_catalog(nc):
@@ -1447,6 +1581,10 @@ def test_generic_vertical_is_selected_by_standard_name_and_validates_formula(nc)
     nc.createVariable("b", "f8", ("lev",))
     nc.createVariable("a_bnds", "f8", ("lev", "bnds"))
     nc.createVariable("b_bnds", "f8", ("lev", "bnds"))
+    nc.variables["p0"].assignValue(1000.0)
+    nc.variables["ps"].assignValue(100000.0)
+    nc.variables["a"][:] = [0.1, 0.05]
+    nc.variables["b"][:] = [0.9, 0.45]
     for name in ("p0", "a", "b", "ps", "a_bnds", "b_bnds"):
         nc.variables[name].long_name = f"Formula term {name}"
     nc.createVariable("ta", "f4", ("lev",))
@@ -1500,6 +1638,146 @@ def test_generic_vertical_is_selected_by_standard_name_and_validates_formula(nc)
     assert "generic_level_name" not in lev.ncattrs()
 
 
+@pytest.mark.parametrize("reverse_physical_profile", [False, True])
+def test_generic_vertical_checks_formula_profile_at_one_horizontal_cell(
+    nc, reverse_physical_profile
+):
+    nc.createDimension("lev", 3)
+    nc.createDimension("lat", 2)
+    nc.createDimension("lon", 2)
+    nc.createDimension("bnds", 2)
+    lev = nc.createVariable("lev", "f8", ("lev",))
+    lev[:] = [1.0, 0.5, 0.0]
+    lev.axis = "Z"
+    lev.standard_name = "atmosphere_hybrid_sigma_pressure_coordinate"
+    lev.units = "1"
+    lev.positive = "down"
+    lev.formula = "p = a + b*ps"
+    lev.formula_terms = "a: a b: b ps: ps"
+    a = nc.createVariable("a", "f8", ("lev",))
+    a[:] = [0.0, 0.5, 1.0] if reverse_physical_profile else [1.0, 0.5, 0.0]
+    nc.createVariable("b", "f8", ("lev",))[:] = 0.0
+    nc.createVariable("ps", "f8", ("lat", "lon"))[:] = 100000.0
+
+    for role, name, axis, units, data, bounds in (
+        (
+            "latitude",
+            "lat",
+            "Y",
+            "degrees_north",
+            [-45.0, 45.0],
+            [[-90.0, 0.0], [0.0, 90.0]],
+        ),
+        (
+            "longitude",
+            "lon",
+            "X",
+            "degrees_east",
+            [0.0, 180.0],
+            [[-90.0, 90.0], [90.0, 270.0]],
+        ),
+    ):
+        variable = nc.createVariable(name, "f8", (name,))
+        variable[:] = data
+        variable.axis = axis
+        variable.standard_name = role
+        variable.units = units
+        variable.bounds = f"{name}_bnds"
+        nc.createVariable(f"{name}_bnds", "f8", (name, "bnds"))[:] = bounds
+    nc.createVariable("ta", "f4", ("lat", "lon", "lev"))
+
+    horizontal = grid_catalog()
+    generic = coordinate("alevel", "generic_vertical", "lev", axis="Z")
+    level = {
+        "id": "hybrid",
+        "generic_level_name": "alevel",
+        "out_name": "lev",
+        "axis": "Z",
+        "data_type": "double",
+        "cf_standard_name": lev.standard_name,
+        "units": "1",
+        "positive": "down",
+        "stored_direction": "decreasing",
+        "formula": lev.formula,
+        "z_factors": ["a", "b", "ps"],
+        "bounds_required": False,
+    }
+    terms = {
+        "a": {
+            "id": "a",
+            "out_name": "a",
+            "data_type": "double",
+            "dimensions": ["alevel"],
+        },
+        "b": {
+            "id": "b",
+            "out_name": "b",
+            "data_type": "double",
+            "dimensions": ["alevel"],
+        },
+        "ps": {
+            "id": "ps",
+            "out_name": "ps",
+            "data_type": "double",
+            "dimensions": ["longitude", "latitude"],
+        },
+    }
+    cv = Catalog(
+        project_id=horizontal.project_id,
+        branded_variable_id=horizontal.branded_variable_id,
+        branded_variable=horizontal.branded_variable,
+        coordinate_ids=("alevel", "longitude", "latitude"),
+        data_coordinates={**horizontal.data_coordinates, "alevel": generic},
+        model_levels={"hybrid": level},
+        formula_terms=terms,
+        grid_variables=horizontal.grid_variables,
+        grid_axes=horizontal.grid_axes,
+    )
+
+    result = check_coordinate_catalog(
+        nc, cv, severities=FAMILIES, grid_topology="rectilinear"
+    )
+    direction = next(item for item in result if "COORD005" in item.name)
+    if reverse_physical_profile:
+        assert any(
+            "Formula-derived physical profile" in message
+            and "not strictly decreasing" in message
+            for message in direction.msgs
+        )
+        result = check_coordinate_catalog(
+            nc,
+            cv,
+            severities=FAMILIES,
+            grid_topology="rectilinear",
+            check_formula_derived_profile=False,
+        )
+        direction = next(item for item in result if "COORD005" in item.name)
+        assert direction.value == (1, 1)
+    else:
+        assert direction.value == (1, 1)
+
+
+def test_formula_profile_exception_is_contained(nc, monkeypatch):
+    cv = _sigma_file_and_catalog(nc)
+
+    def fail_profile(*args, **kwargs):
+        raise RuntimeError("profile unavailable")
+
+    monkeypatch.setattr(
+        "checks.coordinate_checks.vertical.formula_vertical_profile",
+        fail_profile,
+    )
+
+    result = check_coordinate_catalog(nc, cv, severities=FAMILIES)
+
+    assert len(result) == len(FAMILIES)
+    direction = next(item for item in result if "COORD005" in item.name)
+    assert any(
+        "RuntimeError: profile unavailable" in message for message in direction.msgs
+    )
+    assert next(item for item in result if "COORD012" in item.name).value == (1, 1)
+
+
 def test_formula_term_long_name_uses_complete_descriptor(nc):
     nc.createDimension("lev", 2)
     lev = nc.createVariable("lev", "f8", ("lev",))
@@ -1529,9 +1807,7 @@ def test_formula_term_long_name_uses_complete_descriptor(nc):
         "stored_direction": "decreasing",
         "formula": lev.formula,
         # Resolved relationship records do not necessarily carry long_name.
-        "z_factors": [
-            {"id": name, "out_name": name} for name in ("ap", "b", "ps")
-        ],
+        "z_factors": [{"id": name, "out_name": name} for name in ("ap", "b", "ps")],
         "bounds_required": False,
     }
     terms = {
@@ -1855,8 +2131,7 @@ def test_transposed_curvilinear_grid_is_checked_against_cv_dimensions(nc):
     )
     for name in ("latitude", "longitude", "vertices_latitude", "vertices_longitude"):
         assert any(
-            f"'{name}'" in msg and "dimension order" in msg
-            for msg in messages(result)
+            f"'{name}'" in msg and "dimension order" in msg for msg in messages(result)
         )
     assert next(r for r in result if "COORD002" in r.name).msgs
 
@@ -1925,10 +2200,35 @@ def test_generic_vertical_computed_standard_name_is_required_only_when_defined(n
     lev.computed_standard_name = "model_specific_height"
 
     result = check_coordinate_catalog(nc, cv, severities=FAMILIES)
-    assert not any("computed_standard_name" in msg for msg in messages(result))
+    assert any(
+        "defines computed_standard_name='model_specific_height'" in msg
+        and "attribute to be absent" in msg
+        for msg in messages(result)
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        cv,
+        severities=FAMILIES_WITH_INFORMATION,
+        attributes_allowed_when_unset=("computed_standard_name",),
+    )
+    metadata = next(item for item in result if "COORD003" in item.name)
+    assert metadata.value == (1, 1)
+    information = next(item for item in result if "COORD004a" in item.name)
+    assert information.weight == BaseCheck.LOW
+    assert any(
+        "computed_standard_name='model_specific_height'" in msg
+        and "permitted by the configured allowed_when_unset" in msg
+        for msg in information.msgs
+    )
 
     cv.model_levels["sigma"]["computed_standard_name"] = "air_pressure"
-    result = check_coordinate_catalog(nc, cv, severities=FAMILIES)
+    result = check_coordinate_catalog(
+        nc,
+        cv,
+        severities=FAMILIES_WITH_INFORMATION,
+        attributes_allowed_when_unset=("computed_standard_name",),
+    )
     metadata = next(item for item in result if "COORD003" in item.name)
     assert metadata.weight == BaseCheck.HIGH
     assert any(
@@ -1938,8 +2238,102 @@ def test_generic_vertical_computed_standard_name_is_required_only_when_defined(n
     )
 
     lev.computed_standard_name = "air_pressure"
-    result = check_coordinate_catalog(nc, cv, severities=FAMILIES)
+    result = check_coordinate_catalog(
+        nc,
+        cv,
+        severities=FAMILIES_WITH_INFORMATION,
+        attributes_allowed_when_unset=("computed_standard_name",),
+    )
     assert not any("computed_standard_name" in msg for msg in messages(result))
+
+
+def test_cmip7_reports_allowed_computed_standard_name_at_low_severity(nc):
+    cv = _sigma_file_and_catalog(nc)
+    nc.variables["lev"].computed_standard_name = "model_specific_height"
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    checker._coordinate_catalog = cv
+
+    result = checker.check_Coordinate_Standard(nc)
+
+    information = next(item for item in result if "COORD004a" in item.name)
+    assert information.weight == BaseCheck.LOW
+    assert any(
+        "computed_standard_name='model_specific_height'" in message
+        for message in information.msgs
+    )
+
+
+def test_generic_vertical_empty_cv_attribute_requires_file_attribute_absence(nc):
+    cv = _sigma_file_and_catalog(nc)
+    cv.model_levels["sigma"]["positive"] = ""
+
+    result = check_coordinate_catalog(nc, cv, severities=FAMILIES)
+
+    metadata = next(item for item in result if "COORD003" in item.name)
+    assert metadata.weight == BaseCheck.HIGH
+    assert any(
+        "defines positive='down'" in message and "attribute to be absent" in message
+        for message in metadata.msgs
+    )
+
+
+@pytest.mark.parametrize("file_value", ["z = unexpected", ""])
+def test_generic_vertical_empty_cv_formula_requires_attribute_absence(nc, file_value):
+    cv = _sigma_file_and_catalog(nc)
+    cv.model_levels["sigma"]["formula"] = ""
+    nc.variables["lev"].formula = file_value
+
+    result = check_coordinate_catalog(nc, cv, severities=FAMILIES)
+
+    formula = next(item for item in result if "COORD012" in item.name)
+    assert formula.weight == BaseCheck.HIGH
+    assert any(
+        "formula" in message and "attribute to be absent" in message
+        for message in formula.msgs
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        cv,
+        severities=FAMILIES_WITH_INFORMATION,
+        attributes_allowed_when_unset=("formula",),
+    )
+    assert not any("attribute to be absent" in message for message in messages(result))
+    information = next(item for item in result if "COORD004a" in item.name)
+    assert information.weight == BaseCheck.LOW
+    assert any("defines formula=" in message for message in information.msgs)
+
+
+@pytest.mark.parametrize("file_value", ["sigma: lev", ""])
+def test_generic_vertical_without_formula_terms_requires_attribute_absence(
+    nc, file_value
+):
+    cv = _sigma_file_and_catalog(nc)
+    cv.model_levels["sigma"]["formula"] = ""
+    cv.model_levels["sigma"]["z_factors"] = []
+    nc.variables["lev"].delncattr("formula")
+    nc.variables["lev"].formula_terms = file_value
+
+    result = check_coordinate_catalog(nc, cv, severities=FAMILIES)
+
+    formula = next(item for item in result if "COORD012" in item.name)
+    assert formula.weight == BaseCheck.HIGH
+    assert any(
+        "defines formula_terms=" in message and "attribute to be absent" in message
+        for message in formula.msgs
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        cv,
+        severities=FAMILIES_WITH_INFORMATION,
+        attributes_allowed_when_unset=("formula_terms",),
+    )
+    assert not any("attribute to be absent" in message for message in messages(result))
+    information = next(item for item in result if "COORD004a" in item.name)
+    assert information.weight == BaseCheck.LOW
+    assert any("defines formula_terms=" in message for message in information.msgs)
 
 
 @pytest.mark.parametrize("dimensions", [(), ("lev",)])

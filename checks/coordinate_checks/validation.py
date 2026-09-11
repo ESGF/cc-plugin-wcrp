@@ -54,6 +54,9 @@ class Findings:
                 "[COORD004] Coordinate metadata "
                 f"{self.severity_word('recommendations', noun=True)}s"
             ),
+            "allowed_when_unset": (
+                "[COORD004a] Allowed attributes with unset definitions"
+            ),
             "direction": "[COORD005] Coordinate monotonicity and stored direction",
             "valid_range": "[COORD006] Coordinate valid range",
             "requested_values": "[COORD007] Requested coordinate values",
@@ -95,7 +98,29 @@ def check_attributes(
     *,
     fallback_long_name: bool = True,
     missing_ok: bool = False,
+    empty_values_must_be_absent: bool = False,
+    allowed_when_unset=(),
 ):
+    def report_unprescribed(attribute: str, actual):
+        if attribute in allowed_when_unset:
+            report_allowed_when_unset(findings, var, name, attribute, actual)
+            return
+        if empty_values_must_be_absent and attribute in var.ncattrs():
+            findings.add(
+                "attributes",
+                f"'{name}' defines {attribute}={formatted(actual)}; it is "
+                f"{findings.severity_word('attributes')} for the attribute to be "
+                "absent when its coordinate-definition value is empty.",
+            )
+        elif actual:
+            findings.add(
+                "recommendations",
+                f"'{name}' has {attribute}={formatted(actual)}, while its coordinate "
+                f"definition does not prescribe {attribute}; it is "
+                f"{findings.severity_word('recommendations')} to verify the extra "
+                "attribute.",
+            )
+
     expected_standard_name = str(entry.get("cf_standard_name") or "")
     actual_standard_name = ncattr(var, "standard_name")
     if expected_standard_name:
@@ -108,14 +133,8 @@ def check_attributes(
                 f"{findings.severity_word('attributes')} value is "
                 f"{expected_standard_name!r}.",
             )
-    elif actual_standard_name:
-        findings.add(
-            "recommendations",
-            f"'{name}' has standard_name={formatted(actual_standard_name)}, while "
-            "the coordinate definition leaves it model-dependent; it is "
-            f"{findings.severity_word('recommendations')} to verify that the extra "
-            "metadata is appropriate.",
-        )
+    else:
+        report_unprescribed("standard_name", actual_standard_name)
 
     expected_long_name = str(entry.get("long_name") or "")
     actual_long_name = ncattr(var, "long_name")
@@ -158,14 +177,8 @@ def check_attributes(
                 f"'{name}' {file_name}={formatted(actual)}; the "
                 f"{findings.severity_word('attributes')} value is {expected!r}.",
             )
-        elif not expected and actual:
-            findings.add(
-                "recommendations",
-                f"'{name}' has {file_name}={formatted(actual)}, while its coordinate "
-                f"definition does not prescribe {file_name}; it is "
-                f"{findings.severity_word('recommendations')} to verify the extra "
-                "attribute.",
-            )
+        elif not expected:
+            report_unprescribed(file_name, actual)
 
     expected_units = str(entry.get("units") or "")
     actual_units = ncattr(var, "units")
@@ -177,14 +190,27 @@ def check_attributes(
         )
         if not matches:
             findings.add("attributes", f"'{name}' {detail}.")
-    elif actual_units:
-        findings.add(
-            "recommendations",
-            f"'{name}' has units={formatted(actual_units)}, while its coordinate "
-            "definition does not prescribe units; it is "
-            f"{findings.severity_word('recommendations')} to verify the extra "
-            "attribute.",
-        )
+    else:
+        report_unprescribed("units", actual_units)
+
+
+def report_allowed_when_unset(
+    findings: Findings,
+    var,
+    name: str,
+    attribute: str,
+    actual,
+) -> bool:
+    """Report a configured exception when the file attribute is present."""
+    if attribute not in var.ncattrs():
+        return False
+    findings.add(
+        "allowed_when_unset",
+        f"'{name}' defines {attribute}={formatted(actual)} although its coordinate "
+        "definition is empty; this is permitted by the configured "
+        "allowed_when_unset exception.",
+    )
+    return True
 
 
 def numeric_values(var) -> np.ndarray | None:
@@ -231,6 +257,69 @@ def _strict_direction(array: np.ndarray) -> str | None:
     if np.all(differences < 0):
         return "decreasing"
     return None
+
+
+def check_profile_direction(
+    findings: Findings,
+    profile,
+    label: str,
+    direction: str,
+):
+    """Check the strict direction of a stored or formula-derived profile."""
+    try:
+        array = np.ma.asarray(profile, dtype="float64")
+        if np.any(np.ma.getmaskarray(array)):
+            raise ValueError("contains masked values")
+        array = np.asarray(array, dtype="float64").reshape(-1)
+    except (TypeError, ValueError) as exc:
+        findings.add("direction", f"Could not check {label}: {exc}.")
+        return
+    if array.size < 2 or not np.all(np.isfinite(array)):
+        findings.add(
+            "direction",
+            f"{label} has insufficient finite values to verify stored_direction.",
+        )
+        return
+    actual = _strict_direction(array)
+    if actual != direction:
+        findings.add(
+            "direction",
+            f"{label} is not strictly {direction} as required by stored_direction.",
+        )
+
+
+def check_direct_vertical_values(findings: Findings, var, name: str, entry: dict):
+    """Check physical value domains for direct pressure, height, and depth."""
+    standard_name = str(entry.get("cf_standard_name") or "")
+    if standard_name not in {"air_pressure", "height", "depth"}:
+        return
+    try:
+        array = numeric_values(var)
+        if array is None or not array.size or not np.all(np.isfinite(array)):
+            findings.add(
+                "direction",
+                f"Could not check physical values of coordinate '{name}'.",
+            )
+            return
+        if standard_name == "air_pressure":
+            valid = bool(np.all(array > 0))
+            expected = "strictly positive"
+        else:
+            valid = bool(np.all(array >= 0))
+            expected = "non-negative"
+        if not valid:
+            findings.add(
+                "direction",
+                f"Coordinate '{name}' with standard_name={standard_name!r} must "
+                f"contain {expected} physical values; found minimum {array.min()}.",
+            )
+    except Exception as exc:
+        # This optional physical check must not prevent other coordinate checks.
+        findings.add(
+            "direction",
+            f"Could not check physical values of coordinate '{name}': "
+            f"{type(exc).__name__}: {exc}.",
+        )
 
 
 def check_direction(findings: Findings, var, name: str, entry: dict):

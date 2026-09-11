@@ -16,6 +16,7 @@ from checks.coordinate_checks.validation import (
     check_attributes,
     check_bounds,
     check_bounds_direction,
+    check_direct_vertical_values,
     check_direction,
     check_dtype,
     check_trailing_dimension,
@@ -29,7 +30,15 @@ def listed_coordinates(data_var) -> list[str]:
     return value.split() if isinstance(value, str) else []
 
 
-def validate_standard_1d(findings: Findings, ds, entry_id: str, entry: dict):
+def validate_standard_1d(
+    findings: Findings,
+    ds,
+    entry_id: str,
+    entry: dict,
+    *,
+    check_direct_physical_values: bool = True,
+    attributes_allowed_when_unset=(),
+):
     name = str(entry.get("out_name") or entry_id)
     if name not in ds.variables:
         findings.add(
@@ -48,11 +57,20 @@ def validate_standard_1d(findings: Findings, ds, entry_id: str, entry: dict):
             f"found dimensions {list(var.dimensions)}.",
         )
     check_dtype(findings, var, name, entry)
-    check_attributes(findings, var, name, entry)
+    check_attributes(
+        findings,
+        var,
+        name,
+        entry,
+        empty_values_must_be_absent=True,
+        allowed_when_unset=attributes_allowed_when_unset,
+    )
     check_valid_range(findings, var, name, entry)
     # Time monotonicity remains owned by the existing project-configured check.
     if entry.get("axis") != "T":
         check_direction(findings, var, name, entry)
+        if check_direct_physical_values:
+            check_direct_vertical_values(findings, var, name, entry)
     check_requested_numeric(findings, var, name, entry)
     validate_time_semantics(findings, ds, var, name, entry)
     if not entry.get("is_climatology"):
@@ -339,13 +357,28 @@ def validate_site(findings, ds, data_var, entry_id, entry):
             )
 
 
-def validate_ordinary(findings, ds, catalog, data_var):
+def validate_ordinary(
+    findings,
+    ds,
+    catalog,
+    data_var,
+    *,
+    check_direct_physical_values=True,
+    attributes_allowed_when_unset=(),
+):
     resolved = {}
     for entry_id in catalog.coordinate_ids:
         entry = catalog.data_coordinates[entry_id]
         kind = coordinate_type(entry)
         if kind == "standard_1d":
-            resolved[entry_id] = validate_standard_1d(findings, ds, entry_id, entry)
+            resolved[entry_id] = validate_standard_1d(
+                findings,
+                ds,
+                entry_id,
+                entry,
+                check_direct_physical_values=check_direct_physical_values,
+                attributes_allowed_when_unset=attributes_allowed_when_unset,
+            )
         elif kind == "scalar":
             resolved[entry_id] = validate_scalar(
                 findings, ds, data_var, entry_id, entry
