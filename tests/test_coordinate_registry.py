@@ -121,6 +121,35 @@ def test_catalog_reads_each_coordinate_collection_once():
     ]
 
 
+def test_catalog_normalizes_mixed_case_branded_variable_id():
+    class API:
+        requested_id = None
+
+        def get_term_in_data_descriptor(self, descriptor, identifier, fields):
+            self.requested_id = identifier
+            return {
+                "id": "baresoilfrac_tavg-u-hxy-u",
+                "out_name": "baresoilFrac",
+                "dimensions": ["time1"],
+            }
+
+        def get_all_terms_in_collection(self, project, descriptor, fields):
+            if descriptor == "data_coordinate":
+                return [coordinate("time1", "standard_1d", "time")]
+            return [{"id": f"test_{descriptor}"}]
+
+    api = API()
+    result = load_catalog(
+        "baresoilFrac_tavg-u-hxy-u",
+        api=api,
+        installed_version="5.1.0",
+    )
+
+    assert api.requested_id == "baresoilfrac_tavg-u-hxy-u"
+    assert result.branded_variable_id == "baresoilfrac_tavg-u-hxy-u"
+    assert result.data_variable_name == "baresoilFrac"
+
+
 def test_setup_failure_is_one_verbose_high_result(nc, monkeypatch):
     nc.branded_variable = "ta_ti-u-hxy-air"
     calls = []

@@ -114,6 +114,36 @@ def test_lookup_requires_an_exact_known_branded_variable_id():
         lookup_expected_variable_metadata(find_terms, NEW_RECORD["id"])
 
 
+def test_lookup_normalizes_drs_case_but_preserves_variable_metadata():
+    calls = []
+    branded = {
+        **NEW_RECORD,
+        "id": "baresoilfrac_tavg-u-hxy-u",
+        "variable_root_name": "baresoilFrac",
+        "long_name": None,
+        "out_name": "baresoilFrac",
+    }
+
+    def find_terms(**kwargs):
+        calls.append((kwargs["data_descriptor_id"], kwargs["expression"]))
+        if kwargs["data_descriptor_id"] == "known_branded_variable":
+            return [branded]
+        return [{"id": "baresoilfrac", "long_name": "Bare Soil Percentage"}]
+
+    lookup = lookup_expected_variable_metadata(
+        find_terms,
+        "baresoilFrac_tavg-u-hxy-u",
+    )
+
+    assert calls == [
+        ("known_branded_variable", "baresoilfrac_tavg-u-hxy-u"),
+        ("variable", "baresoilfrac"),
+    ]
+    assert lookup.warning is None
+    assert lookup.expected.out_name == "baresoilFrac"
+    assert lookup.expected.long_name == "Bare Soil Percentage"
+
+
 @pytest.mark.parametrize(
     ("module_name", "checker_class", "uses_file_branded_variable"),
     [

@@ -167,10 +167,11 @@ def load_catalog(
             "The file has no non-empty global 'branded_variable' attribute, so "
             "its required coordinate IDs cannot be obtained from ESGVoc."
         )
+    lookup_id = str(branded_variable_id).strip().lower()
     try:
         branded_record = api.get_term_in_data_descriptor(
             "known_branded_variable",
-            branded_variable_id,
+            lookup_id,
             ["id", "out_name", "dimensions"],
         )
     except Exception as exc:
@@ -207,7 +208,7 @@ def load_catalog(
 
     return Catalog(
         project_id=project_id,
-        branded_variable_id=branded_variable_id,
+        branded_variable_id=str(branded.get("id") or lookup_id),
         branded_variable=branded,
         coordinate_ids=tuple(coordinate_ids),
         data_coordinates=data_coordinates,

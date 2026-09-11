@@ -51,6 +51,11 @@ def _nonempty(value):
     return value if value is not None and str(value).strip() else None
 
 
+def _lookup_id(value: Any) -> str:
+    """Return the canonical lowercase ESGVoc identifier used for lookups."""
+    return str(value).strip().lower()
+
+
 def _reference_id(value: Any) -> str | None:
     if isinstance(value, str):
         return value.strip() or None
@@ -111,9 +116,10 @@ def lookup_expected_variable_metadata(
     lookup is optional and therefore produces a warning, while failure to read
     the known-branded-variable record is fatal.
     """
+    branded_lookup_id = _lookup_id(branded_variable_id)
     try:
         terms = find_terms(
-            expression=str(branded_variable_id),
+            expression=branded_lookup_id,
             data_descriptor_id="known_branded_variable",
             only_id=True,
         )
@@ -123,7 +129,7 @@ def lookup_expected_variable_metadata(
             f"{branded_variable_id!r}: {type(exc).__name__}: {exc}"
         ) from exc
 
-    known_branded_variable = _exact_term(terms or [], str(branded_variable_id))
+    known_branded_variable = _exact_term(terms or [], branded_lookup_id)
     if known_branded_variable is None:
         raise KnownBrandedVariableLookupError(
             f"Known branded variable {branded_variable_id!r} was not found in "
@@ -134,14 +140,15 @@ def lookup_expected_variable_metadata(
     if expected.long_name:
         return VariableMetadataLookup(expected)
 
-    variable_id = expected.variable_root_name or _nonempty(fallback_variable_id)
-    if not variable_id:
+    variable_source = expected.variable_root_name or _nonempty(fallback_variable_id)
+    if not variable_source:
         return VariableMetadataLookup(
             expected,
             "The known_branded_variable record has no long_name and no "
             "variable root could be selected for the fallback lookup. Only "
             "'long_name' is unavailable.",
         )
+    variable_id = _lookup_id(variable_source)
 
     try:
         variable_terms = find_terms(
