@@ -18,13 +18,30 @@ severity = "H"
 # Check PATH002 
 severity = "H"
 
-[drs.time_range_label_precision]
-# Configurable precision used by TIME003 to validate filename timeranges.
-yr = "yyyy"
+[drs.time_range]
+# C3S CMIP6 climatology time ranges use the legacy -clim suffix.
+severity = "H"
+climatology_suffix = "-clim"
+
+[drs.time_range.label_precision]
+# Configurable precision used by TIME003 to validate filename time ranges.
+climatology = "yyyyMM"
+cen = "yyyy"
 dec = "yyyy"
+yr = "yyyy"
+yrPt = "yyyy"
+sem = "yyyyMM"
 mon = "yyyyMM"
+monC = "yyyyMM"
+monClim = "yyyyMM"
+monPt = "yyyyMM"
 day = "yyyyMMdd"
-"6hr" = "yyyyMMddhhmm"
-"3hr" = "yyyyMMddhhmm"
-"1hr" = "yyyyMMddhhmm"
+6hr = "yyyyMMddhhmm"
+6hrPt = "yyyyMMddhhmm"
+3hr = "yyyyMMddhhmm"
+3hrPt = "yyyyMMddhhmm"
+1hr = "yyyyMMddhhmm"
+1hrCM = "yyyyMMddhhmm"
+1hrPt = "yyyyMMddhhmm"
 subhr = "yyyyMMddhhmmss"
+subhrPt = "yyyyMMddhhmmss"

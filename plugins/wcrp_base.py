@@ -555,7 +555,6 @@ class WCRPBaseCheck(BaseCheck):
         # required_attributes = []
         # Retrieve via esgvoc
         if required_attributes == [] and ESG_VOCAB_AVAILABLE:
-            print("Retrieving required attributes from ESGVOC")
             eproj = ev.get_project(self.project_name)
             if eproj:
                 for eatt in eproj.attr_specs:
@@ -565,7 +564,6 @@ class WCRPBaseCheck(BaseCheck):
                         else:
                             required_attributes.append(eatt.source_collection)
         required_attributes.sort(key=lambda x: x.lower())
-        # print("Required attributes:", required_attributes)
 
         global_attrs = {
             name: self.dataset.getncattr(name) for name in self.dataset.ncattrs()
