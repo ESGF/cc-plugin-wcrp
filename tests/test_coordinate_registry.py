@@ -94,7 +94,9 @@ def test_catalog_reads_each_coordinate_collection_once():
         def __init__(self):
             self.calls = []
 
-        def get_term_in_data_descriptor(self, descriptor, identifier, fields):
+        def get_term_in_collection(self, project, descriptor, identifier, fields):
+            assert project == "cmip7"
+            assert descriptor == "branded_variable"
             self.calls.append(("one", descriptor))
             return {
                 "id": identifier,
@@ -111,6 +113,7 @@ def test_catalog_reads_each_coordinate_collection_once():
     api = API()
     result = load_catalog("ta_ti-u-hxy-air", api=api, installed_version="5.1.0")
     assert result.coordinate_ids == ("time1",)
+    assert api.calls.count(("one", "branded_variable")) == 1
     assert api.calls.count(("all", "data_coordinate")) == 1
     assert [call for call in api.calls if call[0] == "all"] == [
         ("all", "data_coordinate"),
@@ -125,7 +128,9 @@ def test_catalog_normalizes_mixed_case_branded_variable_id():
     class API:
         requested_id = None
 
-        def get_term_in_data_descriptor(self, descriptor, identifier, fields):
+        def get_term_in_collection(self, project, descriptor, identifier, fields):
+            assert project == "cmip7"
+            assert descriptor == "branded_variable"
             self.requested_id = identifier
             return {
                 "id": "baresoilfrac_tavg-u-hxy-u",

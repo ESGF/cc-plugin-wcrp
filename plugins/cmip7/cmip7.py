@@ -96,9 +96,9 @@ except ImportError as e:
 
 # --- ESGVOC Variable Registry lookup ---
 try:
-    from esgvoc.api.universe import find_terms_in_data_descriptor
+    from esgvoc.api import find_terms_in_collection
 except Exception:
-    find_terms_in_data_descriptor = None
+    find_terms_in_collection = None
 
 
 def _deep_merge(a: dict, b: dict) -> dict:
@@ -406,7 +406,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return self._expected_term_cache, []
 
         results = []
-        if find_terms_in_data_descriptor is None:
+        if find_terms_in_collection is None:
             return None, results
 
         branded = None
@@ -434,9 +434,22 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             results.append(ctx.to_result())
             return None, results
 
+        def find_project_terms(expression, data_descriptor_id, **kwargs):
+            collection = (
+                "branded_variable"
+                if data_descriptor_id == "known_branded_variable"
+                else data_descriptor_id
+            )
+            return find_terms_in_collection(
+                expression=expression,
+                project_id=self.project_name,
+                collection_id=collection,
+                **kwargs,
+            )
+
         try:
             lookup = lookup_expected_variable_metadata(
-                find_terms_in_data_descriptor,
+                find_project_terms,
                 str(branded),
                 fallback_variable_id=str(variable_id).lower(),
             )
