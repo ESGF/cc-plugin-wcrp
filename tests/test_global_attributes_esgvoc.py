@@ -103,7 +103,7 @@ def test_esgvoc_report_uses_toml_severity_and_ignores_extra_attributes():
     assert failures[0].name == "[ATTR001] Global attribute 'source_id' existence"
     assert failures[0].weight == BaseCheck.HIGH
     assert failures[1].name == (
-        "[ATTR004] Global attribute 'activity_id' ESGVoc vocabulary check"
+        "[ATTR004] Global attribute 'activity_id' vocabulary check"
     )
     assert failures[1].weight == BaseCheck.MEDIUM
     assert all("history" not in result.name for result in results)
@@ -135,6 +135,41 @@ def test_esgvoc_string_array_results_are_grouped_by_attribute():
     assert all(not result.msgs for result in results)
 
 
+def test_multiple_invalid_tokens_remain_one_attr004_assertion():
+    report = GAReport(
+        project_id="cmip6",
+        filename="example.nc",
+        results=[
+            AttributeResult(
+                "activity_id",
+                False,
+                "'BAD1' not found in collection 'activity_id'",
+                "BAD1",
+                "activity_id",
+            ),
+            AttributeResult(
+                "activity_id",
+                False,
+                "'BAD2' not found in collection 'activity_id'",
+                "BAD2",
+                "activity_id",
+            ),
+        ],
+    )
+
+    results = check_global_attributes_esgvoc(
+        FakeDataset({"activity_id": "BAD1 BAD2"}),
+        "cmip6",
+        validator=FakeValidator(report),
+    )
+
+    attr004 = [result for result in results if result.name.startswith("[ATTR004]")]
+    assert len(attr004) == 1
+    assert len(attr004[0].msgs) == 1
+    assert "BAD1" in attr004[0].msgs[0]
+    assert "BAD2" in attr004[0].msgs[0]
+
+
 def test_esgvoc_failure_is_reported_once_as_setup_error():
     class BrokenValidator(FakeValidator):
         def validate(self, attributes, filename=None):
@@ -147,5 +182,5 @@ def test_esgvoc_failure_is_reported_once_as_setup_error():
     )
 
     assert len(results) == 1
-    assert results[0].name == "[ATTR000] ESGVoc global attribute validation setup"
+    assert results[0].name == "[ATTR004] ESGVoc global attribute validation setup"
     assert "RuntimeError: database unavailable" in results[0].msgs[0]

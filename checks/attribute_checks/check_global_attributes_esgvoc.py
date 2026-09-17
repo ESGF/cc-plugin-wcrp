@@ -106,7 +106,7 @@ def check_global_attributes_esgvoc(
     except Exception as exc:  # noqa: BLE001
         ctx = TestCtx(
             default_severity,
-            "[ATTR000] ESGVoc global attribute validation setup",
+            "[ATTR004] ESGVoc global attribute validation setup",
         )
         ctx.add_failure(
             f"Global attributes could not be validated for project "
@@ -146,12 +146,14 @@ def check_global_attributes_esgvoc(
 
         vocabulary = TestCtx(
             severity,
-            f"[ATTR004] Global attribute '{name}' ESGVoc vocabulary check",
+            f"[ATTR004] Global attribute '{name}' vocabulary check",
         )
         failures = [item for item in vocabulary_results if not item.is_valid]
         if failures:
-            for failure in failures:
-                vocabulary.add_failure(failure.message)
+            # One attribute is one ATTR004 assertion, including string arrays.
+            # Combining token failures preserves the existing check score and
+            # identity instead of increasing the denominator per invalid token.
+            vocabulary.add_failure("; ".join(item.message for item in failures))
         else:
             vocabulary.add_pass()
         results.append(vocabulary.to_result())
