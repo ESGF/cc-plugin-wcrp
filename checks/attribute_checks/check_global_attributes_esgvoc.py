@@ -71,19 +71,16 @@ def _rule_value(rule: Any, name: str, default: Any = None) -> Any:
     return getattr(rule, name, default)
 
 
-def _has_local_value_rule(rule: Any) -> bool:
-    """Return whether TOML defines an ATTR004 rule other than CV membership."""
-    return any(
-        (
-            _rule_value(rule, "pattern") is not None,
-            _rule_value(rule, "constant") is not None,
-            _rule_value(rule, "threshold") is not None,
-            _rule_value(rule, "enum") is not None,
-            bool(_rule_value(rule, "as_variable")),
-            bool(_rule_value(rule, "is_positive")),
-            _rule_value(rule, "cv_source_term_key") is not None,
-        )
-    )
+def _suite_value_type(spec: Any) -> str | None:
+    """Translate ESGVoc value types to the attribute-suite spelling."""
+    return {
+        "string": "str",
+        "string_array": "str_array",
+        "integer": "int",
+        "double": "float",
+        "float": "float",
+        "boolean": "bool",
+    }.get(getattr(spec, "attr_field_value_type", None))
 
 
 def normalize_global_attributes(ds, validator: GAValidator) -> dict[str, Any]:
@@ -212,10 +209,11 @@ def check_global_attributes_hybrid(
     default_severity: int = BaseCheck.HIGH,
     validator: GAValidator | None = None,
 ):
-    """Combine project ESGVoc specifications with local TOML rules.
+    """Validate ESGVoc specifications and apply TOML-only complements.
 
-    Existing TOML requiredness and non-vocabulary ATTR004 rules take precedence
-    so adopting ESGVoc does not silently change established project policy.
+    ESGVoc is authoritative for every attribute it specifies: name, requiredness,
+    type and controlled-vocabulary mapping.  TOML supplies severity for those
+    attributes and complete rules only for attributes absent from ESGVoc.
     """
     try:
         active_validator = validator or get_global_attribute_validator(project_id)
@@ -226,25 +224,11 @@ def check_global_attributes_hybrid(
 
     severities: dict[str, int] = {}
     local_names: dict[str, tuple[str, Any]] = {}
-    suppress_existence: set[str] = set()
-    suppress_vocabulary: set[str] = set()
 
     for key, rule in attribute_rules.items():
         name = str(_rule_value(rule, "attribute_name") or key)
         local_names[name] = (str(key), rule)
         severities[name] = severity_resolver(_rule_value(rule, "severity"))
-
-        spec = specifications.get(name)
-        if spec is None:
-            continue
-
-        local_required = _rule_value(rule, "is_required", True)
-        esgvoc_required = bool(getattr(spec, "is_required", False))
-        if not isinstance(local_required, bool) or local_required != esgvoc_required:
-            suppress_existence.add(name)
-
-        if _has_local_value_rule(rule):
-            suppress_vocabulary.add(name)
 
     results = check_global_attributes_esgvoc(
         ds,
@@ -252,23 +236,29 @@ def check_global_attributes_hybrid(
         severity_by_attribute=severities,
         default_severity=default_severity,
         validator=active_validator,
-        suppress_existence_for=suppress_existence,
-        suppress_vocabulary_for=suppress_vocabulary,
     )
 
+    # GAValidator currently uses the ESGVoc type to parse string arrays but
+    # does not emit explicit type/UTF-8 assertions.  Reuse the existing checker
+    # assertions with values derived from the ESGVoc specification itself.
+    for name, spec in specifications.items():
+        results.extend(
+            check_attribute_suite(
+                ds=ds,
+                var_name=None,
+                attribute_name=name,
+                severity=severities.get(name, default_severity),
+                value_type=_suite_value_type(spec),
+                is_required=bool(getattr(spec, "is_required", False)),
+                report_existence=False,
+                validate_vocabulary=False,
+            )
+        )
+
+    # A TOML entry with no ESGVoc specification is a project-specific rule.
     for name, (_, rule) in local_names.items():
-        spec = specifications.get(name)
-        local_required = _rule_value(rule, "is_required", True)
-        esgvoc_owns_existence = (
-            spec is not None
-            and isinstance(local_required, bool)
-            and local_required == bool(getattr(spec, "is_required", False))
-        )
-        esgvoc_owns_vocabulary = (
-            spec is not None
-            and getattr(spec, "source_collection", None) is not None
-            and not _has_local_value_rule(rule)
-        )
+        if name in specifications:
+            continue
 
         results.extend(
             check_attribute_suite(
@@ -277,7 +267,7 @@ def check_global_attributes_hybrid(
                 attribute_name=name,
                 severity=severities[name],
                 value_type=_rule_value(rule, "value_type"),
-                is_required=local_required,
+                is_required=_rule_value(rule, "is_required", True),
                 na_value=_rule_value(rule, "na_value"),
                 pattern=_rule_value(rule, "pattern"),
                 constant=_rule_value(rule, "constant"),
@@ -290,8 +280,6 @@ def check_global_attributes_hybrid(
                 cv_source_collection_key=_rule_value(rule, "cv_source_collection_key"),
                 project_name=project_id,
                 cv_source_term_key=_rule_value(rule, "cv_source_term_key"),
-                report_existence=not esgvoc_owns_existence,
-                validate_vocabulary=not esgvoc_owns_vocabulary,
             )
         )
 

@@ -1,371 +1,158 @@
-# ==============================================================================
-# == Global attributes checks
-# ==============================================================================
+# Global attribute policy
+# ESGVoc ncattvalid is authoritative for attributes it specifies.
+# Those entries contain severity only. Full rules below are local
+# complements for attributes not defined by ncattvalid.
 
 [global.attributes.activity_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str_array"
-is_required = true
-cv_source_collection = "activity_id"
+
+[global.attributes.branch_method]
+severity = "M"
+
+[global.attributes.branch_time_in_child]
+severity = "M"
+
+[global.attributes.branch_time_in_parent]
+severity = "M"
+
+[global.attributes.Conventions]
+severity = "H"
 
 [global.attributes.creation_date]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "L"
-value_type = "str"
-is_required = true
-cv_source_collection = "creation_date"
 
 [global.attributes.data_specs_version]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "data_specs_version"
-
-[global.attributes.description]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "M"
-value_type = "str"
-is_required = false
-pattern = ".*"
-
-[global.attributes.experiment_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "experiment_id"
 
 [global.attributes.experiment]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
-value_type = "str"
-is_required = false
-pattern = ".*"
+
+[global.attributes.experiment_id]
+severity = "H"
+
+[global.attributes.forcing_index]
+severity = "H"
 
 [global.attributes.frequency]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "frequency"
 
 [global.attributes.further_info_url]
 severity = "H"
-value_type = "str"
-is_required = true
 
 [global.attributes.grid_label]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "grid_label"
 
 [global.attributes.grid]
 severity = "M"
-value_type = "str"
-is_required = true
-pattern = ".*"
-
-[global.attributes.institution_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "institution_id"
 
 [global.attributes.institution]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
-value_type = "str"
-is_required = false
-cv_source_collection = "institution_id"
-cv_source_collection_key = "description"
 
-[global.attributes.license]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "L"
-value_type = "str"
-is_required = false
-cv_source_collection = "license"
-
-[global.attributes.nominal_resolution]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
+[global.attributes.institution_id]
 severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "nominal_resolution"
 
 [global.attributes.initialization_index]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "int"
-is_required = true
+
+[global.attributes.license]
+severity = "L"
 
 [global.attributes.mip_era]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "mip_era"
 
-[global.attributes.source]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "L"
-value_type = "str"
-is_required = false
-
-[global.attributes.source_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
+[global.attributes.nominal_resolution]
 severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "source_id"
-
-[global.attributes.title]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "L"
-value_type = "str"
-is_required = false
-pattern = ".*"
-
-[global.attributes.table_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "table_id"
-
-[global.attributes.tracking_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "tracking_id"
-
-[global.attributes.variable_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "variable_id"
-
-[global.attributes.variant_label]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "variant_label"
-
-[global.attributes.product]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = true
-cv_source_collection = "product"
-
-[global.attributes.branch_method]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "M"
-value_type = "str"
-is_required = false
-na_value = "no parent"
-pattern = ".*"
-
-[global.attributes.branch_time_in_parent]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "M"
-value_type = "float"
-is_required = false
-
-[global.attributes.branch_time_in_child]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "M"
-value_type = "float"
-is_required = false
-
-[global.attributes.physics_index]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "int"
-is_required = true
-
-[global.attributes.realm]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str_array"
-is_required = true
-cv_source_collection = "realm"
-
-[global.attributes.references]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "L"
-value_type = "str"
-is_required = false
-pattern = ".*"
-
-[global.attributes.sub_experiment_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "M"
-value_type = "str"
-is_required = "has_sub_experiment"
-na_value = "none"
-cv_source_collection = "sub_experiment_id"
-
-[global.attributes.sub_experiment]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "M"
-value_type = "str"
-is_required = false
-na_value = "none"
-cv_source_collection = "sub_experiment_id"
-cv_source_collection_key = "description"
 
 [global.attributes.parent_activity_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str"
-is_required = "has_parent_activity"
-na_value = "no parent"
-cv_source_collection = "activity_id"
 
 [global.attributes.parent_experiment_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str"
-is_required = "has_parent_experiment"
-na_value = "no parent"
-cv_source_collection = "experiment_id"
 
 [global.attributes.parent_mip_era]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str"
-is_required = false
-na_value = "no parent"
-cv_source_collection = "mip_era"
 
 [global.attributes.parent_source_id]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "H"
-value_type = "str"
-is_required = false
-na_value = "no parent"
-cv_source_collection = "source_id"
-
-[global.attributes.parent_time_units]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "str"
-is_required = false
-na_value = "no parent"
-pattern = '^days since [0-9]{4}-[0-9]{1,2}-[0-9]{1,2}( [0-9]{2}:[0-9]{2}:[0-9]{2})?$'
 
 [global.attributes.parent_variant_label]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
+severity = "H"
+
+[global.attributes.physics_index]
+severity = "H"
+
+[global.attributes.product]
+severity = "H"
+
+[global.attributes.realization_index]
+severity = "H"
+
+[global.attributes.realm]
+severity = "H"
+
+[global.attributes.references]
+severity = "L"
+
+[global.attributes.source]
+severity = "L"
+
+[global.attributes.source_id]
+severity = "H"
+
+[global.attributes.source_type]
+severity = "M"
+
+[global.attributes.sub_experiment]
+severity = "M"
+
+[global.attributes.sub_experiment_id]
+severity = "M"
+
+[global.attributes.table_id]
+severity = "H"
+
+[global.attributes.tracking_id]
+severity = "H"
+
+[global.attributes.variable_id]
+severity = "H"
+
+[global.attributes.variant_label]
+severity = "H"
+
+[global.attributes.title]
+severity = "L"
+
+[global.attributes.external_variables]
+severity = "H"
+
+[global.attributes.description]
+severity = "M"
+value_type = "str"
+is_required = false
+pattern = ".*"
+
+[global.attributes.parent_time_units]
 severity = "H"
 value_type = "str"
 is_required = false
-cv_source_collection = "variant_label"
-
-[global.attributes.conventions]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-attribute_name = "Conventions"
-severity = "H"
-value_type = "str_array"
-is_required = true
-cv_source_collection = "Conventions"
+na_value = "no parent"
+pattern = "^days since [0-9]{4}-[0-9]{1,2}-[0-9]{1,2}( [0-9]{2}:[0-9]{2}:[0-9]{2})?$"
 
 [global.attributes.contact]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 value_type = "str"
 is_required = false
 pattern = ".*@.*"
 
-[global.attributes.realization_index]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "int"
-is_required = true
-
-[global.attributes.forcing_index]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "H"
-value_type = "int"
-is_required = true
-
 [global.attributes.c3s_disclaimer]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "M"
 value_type = "str"
 is_required = false
 pattern = ".*"
 
-[global.attributes.source_type]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
-severity = "M"
-value_type = "str_array"
-is_required = true
-cv_source_collection = "source_type"
-
 [global.attributes.comment]
-# Checks ATTR001 ATTR002 ATTR003 ATTR004
 severity = "L"
 value_type = "str"
 is_required = false
 pattern = ".*"
-
-
-# ==============================================================================
-# == Global attributes consistency Checks
-# ==============================================================================
-[global.consistency.filename_vs_attributes]
-# Checks ATTR005a
-severity = "H"
-
-[global.consistency.experiment_id_vs_activity_id]
-# ATTR007a
-severity = "M"
-
-[global.consistency.experiment_id_vs_experiment]
-# ATTR007b
-severity = "M"
-
-[global.consistency.experiment_id_vs_parent_experiment_id]
-# ATTR007c
-severity = "M"
-
-[global.consistency.experiment_id_vs_sub_experiment_id]
-# ATTR007d
-severity = "M"
-
-[global.consistency.institution_id_vs_institution]
-# ATTR009
-severity = "M"
-
-[global.consistency.source_id_vs_institution_id]
-# ATTR010
-severity = "M"
-
-[global.consistency.frequency_vs_table_id]
-# ATTR008
-severity = "H"
-
-[global.consistency.variant_label_vs_realization_index]
-# ATTR006a
-severity = "H"
-
-[global.consistency.variant_label_vs_initialization_index]
-# ATTR006b
-severity = "H"
-
-[global.consistency.variant_label_vs_physics_index]
-# ATTR006c
-severity = "H"
-
-[global.consistency.variant_label_vs_forcing_index]
-# ATTR006d
-severity = "H"

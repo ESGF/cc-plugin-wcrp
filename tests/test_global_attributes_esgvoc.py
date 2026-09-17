@@ -246,7 +246,7 @@ def test_hybrid_preserves_attr001_to_attr004_check_identities_without_duplicates
     assert all(not result.msgs for result in results)
 
 
-def test_hybrid_local_pattern_replaces_esgvoc_vocabulary_assertion():
+def test_hybrid_esgvoc_vocabulary_ignores_duplicate_toml_rule():
     report = GAReport(
         project_id="cmip7",
         filename="example.nc",
@@ -281,11 +281,11 @@ def test_hybrid_local_pattern_replaces_esgvoc_vocabulary_assertion():
 
     attr004 = [result for result in results if result.name.startswith("[ATTR004]")]
     assert len(attr004) == 1
-    assert attr004[0].name.endswith("pattern check")
-    assert not attr004[0].msgs
+    assert attr004[0].name.endswith("vocabulary check")
+    assert attr004[0].msgs == ["registry rejected the value"]
 
 
-def test_hybrid_toml_optional_rule_overrides_esgvoc_requiredness():
+def test_hybrid_esgvoc_requiredness_ignores_duplicate_toml_rule():
     report = GAReport(
         project_id="cmip7",
         filename="example.nc",
@@ -309,4 +309,6 @@ def test_hybrid_toml_optional_rule_overrides_esgvoc_requiredness():
         validator=validator,
     )
 
-    assert results == []
+    failures = [result for result in results if result.msgs]
+    assert len(failures) == 1
+    assert failures[0].name == "[ATTR001] Global attribute 'license' existence"
