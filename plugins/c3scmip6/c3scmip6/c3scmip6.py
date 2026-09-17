@@ -399,37 +399,7 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
     # 2) Global attributes
     # -------------------------------------------------------------------------
     def check_Global_Attributes(self, ds):
-        res = []
-        if not self.config or not self.config.global_:
-            return res
-
-        for attr_key, rule in self.config.global_.attributes.items():
-            sev = self.get_severity(rule.severity)
-            name_in_file = rule.attribute_name or attr_key
-            res.extend(
-                check_attribute_suite(
-                    ds=ds,
-                    var_name=None,
-                    attribute_name=name_in_file,
-                    severity=sev,
-                    value_type=rule.value_type,
-                    is_required=rule.is_required,
-                    na_value=rule.na_value,
-                    pattern=rule.pattern,
-                    constant=rule.constant,
-                    threshold=rule.threshold,
-                    is_above_threshold=rule.is_above_threshold,
-                    enum=rule.enum,
-                    as_variable=rule.as_variable,
-                    is_positive=rule.is_positive,
-                    cv_source_collection=rule.cv_source_collection,
-                    cv_source_collection_key=rule.cv_source_collection_key,
-                    project_name=self.project_name,
-                    expected_term=None,
-                    cv_source_term_key=rule.cv_source_term_key,
-                )
-            )
-        return res
+        return self._check_global_attributes_hybrid(ds)
 
     # -------------------------------------------------------------------------
     # 3) DRS checks

@@ -12,6 +12,9 @@ from compliance_checker.base import BaseCheck, TestCtx
 from compliance_checker.cf import util as cfutil
 from netCDF4 import Dataset
 
+from checks.attribute_checks.check_global_attributes_esgvoc import (
+    check_global_attributes_hybrid,
+)
 from checks.utils import infer_frequency, sanitize
 
 # Compliance Checker 6 moved these helpers from compliance_checker.cfutil.
@@ -233,6 +236,18 @@ class WCRPBaseCheck(BaseCheck):
         if severity_str is None:
             return default_severity_const
         return self.SEVERITY_MAP.get(str(severity_str).upper(), default_severity_const)
+
+    def _check_global_attributes_hybrid(self, dataset):
+        """Run shared ESGVoc/TOML global-attribute validation."""
+        if not self.config or not getattr(self.config, "global_", None):
+            return []
+        return check_global_attributes_hybrid(
+            dataset,
+            self.project_name,
+            self.config.global_.attributes,
+            self.get_severity,
+            default_severity=BaseCheck.HIGH,
+        )
 
     def _initialize_CV_info(self, tables_path):
         """Find and read CV and CMOR tables and extract basic information."""
