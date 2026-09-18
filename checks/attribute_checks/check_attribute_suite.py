@@ -84,10 +84,6 @@ def check_attribute_suite(
     attribute_nc_name: Optional[str] = None,
     # Optional label prefix for nicer report grouping
     context: Optional[str] = None,
-    # Hybrid global-attribute orchestration can delegate these assertions to
-    # ESGVoc while retaining ATTR002/003 and project-specific ATTR004 rules.
-    report_existence: bool = True,
-    validate_vocabulary: bool = True,
 ):
     """
     Attribute suite checks.
@@ -172,7 +168,7 @@ def check_attribute_suite(
     try:
         attr_value = obj.getncattr(nc_key)
     except AttributeError:
-        if is_required and report_existence:
+        if is_required:
             existence_ctx.add_failure(
                 f"Required {where.lower()} '{attribute_name}' is missing."
             )
@@ -188,7 +184,7 @@ def check_attribute_suite(
     # to a missing value and must fail.
     if na_value is not None:
         if str(attr_value).strip().lower() == str(na_value).strip().lower():
-            if is_required and report_existence:
+            if is_required:
                 existence_ctx.add_failure(
                     f"Required {where.lower()} '{attribute_name}' is set to "
                     f"'{attr_value}' but a real value is expected for this "
@@ -197,9 +193,8 @@ def check_attribute_suite(
                 results.append(existence_ctx.to_result())
             return results
 
-    if report_existence:
-        existence_ctx.add_pass()
-        results.append(existence_ctx.to_result())
+    existence_ctx.add_pass()
+    results.append(existence_ctx.to_result())
 
     # -------------------------------------------------------------------------
     # ATTR002 - Type check
@@ -251,7 +246,7 @@ def check_attribute_suite(
     # ATTR004 - ONE exclusive rule (except vocab key parameter)
     # -------------------------------------------------------------------------
 
-    vocab_rule_active = cv_source_collection is not None and validate_vocabulary
+    vocab_rule_active = cv_source_collection is not None
     registry_rule_active = cv_source_term_key is not None
 
     rule_flags = [
@@ -266,7 +261,7 @@ def check_attribute_suite(
     ]
 
     # If collection_key is provided without collection => config error
-    if validate_vocabulary and cv_source_collection_key and not cv_source_collection:
+    if cv_source_collection_key and not cv_source_collection:
         cfg_ctx = TestCtx(severity, f"[ATTR004] {label} rule configuration")
         cfg_ctx.add_failure(
             "cv_source_collection_key provided without cv_source_collection."
