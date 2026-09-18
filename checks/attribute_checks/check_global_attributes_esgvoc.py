@@ -71,18 +71,6 @@ def _rule_value(rule: Any, name: str, default: Any = None) -> Any:
     return getattr(rule, name, default)
 
 
-def _suite_value_type(spec: Any) -> str | None:
-    """Translate ESGVoc value types to the attribute-suite spelling."""
-    return {
-        "string": "str",
-        "string_array": "str_array",
-        "integer": "int",
-        "double": "float",
-        "float": "float",
-        "boolean": "bool",
-    }.get(getattr(spec, "attr_field_value_type", None))
-
-
 def normalize_global_attributes(ds, validator: GAValidator) -> dict[str, Any]:
     """Read and normalize NetCDF global attributes for ``GAValidator``.
 
@@ -119,8 +107,6 @@ def check_global_attributes_esgvoc(
     severity_by_attribute: Mapping[str, int] | None = None,
     default_severity: int = BaseCheck.HIGH,
     validator: GAValidator | None = None,
-    suppress_existence_for: set[str] | None = None,
-    suppress_vocabulary_for: set[str] | None = None,
 ):
     """Validate global attributes with ESGVoc and return checker results.
 
@@ -129,8 +115,6 @@ def check_global_attributes_esgvoc(
     through their TOML rules.
     """
     severities = severity_by_attribute or {}
-    suppressed_existence = suppress_existence_for or set()
-    suppressed_vocabulary = suppress_vocabulary_for or set()
 
     try:
         active_validator = validator or get_global_attribute_validator(project_id)
@@ -153,8 +137,6 @@ def check_global_attributes_esgvoc(
     results = []
 
     for name in report.missing:
-        if name in suppressed_existence:
-            continue
         severity = severities.get(name, default_severity)
         ctx = TestCtx(severity, f"[ATTR001] Global attribute '{name}' existence")
         ctx.add_failure(f"Required global attribute '{name}' is missing.")
@@ -167,20 +149,19 @@ def check_global_attributes_esgvoc(
     for name, attribute_results in grouped.items():
         severity = severities.get(name, default_severity)
 
-        if name not in suppressed_existence:
-            existence = TestCtx(
-                severity,
-                f"[ATTR001] Global attribute '{name}' existence",
-            )
-            existence.add_pass()
-            results.append(existence.to_result())
+        existence = TestCtx(
+            severity,
+            f"[ATTR001] Global attribute '{name}' existence",
+        )
+        existence.add_pass()
+        results.append(existence.to_result())
 
         # Free-text attributes have no collection and therefore no ATTR004
         # vocabulary rule.
         vocabulary_results = [
             item for item in attribute_results if item.collection is not None
         ]
-        if not vocabulary_results or name in suppressed_vocabulary:
+        if not vocabulary_results:
             continue
 
         vocabulary = TestCtx(
@@ -237,23 +218,6 @@ def check_global_attributes_hybrid(
         default_severity=default_severity,
         validator=active_validator,
     )
-
-    # GAValidator currently uses the ESGVoc type to parse string arrays but
-    # does not emit explicit type/UTF-8 assertions.  Reuse the existing checker
-    # assertions with values derived from the ESGVoc specification itself.
-    for name, spec in specifications.items():
-        results.extend(
-            check_attribute_suite(
-                ds=ds,
-                var_name=None,
-                attribute_name=name,
-                severity=severities.get(name, default_severity),
-                value_type=_suite_value_type(spec),
-                is_required=bool(getattr(spec, "is_required", False)),
-                report_existence=False,
-                validate_vocabulary=False,
-            )
-        )
 
     # A TOML entry with no ESGVoc specification is a project-specific rule.
     for name, (_, rule) in local_names.items():

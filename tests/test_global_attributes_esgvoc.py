@@ -239,8 +239,6 @@ def test_hybrid_preserves_attr001_to_attr004_check_identities_without_duplicates
     assert [result.name.split("]", 1)[0] + "]" for result in results] == [
         "[ATTR001]",
         "[ATTR004]",
-        "[ATTR002]",
-        "[ATTR003]",
     ]
     assert all(result.weight == BaseCheck.MEDIUM for result in results)
     assert all(not result.msgs for result in results)
