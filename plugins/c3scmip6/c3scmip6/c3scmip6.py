@@ -399,7 +399,7 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
     # 2) Global attributes
     # -------------------------------------------------------------------------
     def check_Global_Attributes(self, ds):
-        return self._check_global_attributes_hybrid(ds)
+        return self._check_global_attributes(ds)
 
     # -------------------------------------------------------------------------
     # 3) DRS checks

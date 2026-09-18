@@ -8,16 +8,13 @@ from their TOML configuration.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from functools import cache
 from typing import Any
 
 import numpy as np
 from compliance_checker.base import BaseCheck, TestCtx
 from esgvoc.apps.ncattvalid import GAValidator
-
-from checks.attribute_checks.check_attribute_suite import check_attribute_suite
-
 
 @cache
 def get_global_attribute_validator(project_id: str) -> GAValidator:
@@ -53,22 +50,16 @@ def _string_array_attribute_names(validator: GAValidator) -> set[str]:
     return names
 
 
-def _attribute_specifications(validator: GAValidator) -> dict[str, Any]:
-    """Index the active ESGVoc attribute specifications by NetCDF name."""
-    specifications: dict[str, Any] = {}
+def get_global_attribute_names(validator: GAValidator) -> set[str]:
+    """Return the NetCDF attribute names defined by an ESGVoc validator."""
+    names: set[str] = set()
     for spec in getattr(validator, "_specs", ()):
         name = getattr(spec, "attr_field_name", None) or getattr(
             spec, "source_collection", None
         )
         if name:
-            specifications[str(name)] = spec
-    return specifications
-
-
-def _rule_value(rule: Any, name: str, default: Any = None) -> Any:
-    if isinstance(rule, Mapping):
-        return rule.get(name, default)
-    return getattr(rule, name, default)
+            names.add(str(name))
+    return names
 
 
 def normalize_global_attributes(ds, validator: GAValidator) -> dict[str, Any]:
@@ -177,74 +168,5 @@ def check_global_attributes_esgvoc(
         else:
             vocabulary.add_pass()
         results.append(vocabulary.to_result())
-
-    return results
-
-
-def check_global_attributes_hybrid(
-    ds,
-    project_id: str,
-    attribute_rules: Mapping[str, Any],
-    severity_resolver: Callable[[Any], int],
-    *,
-    default_severity: int = BaseCheck.HIGH,
-    validator: GAValidator | None = None,
-):
-    """Validate ESGVoc specifications and apply TOML-only complements.
-
-    ESGVoc is authoritative for every attribute it specifies: name, requiredness,
-    type and controlled-vocabulary mapping.  TOML supplies severity for those
-    attributes and complete rules only for attributes absent from ESGVoc.
-    """
-    try:
-        active_validator = validator or get_global_attribute_validator(project_id)
-        specifications = _attribute_specifications(active_validator)
-    except Exception:  # noqa: BLE001
-        active_validator = None
-        specifications = {}
-
-    severities: dict[str, int] = {}
-    local_names: dict[str, tuple[str, Any]] = {}
-
-    for key, rule in attribute_rules.items():
-        name = str(_rule_value(rule, "attribute_name") or key)
-        local_names[name] = (str(key), rule)
-        severities[name] = severity_resolver(_rule_value(rule, "severity"))
-
-    results = check_global_attributes_esgvoc(
-        ds,
-        project_id,
-        severity_by_attribute=severities,
-        default_severity=default_severity,
-        validator=active_validator,
-    )
-
-    # A TOML entry with no ESGVoc specification is a project-specific rule.
-    for name, (_, rule) in local_names.items():
-        if name in specifications:
-            continue
-
-        results.extend(
-            check_attribute_suite(
-                ds=ds,
-                var_name=None,
-                attribute_name=name,
-                severity=severities[name],
-                value_type=_rule_value(rule, "value_type"),
-                is_required=_rule_value(rule, "is_required", True),
-                na_value=_rule_value(rule, "na_value"),
-                pattern=_rule_value(rule, "pattern"),
-                constant=_rule_value(rule, "constant"),
-                threshold=_rule_value(rule, "threshold"),
-                is_above_threshold=_rule_value(rule, "is_above_threshold"),
-                enum=_rule_value(rule, "enum"),
-                as_variable=_rule_value(rule, "as_variable"),
-                is_positive=_rule_value(rule, "is_positive"),
-                cv_source_collection=_rule_value(rule, "cv_source_collection"),
-                cv_source_collection_key=_rule_value(rule, "cv_source_collection_key"),
-                project_name=project_id,
-                cv_source_term_key=_rule_value(rule, "cv_source_term_key"),
-            )
-        )
 
     return results

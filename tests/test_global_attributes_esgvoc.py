@@ -9,9 +9,10 @@ from esgvoc.apps.ncattvalid import AttributeResult, GAReport
 
 from checks.attribute_checks.check_global_attributes_esgvoc import (
     check_global_attributes_esgvoc,
-    check_global_attributes_hybrid,
+    get_global_attribute_names,
     normalize_global_attributes,
 )
+from plugins.wcrp_base import WCRPBaseCheck
 
 
 @dataclass
@@ -192,7 +193,7 @@ def test_esgvoc_failure_is_reported_once_as_setup_error():
     assert "RuntimeError: database unavailable" in results[0].msgs[0]
 
 
-def test_hybrid_preserves_attr001_to_attr004_check_identities_without_duplicates():
+def test_base_routes_esgvoc_and_local_attributes_to_separate_checkers():
     report = GAReport(
         project_id="cmip7",
         filename="example.nc",
@@ -225,88 +226,54 @@ def test_hybrid_preserves_attr001_to_attr004_check_identities_without_duplicates
             cv_source_collection="activity",
             cv_source_collection_key=None,
             cv_source_term_key=None,
-        )
+        ),
+        "local_note": SimpleNamespace(
+            attribute_name=None,
+            severity="L",
+            value_type="str",
+            is_required=False,
+            na_value=None,
+            pattern=r".+",
+            constant=None,
+            threshold=None,
+            is_above_threshold=None,
+            enum=None,
+            as_variable=None,
+            is_positive=None,
+            cv_source_collection=None,
+            cv_source_collection_key=None,
+            cv_source_term_key=None,
+        ),
     }
 
-    results = check_global_attributes_hybrid(
-        FakeDataset({"activity_id": "CMIP"}),
-        "cmip7",
-        rules,
-        lambda value: {"M": BaseCheck.MEDIUM}[value],
-        validator=validator,
+    checker = WCRPBaseCheck()
+    checker.project_name = "cmip7"
+    checker.config = SimpleNamespace(
+        global_=SimpleNamespace(attributes=rules),
     )
+    checker.get_severity = lambda value: {
+        "M": BaseCheck.MEDIUM,
+        "L": BaseCheck.LOW,
+    }[value]
+
+    from unittest.mock import patch
+
+    with patch(
+        "plugins.wcrp_base.get_global_attribute_validator",
+        return_value=validator,
+    ):
+        results = checker._check_global_attributes(
+            FakeDataset({"activity_id": "CMIP", "local_note": "hello"})
+        )
 
     assert [result.name.split("]", 1)[0] + "]" for result in results] == [
         "[ATTR001]",
         "[ATTR004]",
+        "[ATTR001]",
+        "[ATTR002]",
+        "[ATTR003]",
+        "[ATTR004]",
     ]
-    assert all(result.weight == BaseCheck.MEDIUM for result in results)
+    assert results[0].weight == BaseCheck.MEDIUM
+    assert results[-1].weight == BaseCheck.LOW
     assert all(not result.msgs for result in results)
-
-
-def test_hybrid_esgvoc_vocabulary_ignores_duplicate_toml_rule():
-    report = GAReport(
-        project_id="cmip7",
-        filename="example.nc",
-        results=[
-            AttributeResult(
-                "tracking_id",
-                False,
-                "registry rejected the value",
-                "hdl:valid",
-                "tracking_id",
-            )
-        ],
-    )
-    validator = FakeValidator(report)
-    validator._specs = [FakeSpec("tracking_id", "string", None, True)]
-    rules = {
-        "tracking_id": {
-            "severity": "H",
-            "value_type": "str",
-            "is_required": True,
-            "pattern": r"hdl:.+",
-        }
-    }
-
-    results = check_global_attributes_hybrid(
-        FakeDataset({"tracking_id": "hdl:valid"}),
-        "cmip7",
-        rules,
-        lambda _: BaseCheck.HIGH,
-        validator=validator,
-    )
-
-    attr004 = [result for result in results if result.name.startswith("[ATTR004]")]
-    assert len(attr004) == 1
-    assert attr004[0].name.endswith("vocabulary check")
-    assert attr004[0].msgs == ["registry rejected the value"]
-
-
-def test_hybrid_esgvoc_requiredness_ignores_duplicate_toml_rule():
-    report = GAReport(
-        project_id="cmip7",
-        filename="example.nc",
-        missing=["license"],
-    )
-    validator = FakeValidator(report)
-    validator._specs = [FakeSpec(None, "string", "license", True)]
-    rules = {
-        "license": {
-            "severity": "L",
-            "value_type": "str",
-            "is_required": False,
-        }
-    }
-
-    results = check_global_attributes_hybrid(
-        FakeDataset({}),
-        "cmip7",
-        rules,
-        lambda _: BaseCheck.LOW,
-        validator=validator,
-    )
-
-    failures = [result for result in results if result.msgs]
-    assert len(failures) == 1
-    assert failures[0].name == "[ATTR001] Global attribute 'license' existence"
