@@ -11,6 +11,7 @@ from compliance_checker.base import BaseCheck
 from checks.variable_checks.known_branded_variable import (
     KnownBrandedVariableLookupError,
     lookup_expected_variable_metadata,
+    lookup_expected_variable_metadata_in_collection,
     normalize_known_branded_variable,
 )
 from plugins.c3scmip6.c3scmip6.c3scmip6 import C3SCmip6ProjectCheck
@@ -154,7 +155,6 @@ def test_lookup_normalizes_drs_case_but_preserves_variable_metadata():
             C3SCmip6ProjectCheck,
             False,
         ),
-        ("plugins.cmip7.cmip7", Cmip7ProjectCheck, True),
     ],
 )
 def test_all_registry_backed_plugins_use_new_known_branded_variable_model(
@@ -188,6 +188,69 @@ def test_all_registry_backed_plugins_use_new_known_branded_variable_model(
     assert expected.units == "K"
     assert expected.long_name == "Near-Surface Air Temperature"
     assert len(calls) == 1
+
+
+def test_cmip7_registry_lookup_uses_project_branded_variable_collection(monkeypatch):
+    calls = []
+
+    def get_term(**kwargs):
+        calls.append(kwargs)
+        assert kwargs["project_id"] == "cmip7"
+        assert kwargs["collection_id"] == "branded_variable"
+        assert kwargs["term_id"] == NEW_RECORD["id"]
+        return SimpleNamespace(**NEW_RECORD)
+
+    monkeypatch.setattr(
+        "plugins.cmip7.cmip7.esgvoc_api",
+        SimpleNamespace(get_term_in_collection=get_term),
+    )
+    checker = Cmip7ProjectCheck()
+    dataset = SimpleNamespace(
+        getncattr=lambda name: {
+            "variable_id": "tas",
+            "branded_variable": NEW_RECORD["id"],
+        }[name]
+    )
+
+    expected, results = checker._get_expected_from_registry(dataset, BaseCheck.HIGH)
+
+    assert results == []
+    assert expected.long_name == "Near-Surface Air Temperature"
+    assert expected.cell_measures == "area: areacella"
+    assert len(calls) == 1
+
+
+def test_collection_lookup_falls_back_to_project_variable_long_name():
+    calls = []
+    branded_without_long_name = {**NEW_RECORD, "long_name": None}
+
+    def get_term(**kwargs):
+        calls.append(kwargs)
+        if kwargs["collection_id"] == "branded_variable":
+            return branded_without_long_name
+        return {"id": "tas", "long_name": "Near-Surface Air Temperature"}
+
+    lookup = lookup_expected_variable_metadata_in_collection(
+        get_term,
+        "cmip7",
+        NEW_RECORD["id"],
+    )
+
+    assert lookup.warning is None
+    assert lookup.expected.long_name == "Near-Surface Air Temperature"
+    assert [call["collection_id"] for call in calls] == [
+        "branded_variable",
+        "variable",
+    ]
+
+
+def test_collection_lookup_reports_missing_branded_variable():
+    with pytest.raises(KnownBrandedVariableLookupError, match="was not found"):
+        lookup_expected_variable_metadata_in_collection(
+            lambda **_: None,
+            "cmip7",
+            NEW_RECORD["id"],
+        )
 
 
 def test_builtin_configs_use_canonical_known_branded_variable_units_key():

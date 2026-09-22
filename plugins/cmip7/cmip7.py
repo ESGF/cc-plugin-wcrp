@@ -74,7 +74,7 @@ from checks.variable_checks.check_variable_shape_vs_dimensions import (
 )
 from checks.variable_checks.known_branded_variable import (
     KnownBrandedVariableLookupError,
-    lookup_expected_variable_metadata,
+    lookup_expected_variable_metadata_in_collection,
 )
 from checks.coordinate_checks import (
     CoordinateMetadataError,
@@ -94,11 +94,11 @@ except ImportError as e:
     raise ImportError("Unable to import utils from compliance_checker.cf.util.") from e
 
 
-# --- ESGVOC Variable Registry lookup ---
+# --- ESGVOC project collection lookup ---
 try:
-    from esgvoc.api.universe import find_terms_in_data_descriptor
+    import esgvoc.api as esgvoc_api
 except Exception:
-    find_terms_in_data_descriptor = None
+    esgvoc_api = None
 
 
 def _deep_merge(a: dict, b: dict) -> dict:
@@ -406,7 +406,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return self._expected_term_cache, []
 
         results = []
-        if find_terms_in_data_descriptor is None:
+        if esgvoc_api is None:
             return None, results
 
         branded = None
@@ -435,8 +435,9 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return None, results
 
         try:
-            lookup = lookup_expected_variable_metadata(
-                find_terms_in_data_descriptor,
+            lookup = lookup_expected_variable_metadata_in_collection(
+                esgvoc_api.get_term_in_collection,
+                self.project_name,
                 str(branded),
                 fallback_variable_id=str(variable_id).lower(),
             )

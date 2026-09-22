@@ -6,6 +6,22 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+BRANDED_VARIABLE_FIELDS = [
+    "id",
+    "out_name",
+    "long_name",
+    "cf_standard_name",
+    "units",
+    "dimensions",
+    "cell_methods",
+    "cell_measures",
+    "description",
+    "flag_values",
+    "flag_meanings",
+    "variable_root_name",
+]
+
+
 class KnownBrandedVariableLookupError(RuntimeError):
     """Raised when required known-branded-variable metadata cannot be read."""
 
@@ -175,6 +191,82 @@ def lookup_expected_variable_metadata(
     return VariableMetadataLookup(
         normalize_known_branded_variable(
             known_branded_variable,
+            fallback_long_name=_value(variable, "long_name"),
+        )
+    )
+
+
+def lookup_expected_variable_metadata_in_collection(
+    get_term: Callable[..., Any],
+    project_id: str,
+    branded_variable_id: str,
+    *,
+    fallback_variable_id: str | None = None,
+) -> VariableMetadataLookup:
+    """Read branded-variable metadata from one project's collections.
+
+    CMIP7 exposes resolved branded-variable records directly through its
+    ``branded_variable`` collection.  A ``variable`` collection lookup remains
+    as a non-fatal fallback for older records without ``long_name``.
+    """
+    branded_lookup_id = _lookup_id(branded_variable_id)
+    try:
+        branded = get_term(
+            project_id=project_id,
+            collection_id="branded_variable",
+            term_id=branded_lookup_id,
+            selected_term_fields=BRANDED_VARIABLE_FIELDS,
+        )
+    except Exception as exc:
+        raise KnownBrandedVariableLookupError(
+            f"Registry lookup error for {project_id}/branded_variable "
+            f"{branded_variable_id!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    if branded is None:
+        raise KnownBrandedVariableLookupError(
+            f"Branded variable {branded_variable_id!r} was not found in "
+            f"the {project_id!r} project collection."
+        )
+
+    expected = normalize_known_branded_variable(branded)
+    if expected.long_name:
+        return VariableMetadataLookup(expected)
+
+    variable_source = expected.variable_root_name or _nonempty(fallback_variable_id)
+    if not variable_source:
+        return VariableMetadataLookup(
+            expected,
+            "The branded_variable record has no long_name and no variable root "
+            "could be selected for the fallback lookup. Only 'long_name' is "
+            "unavailable.",
+        )
+
+    variable_id = _lookup_id(variable_source)
+    try:
+        variable = get_term(
+            project_id=project_id,
+            collection_id="variable",
+            term_id=variable_id,
+            selected_term_fields=["id", "long_name"],
+        )
+    except Exception as exc:
+        return VariableMetadataLookup(
+            expected,
+            f"Registry lookup error for {project_id}/variable {variable_id!r}: "
+            f"{type(exc).__name__}: {exc}. Only 'long_name' is unavailable.",
+        )
+
+    if variable is None:
+        return VariableMetadataLookup(
+            expected,
+            f"Variable {variable_id!r} was not found in the {project_id!r} "
+            "project collection. Only 'long_name' is unavailable.",
+        )
+
+    return VariableMetadataLookup(
+        normalize_known_branded_variable(
+            branded,
             fallback_long_name=_value(variable, "long_name"),
         )
     )
