@@ -249,6 +249,7 @@ enum = [
     "gregorian",
     "proleptic_gregorian",
     "noleap",
+    "julian",
     "365_day",
     "all_leap",
     "366_day",

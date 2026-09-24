@@ -251,6 +251,7 @@ enum = [
     "noleap",
     "365_day",
     "all_leap",
+    "julian",
     "366_day",
     "360_day",
     "utc",
