@@ -12,6 +12,12 @@ from compliance_checker.base import BaseCheck, TestCtx
 from compliance_checker.cf import util as cfutil
 from netCDF4 import Dataset
 
+from checks.attribute_checks.check_attribute_suite import check_attribute_suite
+from checks.attribute_checks.check_global_attributes_esgvoc import (
+    check_global_attributes_esgvoc,
+    get_global_attribute_names,
+    get_global_attribute_validator,
+)
 from checks.utils import infer_frequency, sanitize
 
 # Compliance Checker 6 moved these helpers from compliance_checker.cfutil.
@@ -233,6 +239,68 @@ class WCRPBaseCheck(BaseCheck):
         if severity_str is None:
             return default_severity_const
         return self.SEVERITY_MAP.get(str(severity_str).upper(), default_severity_const)
+
+    def _check_global_attributes(self, dataset):
+        """Run ESGVoc validation, then TOML rules absent from ESGVoc."""
+        if not self.config or not getattr(self.config, "global_", None):
+            return []
+
+        rules = self.config.global_.attributes
+        try:
+            validator = get_global_attribute_validator(self.project_name)
+            esgvoc_names = get_global_attribute_names(validator)
+        except Exception:  # reported by check_global_attributes_esgvoc
+            validator = None
+            esgvoc_names = set()
+
+        def rule_value(rule, name, default=None):
+            if isinstance(rule, dict):
+                return rule.get(name, default)
+            return getattr(rule, name, default)
+
+        severities = {}
+        local_rules = {}
+        for key, rule in rules.items():
+            name = str(rule_value(rule, "attribute_name") or key)
+            severities[name] = self.get_severity(rule_value(rule, "severity"))
+            if name not in esgvoc_names:
+                local_rules[name] = rule
+
+        results = check_global_attributes_esgvoc(
+            dataset,
+            self.project_name,
+            severity_by_attribute=severities,
+            default_severity=BaseCheck.HIGH,
+            validator=validator,
+        )
+
+        for name, rule in local_rules.items():
+            results.extend(
+                check_attribute_suite(
+                    ds=dataset,
+                    var_name=None,
+                    attribute_name=name,
+                    severity=severities[name],
+                    value_type=rule_value(rule, "value_type"),
+                    is_required=rule_value(rule, "is_required", True),
+                    na_value=rule_value(rule, "na_value"),
+                    pattern=rule_value(rule, "pattern"),
+                    constant=rule_value(rule, "constant"),
+                    threshold=rule_value(rule, "threshold"),
+                    is_above_threshold=rule_value(rule, "is_above_threshold"),
+                    enum=rule_value(rule, "enum"),
+                    as_variable=rule_value(rule, "as_variable"),
+                    is_positive=rule_value(rule, "is_positive"),
+                    cv_source_collection=rule_value(rule, "cv_source_collection"),
+                    cv_source_collection_key=rule_value(
+                        rule, "cv_source_collection_key"
+                    ),
+                    project_name=self.project_name,
+                    cv_source_term_key=rule_value(rule, "cv_source_term_key"),
+                )
+            )
+
+        return results
 
     def _initialize_CV_info(self, tables_path):
         """Find and read CV and CMOR tables and extract basic information."""
@@ -555,7 +623,6 @@ class WCRPBaseCheck(BaseCheck):
         # required_attributes = []
         # Retrieve via esgvoc
         if required_attributes == [] and ESG_VOCAB_AVAILABLE:
-            print("Retrieving required attributes from ESGVOC")
             eproj = ev.get_project(self.project_name)
             if eproj:
                 for eatt in eproj.attr_specs:
@@ -565,7 +632,6 @@ class WCRPBaseCheck(BaseCheck):
                         else:
                             required_attributes.append(eatt.source_collection)
         required_attributes.sort(key=lambda x: x.lower())
-        # print("Required attributes:", required_attributes)
 
         global_attrs = {
             name: self.dataset.getncattr(name) for name in self.dataset.ncattrs()

@@ -12,7 +12,6 @@ import toml
 import traceback
 from netCDF4 import Dataset
 from compliance_checker.base import BaseCheck, TestCtx
-from types import SimpleNamespace
 from plugins.wcrp_base import WCRPBaseCheck
 from plugins.wcrp_schema import WCRPConfig
 
@@ -75,6 +74,10 @@ from checks.variable_checks.check_coordinate_monotonicity import (
 
 from checks.variable_checks.check_variable_shape_vs_dimensions import (
     check_variable_shape,
+)
+from checks.variable_checks.known_branded_variable import (
+    KnownBrandedVariableLookupError,
+    lookup_expected_variable_metadata,
 )
 
 try:
@@ -213,7 +216,6 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
         else:
             self._record_setup_warning(f"Project mapping file not found at '{p}'")
 
-
     def _install_time_increment_mapping(self) -> None:
         """
         mapping TOML: "<table_id>.<frequency>" -> ["<int>", "<unit>"]
@@ -349,93 +351,26 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
             results.append(ctx.to_result())
             return None, results
 
-        expected_kbv = None
-        expected_var = None
-
-        # 1) known_branded_variable lookup
         try:
-            kbv_terms = find_terms_in_data_descriptor(
-                expression=str(branded),
-                data_descriptor_id="known_branded_variable",
-                only_id=True,
-                selected_term_fields=[
-                    "cf_standard_name",
-                    # ESGVOC subsets omit fields absent from the registry.
-                    "units",
-                    "cf_units",
-                    "dimensions",
-                    "cell_methods",
-                    "cell_measures",
-                    "description",
-                ],
+            lookup = lookup_expected_variable_metadata(
+                find_terms_in_data_descriptor,
+                str(branded),
+                fallback_variable_id=str(variable_id).lower(),
             )
-            if kbv_terms:
-                expected_kbv = kbv_terms[0]
-        except Exception as e:
+        except KnownBrandedVariableLookupError as e:
             ctx = TestCtx(severity, "Variable Registry")
-            ctx.add_failure(
-                f"Registry lookup error for known_branded_variable '{branded}': {e}"
-            )
+            ctx.add_failure(str(e))
             results.append(ctx.to_result())
             return None, results
 
-        if not expected_kbv:
+        if lookup.warning:
             ctx = TestCtx(severity, "Variable Registry")
-            ctx.add_failure(
-                f"Known branded variable '{branded}' was not found in the registry."
-            )
-            results.append(ctx.to_result())
-            return None, results
-
-        # 2) variable lookup for long_name only
-        try:
-            var_id_lower = str(variable_id).lower()
-            var_terms = find_terms_in_data_descriptor(
-                expression=var_id_lower,
-                data_descriptor_id="variable",
-                selected_term_fields=["long_name"],
-            )
-            
-            if var_terms:
-                for term in var_terms:
-                    if getattr(term, "id", None) == var_id_lower :
-                        expected_var = term
-                        break
-        except Exception as e:
-            ctx = TestCtx(severity, "Variable Registry")
-            ctx.add_failure(
-                f"Registry lookup error for variable '{variable_id}': {e}"
-            )
-            results.append(ctx.to_result())
-            return None, results
-
-        if not expected_var:
-            ctx = TestCtx(severity, "Variable Registry")
-            ctx.add_failure(
-                f"Variable '{variable_id}' was not found in the registry data descriptor 'variable'. "
-                "Only 'long_name' may be unavailable."
-            )
+            ctx.add_failure(lookup.warning)
             results.append(ctx.to_result())
 
-        # Universe 2.x+ uses units; older releases use cf_units.
-        registry_units = getattr(expected_kbv, "units", None)
-        if registry_units is None:
-            registry_units = getattr(expected_kbv, "cf_units", None)
+        self._expected_term_cache = lookup.expected
+        return lookup.expected, results
 
-        merged = {
-            "cf_standard_name": getattr(expected_kbv, "cf_standard_name", None),
-            "cf_units": registry_units,
-            "dimensions": getattr(expected_kbv, "dimensions", None),
-            "cell_methods": getattr(expected_kbv, "cell_methods", None),
-            "cell_measures": getattr(expected_kbv, "cell_measures", None),
-            "description": getattr(expected_kbv, "description", None),
-            "long_name": getattr(expected_var, "long_name", None) if expected_var else None,
-        }
-
-        expected = SimpleNamespace(**merged)
-
-        self._expected_term_cache = expected
-        return expected, results
     # -------------------------------------------------------------------------
     # 1) File checks
     # -------------------------------------------------------------------------
@@ -462,37 +397,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
     # 2) Global attributes
     # -------------------------------------------------------------------------
     def check_Global_Attributes(self, ds):
-        res = []
-        if not self.config or not self.config.global_:
-            return res
-
-        for attr_key, rule in self.config.global_.attributes.items():
-            sev = self.get_severity(rule.severity)
-            name_in_file = rule.attribute_name or attr_key
-            res.extend(
-                check_attribute_suite(
-                    ds=ds,
-                    var_name=None,
-                    attribute_name=name_in_file,
-                    severity=sev,
-                    value_type=rule.value_type,
-                    is_required=rule.is_required,
-                    na_value=rule.na_value,
-                    pattern=rule.pattern,
-                    constant=rule.constant,
-                    threshold=rule.threshold,
-                    is_above_threshold=rule.is_above_threshold,
-                    enum=rule.enum,
-                    as_variable=rule.as_variable,
-                    is_positive=rule.is_positive,
-                    cv_source_collection=rule.cv_source_collection,
-                    cv_source_collection_key=rule.cv_source_collection_key,
-                    project_name=self.project_name,
-                    expected_term=None,
-                    cv_source_term_key=rule.cv_source_term_key,
-                )
-            )
-        return res
+        return self._check_global_attributes(ds)
 
     # -------------------------------------------------------------------------
     # 3) DRS checks
@@ -627,29 +532,47 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
 
         if c.filename_vs_attributes:
             sev = self.get_severity(c.filename_vs_attributes.severity)
-            res.extend(check_filename_vs_global_attrs(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_filename_vs_global_attrs(ds, sev, project_id=self.project_name)
+            )
 
         # --- Experiment consistency (atomic ATTR007a-d) ---
         if c.experiment_id_vs_activity_id:
             sev = self.get_severity(c.experiment_id_vs_activity_id.severity)
-            res.extend(check_experiment_id_vs_activity_id(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_experiment_id_vs_activity_id(
+                    ds, sev, project_id=self.project_name
+                )
+            )
 
         if c.experiment_id_vs_experiment:
             sev = self.get_severity(c.experiment_id_vs_experiment.severity)
-            res.extend(check_experiment_id_vs_experiment(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_experiment_id_vs_experiment(ds, sev, project_id=self.project_name)
+            )
 
         if c.experiment_id_vs_parent_experiment_id:
             sev = self.get_severity(c.experiment_id_vs_parent_experiment_id.severity)
-            res.extend(check_experiment_id_vs_parent_experiment_id(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_experiment_id_vs_parent_experiment_id(
+                    ds, sev, project_id=self.project_name
+                )
+            )
 
         if c.experiment_id_vs_sub_experiment_id:
             sev = self.get_severity(c.experiment_id_vs_sub_experiment_id.severity)
-            res.extend(check_experiment_id_vs_sub_experiment_id(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_experiment_id_vs_sub_experiment_id(
+                    ds, sev, project_id=self.project_name
+                )
+            )
 
         # --- Institution / source (ATTR009, ATTR010) ---
         if c.institution_id_vs_institution:
             sev = self.get_severity(c.institution_id_vs_institution.severity)
-            res.extend(check_institution_consistency(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_institution_consistency(ds, sev, project_id=self.project_name)
+            )
 
         if c.source_id_vs_institution_id:
             sev = self.get_severity(c.source_id_vs_institution_id.severity)
@@ -659,7 +582,9 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
         if c.frequency_vs_table_id:
             sev = self.get_severity(c.frequency_vs_table_id.severity)
             res.extend(
-                check_frequency_table_id_consistency(ds, self.table_id_to_frequency, sev)
+                check_frequency_table_id_consistency(
+                    ds, self.table_id_to_frequency, sev
+                )
             )
 
         # --- Variant label consistency (atomic ATTR006a-d) ---
@@ -820,7 +745,9 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
 
             #time calendar recommendation (TIME003a)
             if getattr(rule, "calendar_recommendation", None):
-                sev = _sev(rule.calendar_recommendation.severity, default=BaseCheck.MEDIUM)
+                sev = _sev(
+                    rule.calendar_recommendation.severity, default=BaseCheck.MEDIUM
+                )
                 res.extend(check_calendar_recommendation(ds, severity=sev))
 
             # coordinate variable attributes
@@ -854,15 +781,20 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
 
         if check_time_range_vs_filename is not None:
             precision_map = None
+            climatology_suffix = ""
+            severity = BaseCheck.HIGH
             if self.config and self.config.drs:
-                precision_map = self.config.drs.time_range_label_precision
+                time_range = self.config.drs.time_range
+                precision_map = time_range.label_precision
+                climatology_suffix = time_range.climatology_suffix
+                severity = self.get_severity(time_range.severity, "HIGH")
             res.extend(
                 check_time_range_vs_filename(
                     ds,
-                    BaseCheck.HIGH,
+                    severity,
                     precision_by_frequency=precision_map,
+                    climatology_suffix=climatology_suffix,
                 )
             )
 
         return res
-    

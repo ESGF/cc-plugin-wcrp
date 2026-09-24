@@ -344,6 +344,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     ds,
                     severity=self.get_severity(check_config.get("severity")),
                     precision_by_frequency=precision_by_frequency,
+                    climatology_suffix=check_config.get("climatology_suffix", ""),
                 )
             )
 

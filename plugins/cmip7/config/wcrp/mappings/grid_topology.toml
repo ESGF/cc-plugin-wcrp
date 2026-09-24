@@ -1,0 +1,47 @@
+# Reduce CMIP7 grid metadata to the three coordinate layouts checked here.
+#
+# Once ESGVoc exposes a branded variable's EMD grid relationship, add the
+# authoritative identifiers to [grid_type] and, only where grid_type alone is
+# ambiguous, to [grid_type_and_mapping].  Combination keys use "type|mapping".
+# These metadata mappings take precedence over the temporary grid-label bridge.
+
+[coordinate_identification]
+# The ESGVoc out_name is always tried first. If enabled, an exact standard_name
+# match may identify a differently named horizontal coordinate as a fallback.
+allow_standard_name_fallback = true
+
+[grid_type]
+
+[grid_type_and_mapping]
+
+# Temporary bridge based on the globally registered CMIP7 grid_label.  An
+# individual label may also be overridden explicitly under [grid_label].
+[grid_label]
+
+[grid_label_groups]
+rectilinear = [
+  "g100", "g101", "g105", "g106", "g108", "g109", "g110", "g111",
+  "g113", "g114", "g115", "g120", "g121", "g123", "g129", "g131",
+  "g134", "g137", "g138", "g139", "g140", "g150", "g151", "g152",
+  "g158", "g159", "g163", "g167", "g179", "g180", "g183", "g189",
+  "g190", "g198", "g200", "g201", "g207", "g208", "g209", "g210",
+  "g214", "g215", "g222", "g223", "g224", "g225", "g229", "g230",
+  "g232", "g239", "g242", "g244", "g245",
+]
+unstructured = [
+  "g117", "g122", "g130", "g132", "g133", "g136", "g141", "g142",
+  "g144", "g145", "g146", "g173", "g174", "g175", "g176", "g177",
+  "g178", "g184", "g187", "g188", "g196", "g197", "g231", "g234",
+  "g235", "g236", "g238", "g243", "g246",
+]
+curvilinear = [
+  "g102", "g103", "g104", "g107", "g112", "g116", "g118", "g119",
+  "g124", "g125", "g126", "g127", "g128", "g135", "g143", "g147",
+  "g148", "g149", "g153", "g154", "g155", "g156", "g157", "g160",
+  "g161", "g162", "g164", "g165", "g166", "g168", "g169", "g170",
+  "g171", "g172", "g181", "g182", "g185", "g186", "g191", "g192",
+  "g193", "g194", "g195", "g199", "g202", "g203", "g204", "g205",
+  "g206", "g211", "g212", "g213", "g216", "g217", "g218", "g219",
+  "g220", "g221", "g226", "g227", "g228", "g233", "g237", "g240",
+  "g241", "g247", "g248",
+]

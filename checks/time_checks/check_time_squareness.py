@@ -7,10 +7,19 @@ import numpy as np
 import cftime
 from compliance_checker.base import BaseCheck, TestCtx
 from checks.time_checks.time_constants import FREQ_INC, AVERAGE_CORRECTION_FREQ
-from checks.utils import add_time_increment
+from checks.time_checks.reporting import (
+    count_phrase,
+    format_time_interval,
+    format_time_value,
+)
+from checks.utils import add_time_increment, severity_word
 
 NDECIMALS = 6
 _TIME_RANGE_RE = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$", re.IGNORECASE)
+
+
+class RepresentativeIntervalError(ValueError):
+    """Raised when a coarse representative time has no unique interval."""
 
 
 def _round(arr: np.ndarray, ndecs: int) -> np.ndarray:
@@ -101,6 +110,10 @@ def _is_instantaneous(ds, target_var: str | None, freq_id: str) -> bool:
 
     if "time: point" in cm:
         return True
+    # Any explicit non-point time cell method describes an interval statistic
+    # (mean, minimum, maximum, sum, etc.) whose representative time is centered.
+    if "time:" in cm:
+        return False
     if freq_id in set(AVERAGE_CORRECTION_FREQ):
         return False
     return True
@@ -110,6 +123,131 @@ def _midpoint_num(d0, d1, units: str, calendar: str) -> float:
     n0 = float(cftime.date2num(d0, units=units, calendar=calendar))
     n1 = float(cftime.date2num(d1, units=units, calendar=calendar))
     return 0.5 * (n0 + n1)
+
+
+def _representative_interval_start(
+    representative_value: float,
+    increment: int,
+    unit: str,
+    units: str,
+    calendar: str,
+):
+    """Find the calendar-aligned interval represented by a coarse timestamp."""
+    representative = cftime.num2date(
+        representative_value,
+        units=units,
+        calendar=calendar,
+        only_use_cftime_datetimes=True,
+    )
+    candidates = []
+    if unit == "years":
+        for offset in range(-increment, 1):
+            try:
+                candidates.append(
+                    cftime.datetime(
+                        representative.year + offset, 1, 1, calendar=calendar
+                    )
+                )
+            except ValueError:
+                continue
+    elif unit == "months":
+        representative_month = representative.year * 12 + representative.month - 1
+        for offset in range(-increment, 1):
+            ordinal = representative_month + offset
+            try:
+                candidates.append(
+                    cftime.datetime(
+                        ordinal // 12, ordinal % 12 + 1, 1, calendar=calendar
+                    )
+                )
+            except ValueError:
+                continue
+    else:
+        raise ValueError(f"Unsupported calendar-dependent increment unit {unit!r}")
+
+    expected = _round(np.asarray([representative_value]), NDECIMALS)[0]
+    matches = []
+    for candidate in candidates:
+        interval_end = add_time_increment(candidate, increment, unit, calendar)
+        midpoint = _midpoint_num(candidate, interval_end, units, calendar)
+        if _round(np.asarray([midpoint]), NDECIMALS)[0] == expected:
+            matches.append(candidate)
+
+    if len(matches) != 1:
+        display_unit = unit[:-1] if unit.endswith("s") else unit
+        raise RepresentativeIntervalError(
+            f"found {len(matches)} calendar-aligned {increment}-{display_unit} intervals "
+            "with the first time value as their midpoint"
+        )
+    return matches[0]
+
+
+def _check_declared_bounds_midpoints(
+    ctx,
+    ds,
+    time_var,
+    report_mismatch=True,
+) -> tuple[bool, np.ndarray | None]:
+    """Check time values against declared regular or climatological bounds.
+
+    Return whether structurally usable bounds were checked and, when readable,
+    their numeric values. Presence, existence, and shape errors remain
+    owned by the coordinate and CF bounds checks; TIME001 does not repeat them.
+    """
+    climatology_name = str(getattr(time_var, "climatology", "") or "")
+    bounds_name = climatology_name or str(getattr(time_var, "bounds", "") or "")
+    if not bounds_name or bounds_name not in ds.variables:
+        return False, None
+    bounds_var = ds.variables[bounds_name]
+    if (
+        bounds_var.ndim != 2
+        or bounds_var.shape != (time_var.shape[0], 2)
+        or bounds_var.dimensions[0] != time_var.dimensions[0]
+    ):
+        return False, None
+    try:
+        actual = np.ma.asarray(time_var[:], dtype="float64")
+        bounds = np.ma.asarray(bounds_var[:], dtype="float64")
+    except (TypeError, ValueError, IndexError):
+        return False, None
+    if np.ma.is_masked(bounds):
+        affected = np.where(np.any(np.ma.getmaskarray(bounds), axis=1))[0]
+        index = int(affected[0])
+        units = time_var.units
+        calendar = getattr(time_var, "calendar", "standard")
+        agreement = "contains" if len(affected) == 1 else "contain"
+        ctx.add_failure(
+            f"{count_phrase(len(affected), bounds_name + ' interval')} {agreement} missing "
+            f"values, so their time midpoints cannot be verified. At the first "
+            f"incident, index {index}, the interval is "
+            f"{format_time_interval(bounds[index], units=units, calendar=calendar, decimals=NDECIMALS)}."
+        )
+        return True, None
+    actual = np.asarray(actual, dtype="float64").reshape(-1)
+    bounds = np.asarray(bounds, dtype="float64")
+    expected = 0.5 * (bounds[:, 0] + bounds[:, 1])
+    rounded_actual = _round(actual, NDECIMALS)
+    rounded_expected = _round(expected, NDECIMALS)
+    bad = np.where(rounded_actual != rounded_expected)[0]
+    if bad.size and report_mismatch:
+        index = int(bad[0])
+        kind = "climatology" if climatology_name else "bounds"
+        units = time_var.units
+        calendar = getattr(time_var, "calendar", "standard")
+        if bad.size == 1:
+            summary = f"1 time value does not match the midpoint of its {kind} interval"
+        else:
+            summary = (
+                f"{bad.size} time values do not match the midpoints of their "
+                f"{kind} intervals"
+            )
+        ctx.add_failure(
+            f"{summary}. First incident at index {index}: "
+            f"the file contains {format_time_value(actual[index], units=units, calendar=calendar, decimals=NDECIMALS)}. "
+            f"The expected midpoint is {format_time_value(expected[index], units=units, calendar=calendar, decimals=NDECIMALS)}. "
+            f"The {kind} interval is {format_time_interval(bounds[index], units=units, calendar=calendar, decimals=NDECIMALS)}."
+        )
+    return True, bounds
 
 
 def _parse_freq_token(token: str):
@@ -162,6 +300,8 @@ def check_time_squareness(
     """
     TIME001: Time axis check for a single file.
 
+    - Declared regular bounds: configured interval spacing and coordinate midpoint
+    - Declared climatological bounds: coordinate midpoint
     - Primary: FREQ_INC (table_id, frequency)
     - Start: filename start boundary
     - Average data: midpoint convention for AVERAGE_CORRECTION_FREQ
@@ -173,6 +313,8 @@ def check_time_squareness(
         return []
 
     time_var = ds.variables["time"]
+    if time_var.ndim != 1:
+        return []  # Coordinate identity checks own the invalid time shape.
     units = getattr(time_var, "units", "") or ""
     cal = getattr(time_var, "calendar", "standard") or "standard"
 
@@ -185,6 +327,33 @@ def check_time_squareness(
 
     if not units:
         ctx.add_failure("Missing time.units; cannot rebuild theoretical axis.")
+        return [ctx.to_result()]
+
+    raw_time = np.ma.asarray(time_var[:])
+    if np.ma.is_masked(raw_time):
+        missing = np.where(np.ma.getmaskarray(raw_time).reshape(-1))[0]
+        index = int(missing[0])
+        agreement = "is" if len(missing) == 1 else "are"
+        ctx.add_failure(
+            f"{count_phrase(len(missing), 'time value')} {agreement} missing, so the time axis "
+            f"cannot be verified. The first incident is at index {index}, with "
+            f"{format_time_value(raw_time.reshape(-1)[index], units=units, calendar=cal, decimals=NDECIMALS)}."
+        )
+        return [ctx.to_result()]
+
+    is_climatology = bool(getattr(time_var, "climatology", "") or "")
+    midpoint_checked, declared_bounds = _check_declared_bounds_midpoints(
+        ctx,
+        ds,
+        time_var,
+        report_mismatch=is_climatology,
+    )
+    if is_climatology:
+        # A climatological coordinate can represent an averaging interval
+        # spanning many years. Its correct value is determined by the declared
+        # climatology bounds, not by advancing once from the filename start.
+        if midpoint_checked and not ctx.messages:
+            ctx.add_pass()
         return [ctx.to_result()]
 
     freq_id = _resolve_frequency(ds)
@@ -203,6 +372,12 @@ def check_time_squareness(
         return [ctx.to_result()]
 
     inc_val, inc_unit = int(inc[0]), str(inc[1])
+    # Avoid adding a second midpoint offset when the filename label already
+    # represents the sample time, exactly for subdaily data or approximately
+    # for multi-unit intervals such as decadal means.
+    subdaily_label = inc_unit in {"hours", "minutes", "seconds"}
+    coarse_representative_label = inc_val > 1 and not subdaily_label
+    label_is_representative = subdaily_label or coarse_representative_label
 
     # Start boundary from filename
     start_tuple = _parse_filename_start(_get_ds_path(ds))
@@ -210,18 +385,22 @@ def check_time_squareness(
         ctx.add_failure("Cannot parse filename time range start (_YYYY..-YYYY..nc).")
         return [ctx.to_result()]
 
-    start_boundary = cftime.datetime(*start_tuple, calendar=cal)
+    try:
+        start_boundary = cftime.datetime(*start_tuple, calendar=cal)
+    except Exception as exc:
+        ctx.add_failure(
+            f"Cannot interpret filename time-range start {start_tuple} using "
+            f"calendar {cal!r}. Technical reason: {type(exc).__name__}: {exc}"
+        )
+        return [ctx.to_result()]
 
     # Instantaneous vs average
     target = _resolve_target_variable(ds)
     instantaneous = _is_instantaneous(ds, target, freq_id)
-    use_midpoint = (not instantaneous) and (freq_id in set(AVERAGE_CORRECTION_FREQ))
+    use_midpoint = not instantaneous
 
     # Read actual time axis
-    raw = time_var[:]
-    if hasattr(raw, "compressed"):
-        raw = raw.compressed()
-    actual = np.asarray(raw, dtype=float)
+    actual = np.asarray(raw_time, dtype=float)
 
     if actual.size == 0:
         ctx.add_failure("Time axis is empty.")
@@ -229,26 +408,95 @@ def check_time_squareness(
 
     # Build theoretical axis in numeric space (file units)
     theo = np.zeros(actual.size, dtype=float)
+    theo_bounds = None
     variable_step = inc_unit in ("months", "years")
+    bounds_available = use_midpoint and declared_bounds is not None
 
-    if not variable_step:
-        d0 = start_boundary
-        d1 = add_time_increment(d0, inc_val, inc_unit, cal)
-        n0 = float(cftime.date2num(d0, units=units, calendar=cal))
-        n1 = float(cftime.date2num(d1, units=units, calendar=cal))
-        step_num = n1 - n0
-        first = (n0 + n1) / 2.0 if use_midpoint else n0
-        theo = first + np.arange(actual.size, dtype=float) * float(step_num)
-    else:
-        cur = start_boundary
-        for i in range(actual.size):
-            nxt = add_time_increment(cur, inc_val, inc_unit, cal)
-            theo[i] = (
-                _midpoint_num(cur, nxt, units, cal)
-                if use_midpoint
-                else float(cftime.date2num(cur, units=units, calendar=cal))
+    try:
+        if bounds_available:
+            theo_bounds = np.zeros_like(declared_bounds, dtype=float)
+
+        if not variable_step:
+            # The size of a fixed increment can be established near the filename
+            # date. Keep a representative-time anchor numeric so very large
+            # offsets need not pass through cftime's finite datetime range.
+            d0 = start_boundary
+            d1 = add_time_increment(d0, inc_val, inc_unit, cal)
+            reference_n0 = float(cftime.date2num(d0, units=units, calendar=cal))
+            reference_n1 = float(cftime.date2num(d1, units=units, calendar=cal))
+            step_num = reference_n1 - reference_n0
+            n0 = (
+                float(actual[0]) - step_num / 2.0
+                if use_midpoint and label_is_representative
+                else reference_n0
             )
-            cur = nxt
+            n1 = n0 + step_num
+            if use_midpoint:
+                first = (n0 + n1) / 2.0
+            else:
+                first = n0
+            offsets = np.arange(actual.size, dtype=float) * float(step_num)
+            theo = first + offsets
+            if bounds_available:
+                theo_bounds[:, 0] = n0 + offsets
+                theo_bounds[:, 1] = n1 + offsets
+        else:
+            # Advancing a midpoint can drift when adjacent calendar cells contain
+            # different numbers of days; rebuild from the first cell boundary.
+            if use_midpoint and label_is_representative:
+                cur = _representative_interval_start(
+                    actual[0],
+                    inc_val,
+                    inc_unit,
+                    units=units,
+                    calendar=cal,
+                )
+            else:
+                cur = start_boundary
+            for i in range(actual.size):
+                nxt = add_time_increment(cur, inc_val, inc_unit, cal)
+                cur_num = float(cftime.date2num(cur, units=units, calendar=cal))
+                nxt_num = float(cftime.date2num(nxt, units=units, calendar=cal))
+                theo[i] = (
+                    0.5 * (cur_num + nxt_num)
+                    if use_midpoint
+                    else cur_num
+                )
+                if bounds_available:
+                    theo_bounds[i] = (cur_num, nxt_num)
+                cur = nxt
+    except RepresentativeIntervalError as exc:
+        display_unit = inc_unit[:-1] if inc_unit.endswith("s") else inc_unit
+        ctx.add_failure(
+            f"The first time value "
+            f"{format_time_value(actual[0], units=units, calendar=cal, decimals=NDECIMALS)} "
+            f"does not identify a unique calendar-aligned {inc_val}-{display_unit} "
+            f"interval. The search {exc}."
+        )
+        return [ctx.to_result()]
+    except Exception as exc:
+        ctx.add_failure(
+            f"Cannot reconstruct the expected time axis using units {units!r} "
+            f"and calendar {cal!r}. Technical reason: {type(exc).__name__}: {exc}"
+        )
+        return [ctx.to_result()]
+
+    if bounds_available:
+        rounded_bounds = _round(declared_bounds, NDECIMALS)
+        rounded_theoretical_bounds = _round(theo_bounds, NDECIMALS)
+        bad_bounds = np.where(
+            np.any(rounded_bounds != rounded_theoretical_bounds, axis=1)
+        )[0]
+        if bad_bounds.size:
+            index = int(bad_bounds[0])
+            agreement = "does" if bad_bounds.size == 1 else "do"
+            display_unit = inc_unit[:-1] if inc_unit.endswith("s") else inc_unit
+            ctx.add_failure(
+                f"{count_phrase(int(bad_bounds.size), 'time-bounds interval')} {agreement} not "
+                f"match regular {inc_val}-{display_unit} cells. First incident at index "
+                f"{index}: the file contains {format_time_interval(declared_bounds[index], units=units, calendar=cal, decimals=NDECIMALS)}. "
+                f"The expected interval is {format_time_interval(theo_bounds[index], units=units, calendar=cal, decimals=NDECIMALS)}."
+            )
 
     # Compare after rounding to NDECIMALS places. See _round docstring
     # for why this is np.round and not np.trunc.
@@ -287,27 +535,36 @@ def check_time_squareness(
         full_match_center = np.array_equal(a_t, t_center)
 
         if not (full_match_start or full_match_mid or full_match_center):
-            bad = np.where((a_t != t_t) & (a_t != t_mid) & (a_t != t_center))[0]
-            if bad.size:
-                i = int(bad[0])
-            else:
-                # Mixed-convention axis: every point matches at least one candidate,
-                # but no single candidate matches the entire file.
-                first_start = np.where(a_t != t_t)[0]
-                i = int(first_start[0]) if first_start.size else 0
+            # Report deviations from the closest complete convention. This also
+            # gives a meaningful count for an axis that mixes valid conventions.
+            differences = [
+                np.where(a_t != candidate)[0] for candidate in (t_t, t_mid, t_center)
+            ]
+            closest = min(differences, key=lambda indices: indices.size)
+            failure_count = int(closest.size)
+            i = int(closest[0])
+            agreement = "prevents" if failure_count == 1 else "prevent"
             ctx.add_failure(
-                f"Mismatch at index {i}: expected {t_t[i]:.{NDECIMALS}f} (month-start) "
-                f"or {t_mid[i]:.{NDECIMALS}f} (day-15) "
-                f"or {t_center[i]:.{NDECIMALS}f} (exact center), got {a_t[i]:.{NDECIMALS}f}. "
-                "The full file must consistently follow one of these conventions. "
+                f"{count_phrase(failure_count, 'time value')} {agreement} the full axis "
+                f"from following one permitted monthly convention. First incident at "
+                f"index {i}: the file contains {format_time_value(actual[i], units=units, calendar=cal, decimals=NDECIMALS)}. "
+                f"Accepted values at this index are {format_time_value(theo[i], units=units, calendar=cal, decimals=NDECIMALS)} (month-start), "
+                f"{format_time_value(theo_mid[i], units=units, calendar=cal, decimals=NDECIMALS)} (day-15), or "
+                f"{format_time_value(theo_center[i], units=units, calendar=cal, decimals=NDECIMALS)} (exact center). "
+                f"It is {severity_word(severity)} for the full file to consistently "
+                "follow one of these conventions. "
                 f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
             )
     else:
         bad = np.where(a_t != t_t)[0]
         if bad.size:
             i = int(bad[0])
+            agreement = "does" if bad.size == 1 else "do"
             ctx.add_failure(
-                f"Mismatch at index {i}: expected {t_t[i]:.{NDECIMALS}f}, got {a_t[i]:.{NDECIMALS}f}. "
+                f"{count_phrase(int(bad.size), 'time value')} {agreement} not match the expected "
+                f"axis. First incident at index {i}: "
+                f"the file contains {format_time_value(actual[i], units=units, calendar=cal, decimals=NDECIMALS)}. "
+                f"The expected value is {format_time_value(theo[i], units=units, calendar=cal, decimals=NDECIMALS)}. "
                 f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
             )
 

@@ -18,12 +18,12 @@ def check_calendar_recommendation(ds, severity=BaseCheck.MEDIUM):
     attribute (which legitimately accepts "standard").
     """
     check_id = "TIME003a"
-    desc = f"[{check_id}] Recommended calendar for time coordinate"
+    desc = f"[{check_id}] Calendar for time coordinate"
     testctx = TestCtx(severity, desc)
     failure_registered = False
 
     # This will only fetch variables with time units defined
-    
+
     for time_var_name in cfutil.get_time_variables(ds):
         if time_var_name not in {var.name for var in util.find_coord_vars(ds)}:
             continue
@@ -34,7 +34,7 @@ def check_calendar_recommendation(ds, severity=BaseCheck.MEDIUM):
         if time_var.calendar.lower() == "standard":
             err_msg = (
                 f"Variable '{time_var.name}' has a calendar attribute with the value 'standard'. "
-                f"It is recommended to use 'proleptic_gregorian' instead."
+                f"It is {severity_word(severity)} to use 'proleptic_gregorian' instead."
             )
             testctx.add_failure(err_msg)
             failure_registered = True
