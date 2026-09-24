@@ -171,7 +171,9 @@ def test_all_registry_backed_plugins_use_new_known_branded_variable_model(
 
     monkeypatch.setattr(
         importlib.import_module(module_name),
-        "find_terms_in_data_descriptor",
+        "find_terms_in_collection"
+        if uses_file_branded_variable
+        else "find_terms_in_data_descriptor",
         find_terms,
     )
     checker = checker_class()
@@ -188,6 +190,40 @@ def test_all_registry_backed_plugins_use_new_known_branded_variable_model(
     assert expected.units == "K"
     assert expected.long_name == "Near-Surface Air Temperature"
     assert len(calls) == 1
+    if uses_file_branded_variable:
+        assert calls[0]["project_id"] == "cmip7"
+        assert calls[0]["collection_id"] == "branded_variable"
+        assert expected.cell_measures == "area: areacella"
+    else:
+        assert calls[0]["data_descriptor_id"] == "known_branded_variable"
+
+
+def test_cmip7_long_name_fallback_uses_project_variable_collection(monkeypatch):
+    calls = []
+
+    def find_terms(**kwargs):
+        calls.append(kwargs)
+        assert kwargs["project_id"] == "cmip7"
+        if kwargs["collection_id"] == "branded_variable":
+            return [SimpleNamespace(**{**NEW_RECORD, "long_name": None})]
+        assert kwargs["collection_id"] == "variable"
+        return [SimpleNamespace(id="tas", long_name="Project-specific temperature")]
+
+    monkeypatch.setattr(
+        importlib.import_module("plugins.cmip7.cmip7"),
+        "find_terms_in_collection",
+        find_terms,
+    )
+    attributes = {"variable_id": "tas", "branded_variable": NEW_RECORD["id"]}
+    dataset = SimpleNamespace(getncattr=lambda name: attributes[name])
+    checker = Cmip7ProjectCheck()
+
+    expected, results = checker._get_expected_from_registry(dataset, BaseCheck.HIGH)
+
+    assert results == []
+    assert expected.long_name == "Project-specific temperature"
+    assert expected.cell_measures == "area: areacella"
+    assert len(calls) == 2
 
 
 def test_builtin_configs_use_canonical_known_branded_variable_units_key():

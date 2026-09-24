@@ -169,8 +169,9 @@ def load_catalog(
         )
     lookup_id = str(branded_variable_id).strip().lower()
     try:
-        branded_record = api.get_term_in_data_descriptor(
-            "known_branded_variable",
+        branded_record = api.get_term_in_collection(
+            project_id,
+            "branded_variable",
             lookup_id,
             ["id", "out_name", "dimensions"],
         )
