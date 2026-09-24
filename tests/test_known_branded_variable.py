@@ -205,14 +205,14 @@ def test_cmip7_long_name_fallback_uses_project_variable_collection(monkeypatch):
         calls.append(kwargs)
         assert kwargs["project_id"] == "cmip7"
         if kwargs["collection_id"] == "branded_variable":
-            return [SimpleNamespace(**{**NEW_RECORD, "long_name": None})]
+            return SimpleNamespace(**{**NEW_RECORD, "long_name": None})
         assert kwargs["collection_id"] == "variable"
-        return [SimpleNamespace(id="tas", long_name="Project-specific temperature")]
+        return SimpleNamespace(id="tas", long_name="Project-specific temperature")
 
     monkeypatch.setattr(
         importlib.import_module("plugins.cmip7.cmip7"),
-        "find_terms_in_collection",
-        find_terms,
+        "esgvoc_api",
+        SimpleNamespace(get_term_in_collection=find_terms),
     )
     attributes = {"variable_id": "tas", "branded_variable": NEW_RECORD["id"]}
     dataset = SimpleNamespace(getncattr=lambda name: attributes[name])

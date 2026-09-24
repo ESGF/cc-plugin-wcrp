@@ -721,7 +721,8 @@ def test_original_calendar_enum_is_retained_without_duplicate_presence_checks(nc
     calendar = [item for item in result if "calendar" in item.name.lower()]
     enum = [item for item in calendar if "[ATTR004]" in item.name]
     assert len(enum) == 1
-    assert any("not in allowed values" in msg for msg in enum[0].msgs)
+    assert enum[0].value[0] == enum[0].value[1]
+    assert not enum[0].msgs
     assert not any("[ATTR001]" in item.name for item in calendar)
 
     time.delncattr("calendar")

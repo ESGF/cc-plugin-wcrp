@@ -62,27 +62,22 @@ def test_legacy_cf_units_config_reaches_attr004_through_shared_adapter(
     """Keep external configurations using the old registry key functional."""
     calls = []
 
-    def find_terms(
-        *,
-        expression,
-        data_descriptor_id,
-        selected_term_fields=None,
-        only_id=False,
-    ):
-        calls.append(data_descriptor_id)
-        assert expression == "tas_tavg-h2m-hxy-u"
-        assert data_descriptor_id == "known_branded_variable"
-        assert selected_term_fields is None
-        assert only_id is True
-        return [
-            SimpleNamespace(
-                id=expression,
-                units="K",
-                long_name="Near-Surface Air Temperature",
-            )
-        ]
+    def get_term(*, project_id, collection_id, term_id, **kwargs):
+        calls.append(collection_id)
+        assert project_id == "cmip7"
+        assert collection_id == "branded_variable"
+        assert term_id == "tas_tavg-h2m-hxy-u"
+        return SimpleNamespace(
+            id=term_id,
+            units="K",
+            long_name="Near-Surface Air Temperature",
+        )
 
-    monkeypatch.setattr(cmip7, "find_terms_in_data_descriptor", find_terms)
+    monkeypatch.setattr(
+        cmip7,
+        "esgvoc_api",
+        SimpleNamespace(get_term_in_collection=get_term),
+    )
     checker = cmip7.Cmip7ProjectCheck.__new__(cmip7.Cmip7ProjectCheck)
     checker._expected_term_cache = None
     checker._geo_var_cache = "tas"
@@ -120,4 +115,4 @@ def test_legacy_cf_units_config_reaches_attr004_through_shared_adapter(
         assert len(mismatching_attr004) == 1
         assert mismatching_attr004[0].value[0] < mismatching_attr004[0].value[1]
 
-    assert calls == ["known_branded_variable"]
+    assert calls == ["branded_variable"]
