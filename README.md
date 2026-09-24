@@ -17,6 +17,16 @@ If you have an old version of `esgvoc`, you should upgrade it:
 ```shell
 pip install esgvoc --upgrade
 ```
+
+[!CAUTION]
+> The CMIP7 coordinate checks require `esgvoc>=5.1.0`, including the coordinate
+> descriptor models and a configured CMIP7/universe database. If the installed
+> version is too old or the required records cannot be read, the plugin emits one
+> high-severity `COORD000` result with the technical reason and skips the
+> dependent coordinate checks.
+> Horizontal topology is configured project-wide in
+> `plugins/cmip7/config/wcrp/mappings/grid_topology.toml`.
+
 Then, use the commands below to activate the project you want:
 ```shell
 esgvoc use project@latest universe@latest
@@ -54,4 +64,3 @@ By default, the output is in plain text, but you can specify other formats with 
 compliance-checker -t ''plugin'' path/to/data/file.nc -f json
 compliance-checker -t ''plugin'' path/to/data/file.nc -f html
 ``` 
-

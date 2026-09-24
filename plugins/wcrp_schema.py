@@ -161,13 +161,23 @@ class DrsRule(BaseModel):
     severity: Optional[str] = None
 
 
+class TimeRangeRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    severity: Optional[str] = None
+    climatology_suffix: str = Field(
+        default="",
+        pattern=r"^$|^-[A-Za-z][A-Za-z0-9-]*$",
+    )
+    label_precision: Dict[str, str] = Field(default_factory=dict)
+
+
 class DrsSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     filename: Optional[DrsRule] = None
     directory: Optional[DrsRule] = None
     attributes_vs_directory: Optional[DrsRule] = None
     filename_vs_directory: Optional[DrsRule] = None
-    time_range_label_precision: Optional[Dict[str, str]] = None
+    time_range: TimeRangeRule = Field(default_factory=TimeRangeRule)
 
 
 # =============================================================================
@@ -247,6 +257,28 @@ class CoordinateGlobalRule(BaseModel):
     severity: Optional[str] = None
 
 
+class CoordinateDirectionRule(CoordinateGlobalRule):
+    """Controls the optional physical parts of coordinate direction checks."""
+
+    check_direct_physical_values: bool = True
+    check_formula_derived_profile: bool = True
+
+
+class CoordinateAttributesRule(CoordinateGlobalRule):
+    """Controls exceptions to strict coordinate-attribute absence rules."""
+
+    allowed_when_unset: list[str] = Field(default_factory=list)
+    allowed_when_unset_severity: Optional[str] = "L"
+
+
+class CoordinateBoundsNameRule(CoordinateGlobalRule):
+    """Recommended names for bounds-related dimensions."""
+
+    bounds_dimension_name: str = "bnds"
+    vertices_dimension_name: str = "vertices"
+    climatology_bounds_name: str = "climatology_bnds"
+
+
 class CoordinateNameRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
@@ -274,6 +306,31 @@ class TimeCoverageRule(BaseModel):
 class CalendarRecommendationRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
+
+
+class CoordinateRegistrySection(BaseModel):
+    """Severity and enablement controls for vocabulary-driven coordinates.
+
+    Each configured rule is an independent result family.  Omitting a rule
+    disables that family, which lets projects adopt the shared implementation
+    incrementally without changing the Python checker.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    setup: Optional[CoordinateGlobalRule] = None
+    identity: Optional[CoordinateGlobalRule] = None
+    dimension_order: Optional[CoordinateGlobalRule] = None
+    attributes: Optional[CoordinateAttributesRule] = None
+    recommendations: Optional[CoordinateGlobalRule] = None
+    direction: Optional[CoordinateDirectionRule] = None
+    valid_range: Optional[CoordinateGlobalRule] = None
+    requested_values: Optional[CoordinateGlobalRule] = None
+    bounds: Optional[CoordinateGlobalRule] = None
+    bounds_name: Optional[CoordinateBoundsNameRule] = None
+    associations: Optional[CoordinateGlobalRule] = None
+    grid: Optional[CoordinateGlobalRule] = None
+    formula: Optional[CoordinateGlobalRule] = None
 
 class CoordinateVariableConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -313,6 +370,7 @@ class CoordinatesSection(BaseModel):
 
     bounds: Optional[CoordinateGlobalRule] = None
     dimensions: Optional[CoordinateGlobalRule] = None
+    registry: Optional[CoordinateRegistrySection] = None
     variables: Dict[str, CoordinateVariableConfig] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -326,8 +384,11 @@ class CoordinatesSection(BaseModel):
         out["dimensions"] = values.get("dimensions")
 
         # Everything else under [coordinates.*] is interpreted as a coordinate variable rule set.
+        out["registry"] = values.get("registry")
         var_keys = {
-            k: v for k, v in values.items() if k not in {"bounds", "dimensions"}
+            k: v
+            for k, v in values.items()
+            if k not in {"bounds", "dimensions", "registry"}
         }
         out["variables"] = var_keys
         return out

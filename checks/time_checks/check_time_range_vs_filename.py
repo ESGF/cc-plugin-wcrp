@@ -21,6 +21,8 @@ from datetime import timedelta
 from compliance_checker.base import BaseCheck, TestCtx
 from netCDF4 import num2date
 
+from checks.time_checks.reporting import format_time_value
+
 # -----------------------------------------------------------------------------
 # Optional esgvoc DRS validator
 # -----------------------------------------------------------------------------
@@ -37,7 +39,10 @@ _VALIDATOR_CACHE: dict = {}
 
 # Relaxed fallback: a time-range token is two even-length digit runs (4..14)
 # separated by a hyphen. esgvoc is the authority; this is only a safety net.
-_FALLBACK_TOKEN_RE = re.compile(r"^(?P<start>\d{4,14})-(?P<end>\d{4,14})$")
+_FALLBACK_TOKEN_RE = re.compile(
+    r"^(?P<start>\d{4,14})-(?P<end>\d{4,14})"
+    r"(?P<suffix>-[A-Za-z][A-Za-z0-9-]*)?$"
+)
 
 # Frequency -> (<label format>, <token length>, <tuple length>)
 # tuple layout: (Y, M, D, H, Min, S)
@@ -113,17 +118,27 @@ def _esgvoc_filename_ok(ds, filename_no_ext):
     return not errors
 
 
+def _match_time_range_token(filename):
+    """Match the trailing time-range token in a filename."""
+    stem = filename[:-3] if filename.endswith(".nc") else filename
+    return _FALLBACK_TOKEN_RE.match(stem.split("_")[-1])
+
+
 def _extract_time_range_token(filename):
     """
     Return (start_str, end_str) of the time-range token, or (None, None).
     The token is the last underscore-separated segment of the stem.
     """
-    stem = filename[:-3] if filename.endswith(".nc") else filename
-    last_token = stem.split("_")[-1]
-    match = _FALLBACK_TOKEN_RE.match(last_token)
+    match = _match_time_range_token(filename)
     if not match:
         return None, None
     return match.group("start"), match.group("end")
+
+
+def _time_range_suffix(filename):
+    """Return the configured-style suffix from the trailing time-range token."""
+    match = _match_time_range_token(filename)
+    return str(match.group("suffix") or "") if match else ""
 
 
 def _fields_from_datestr(s):
@@ -141,12 +156,12 @@ def _fields_from_datestr(s):
 
 
 def _infer_is_climatology(ds):
-    """
-    Placeholder for climatology detection.
+    """Return whether the file declares climatological time bounds."""
+    if "time" not in ds.variables:
+        return False
 
-    TODO: implement robust climatology detection.
-    """
-    return False
+    climatology = getattr(ds.variables["time"], "climatology", "")
+    return bool(str(climatology or "").strip())
 
 
 def _build_precision_map(precision_by_frequency=None):
@@ -209,6 +224,50 @@ def _full_tuple(dt):
     )
 
 
+def _adjacent_month(year, month, offset):
+    """Return ``(year, month)`` one month before or after the input."""
+    ordinal = year * 12 + (month - 1) + offset
+    return ordinal // 12, ordinal % 12 + 1
+
+
+def _month_start_like(dt, year, month):
+    """Construct a month boundary retaining the input date's calendar type."""
+    return dt.replace(
+        year=year,
+        month=month,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+
+
+def _nearest_month_beginning_label(dt):
+    """Return the YYYY/MM label of the nearest beginning-of-month boundary."""
+    current = _month_start_like(dt, dt.year, dt.month)
+    next_year, next_month = _adjacent_month(dt.year, dt.month, 1)
+    following = _month_start_like(dt, next_year, next_month)
+    if dt - current <= following - dt:
+        return dt.year, dt.month
+    return next_year, next_month
+
+
+def _nearest_month_ending_label(dt):
+    """Return the YYYY/MM label of the nearest end-of-month boundary.
+
+    CF interval endpoints normally express the end of a month as the exact
+    beginning of the following month. Consequently, an endpoint at
+    ``2101-01-01 00:00`` receives the inclusive label ``210012``.
+    """
+    current = _month_start_like(dt, dt.year, dt.month)
+    next_year, next_month = _adjacent_month(dt.year, dt.month, 1)
+    following = _month_start_like(dt, next_year, next_month)
+    if dt - current < following - dt:
+        return _adjacent_month(dt.year, dt.month, -1)
+    return dt.year, dt.month
+
+
 def _round_datetime(dt, nearest):
     """Round date-like objects to nearest minute or second when possible."""
     if nearest == "minute":
@@ -253,7 +312,9 @@ def _coverage_from_climatology_bounds(ds):
         bvals = bvar[:]
         start_dt = num2date(bvals[0, 0], units=units, calendar=calendar)
         end_dt = num2date(bvals[-1, -1], units=units, calendar=calendar)
-        return _full_tuple(start_dt), _full_tuple(end_dt), None
+        start_year, start_month = _nearest_month_beginning_label(start_dt)
+        end_year, end_month = _nearest_month_ending_label(end_dt)
+        return (start_year, start_month), (end_year, end_month), None
     except Exception as e:
         return None, None, f"Error converting climatology bounds values: {e}"
 
@@ -318,7 +379,32 @@ def _coverage_at_precision(ds, tuple_length, freq, is_climatology=False):
     return cov_start_full[:tuple_length], cov_end_full[:tuple_length], None
 
 
-def check_time_range_vs_filename(ds, severity=BaseCheck.MEDIUM, precision_by_frequency=None):
+def _coverage_endpoint_values(ds, is_climatology=False):
+    """Return the stored numeric values used for the two coverage endpoints."""
+    tvar = ds.variables["time"]
+    if is_climatology:
+        bname = getattr(tvar, "climatology", None)
+        bvals = ds.variables[bname][:]
+        return bvals[0, 0], bvals[-1, -1]
+
+    tvals = tvar[:]
+    if hasattr(tvals, "compressed"):
+        tvals = tvals.compressed()
+    return tvals[0], tvals[-1]
+
+
+def _format_coverage_label(fields):
+    """Format a coverage tuple with the same compact form as filename labels."""
+    widths = (4, 2, 2, 2, 2, 2)
+    return "".join(f"{value:0{width}d}" for value, width in zip(fields, widths))
+
+
+def check_time_range_vs_filename(
+    ds,
+    severity=BaseCheck.MEDIUM,
+    precision_by_frequency=None,
+    climatology_suffix="",
+):
     """
     [TIME003] Compare filename time range with actual data coverage.
     """
@@ -366,6 +452,23 @@ def check_time_range_vs_filename(ds, severity=BaseCheck.MEDIUM, precision_by_fre
         )
         return [ctx.to_result()]
 
+    actual_suffix = _time_range_suffix(filename)
+    expected_suffix = str(climatology_suffix or "") if is_climatology else ""
+    if actual_suffix != expected_suffix:
+        if is_climatology:
+            expected_description = repr(expected_suffix) if expected_suffix else "no suffix"
+            found_description = repr(actual_suffix) if actual_suffix else "no suffix"
+            ctx.add_failure(
+                "Climatology filename time-range suffix mismatch: expected "
+                f"{expected_description}, found {found_description}."
+            )
+        else:
+            ctx.add_failure(
+                f"The filename time range ends in {actual_suffix!r}, but the time "
+                "coordinate does not define a climatology attribute."
+            )
+        return [ctx.to_result()]
+
     if len(start_str) != expected_len or len(end_str) != expected_len:
         ctx.add_failure(
             f"Time range precision mismatch for frequency '{freq}': "
@@ -390,20 +493,19 @@ def check_time_range_vs_filename(ds, severity=BaseCheck.MEDIUM, precision_by_fre
         ctx.add_failure(err)
         return [ctx.to_result()]
 
-    issues = []
-    if cov_start > expected_start:
-        issues.append(f"Data starts at {cov_start}, later than filename start {start_str}.")
-    elif cov_start < expected_start:
-        issues.append(f"Data starts at {cov_start}, earlier than filename start {start_str}.")
-
-    if cov_end < expected_end:
-        issues.append(f"Data ends at {cov_end}, earlier than filename end {end_str}.")
-    elif cov_end > expected_end:
-        issues.append(f"Data ends at {cov_end}, later than filename end {end_str}.")
-
-    if issues:
-        for msg in issues:
-            ctx.add_failure(msg)
+    if cov_start != expected_start or cov_end != expected_end:
+        start_value, end_value = _coverage_endpoint_values(ds, is_climatology)
+        tvar = ds.variables["time"]
+        coverage_start = _format_coverage_label(cov_start)
+        coverage_end = _format_coverage_label(cov_end)
+        ctx.add_failure(
+            f"The filename time range '{start_str}-{end_str}' does not match the "
+            f"first and last data endpoints, which resolve to "
+            f"'{coverage_start}-{coverage_end}'. The first endpoint is "
+            f"{format_time_value(start_value, units=tvar.units, calendar=getattr(tvar, 'calendar', 'standard'))}. "
+            f"The last endpoint is "
+            f"{format_time_value(end_value, units=tvar.units, calendar=getattr(tvar, 'calendar', 'standard'))}."
+        )
     else:
         ctx.add_pass()
 
