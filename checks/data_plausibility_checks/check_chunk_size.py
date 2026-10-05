@@ -50,7 +50,14 @@ def check_chunk_size(dataset, severity=BaseCheck.MEDIUM):
     """
     ctx = TestCtx(severity)
     variables = []
-    time_dim = get_ds_dimensions(dataset)['t']
+    time_dim = get_ds_dimensions(dataset).get('t')
+    if time_dim is None:
+        ctx.variable = 'time'
+        ctx.messages.append(
+            "DATA009 not applicable: no time dimension is present."
+        )
+        ctx.add_pass()
+        return ctx
     if time_dim in dataset.variables:
         variables.append(time_dim)
     if f"{time_dim}_bnds" in dataset.variables:
