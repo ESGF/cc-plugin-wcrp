@@ -140,3 +140,42 @@ severity = "H"
 
 [global.attributes.vertical_label]
 severity = "H"
+
+# ==============================================================================
+# == Global attribute consistency checks
+# ==============================================================================
+[global.consistency.filename_vs_attributes]
+# ATTR005a
+severity = "H"
+
+[global.consistency.experiment_id_vs_activity_id]
+# ATTR007a
+severity = "M"
+
+[global.consistency.experiment_id_vs_experiment]
+# ATTR007b
+severity = "M"
+
+[global.consistency.experiment_id_vs_parent_experiment_id]
+# ATTR007c
+severity = "M"
+
+[global.consistency.institution_id_vs_institution]
+# ATTR009
+severity = "M"
+
+[global.consistency.variant_label_vs_realization_index]
+# ATTR006a
+severity = "H"
+
+[global.consistency.variant_label_vs_initialization_index]
+# ATTR006b
+severity = "H"
+
+[global.consistency.variant_label_vs_physics_index]
+# ATTR006c
+severity = "H"
+
+[global.consistency.variant_label_vs_forcing_index]
+# ATTR006d
+severity = "H"
