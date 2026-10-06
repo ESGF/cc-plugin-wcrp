@@ -133,6 +133,7 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
     _cc_spec = "wcrp_c3scmip6"
     _cc_spec_version = "1.0"
     _cc_description = "WCRP C3S CMIP6 Project PLugin"
+    _uses_esgvoc_project_specs = True
     supported_ds = [Dataset]
 
     def __init__(self, options=None):
@@ -409,6 +410,8 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
     
     def check_DRS(self, ds):
         res = []
+        if self._esgvoc_project_setup_error:
+            return res
         if not self.config or not self.config.drs:
             return res
 

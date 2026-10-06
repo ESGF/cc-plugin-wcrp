@@ -136,6 +136,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
     _cc_spec = "wcrp_cmip7"
     _cc_spec_version = "1.0"
     _cc_description = "WCRP CMIP7 Project Checks"
+    _uses_esgvoc_project_specs = True
     supported_ds = [Dataset]
 
     def __init__(self, options=None):
@@ -157,7 +158,6 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         self._grid_topology_config_error: Optional[str] = None
         self._coordinate_grid_topology: Optional[str] = None
         self._coordinate_grid_error: Optional[str] = None
-
         # Config directory
         if options and "project_config_dir" in options:
             self.project_config_dir = options["project_config_dir"]
@@ -500,6 +500,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
     # -------------------------------------------------------------------------
     def check_DRS(self, ds):
         res = []
+        if self._esgvoc_project_setup_error:
+            return res
         if not self.config or not self.config.drs:
             return res
 

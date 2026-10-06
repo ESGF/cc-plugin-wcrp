@@ -133,6 +133,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
     _cc_spec = "wcrp_cmip6plus"
     _cc_spec_version = "1.0"
     _cc_description = "WCRP CMIP6Plus Project Plugin"
+    _uses_esgvoc_project_specs = True
     supported_ds = [Dataset]
 
     def __init__(self, options=None):
@@ -407,6 +408,8 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
 
     def check_DRS(self, ds):
         res = []
+        if self._esgvoc_project_setup_error:
+            return res
         if not self.config or not self.config.drs:
             return res
 

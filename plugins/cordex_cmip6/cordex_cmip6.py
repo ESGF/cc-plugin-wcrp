@@ -136,6 +136,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
     _cc_spec = "wcrp_cordex_cmip6"
     _cc_spec_version = "1.0"
     _cc_description = "WCRP CORDEX-CMIP6 Project Checks"
+    _uses_esgvoc_project_specs = True
     _cc__url = "https://doi.org/10.5281/zenodo.15047096"
     _cc_display_headers = {3: "Required", 2: "Recommended", 1: "Suggested"}
     _defer_consistency_output = True
@@ -518,6 +519,8 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
 
     def check_DRS(self, ds):
         results = []
+        if self._esgvoc_project_setup_error:
+            return results
         if not self.config or not self.config.drs:
             return results
         drs = self.config.drs
