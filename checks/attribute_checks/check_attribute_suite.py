@@ -475,7 +475,9 @@ def check_attribute_suite(
             expected_val = _expected_term_value(expected_term, cv_source_term_key)
             if expected_val is None or str(expected_val).strip() == "":
                 ctx.add_failure(
-                    f"Registry has no value for key '{cv_source_term_key}'."
+                    f"{where} '{attribute_name}' is defined as {attr_value!r}, but "
+                    f"the selected CV entry does not define a value for "
+                    f"'{cv_source_term_key}'."
                 )
             else:
                 actual = str(attr_value).strip()

@@ -91,6 +91,33 @@ def test_missing_registry_attribute_is_optional_when_expected_value_is_empty(
     assert results == []
 
 
+def test_defined_registry_attribute_reports_that_cv_value_is_unset(tmp_path):
+    with Dataset(tmp_path / "attributes.nc", "w") as dataset:
+        variable = dataset.createVariable("tas", "f4")
+        variable.comment = "Model-specific information"
+        results = checker.check_attribute_suite(
+            dataset,
+            "comment",
+            var_name="tas",
+            severity=BaseCheck.LOW,
+            is_required=False,
+            cv_source_term_key="comment",
+            expected_term_comparison="contains",
+            expected_term=SimpleNamespace(comment=None),
+        )
+
+    failure = results[-1]
+    assert failure.name == (
+        "[ATTR004] Variable 'tas' attribute 'comment' registry expected-term check"
+    )
+    assert not result_passed(failure)
+    assert failure.msgs == [
+        "Variable 'tas' attribute 'comment' is defined as "
+        "'Model-specific information', but the selected CV entry does not define "
+        "a value for 'comment'."
+    ]
+
+
 def test_missing_registry_attribute_remains_required_when_value_is_expected(
     tmp_path,
 ):
