@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from netCDF4 import Dataset
 
@@ -12,17 +10,8 @@ from tests.remote.fetch import resolve_remote_file
 
 
 @pytest.fixture(scope="session")
-def cmip6_reference_path() -> Path:
-    """Return the CMIP6 fixture, preferring the historical local copy."""
-    local = (
-        Path(__file__).parents[1]
-        / "data"
-        / "CMIP6/CMIP/IPSL/IPSL-CM5A2-INCA/historical/r1i1p1f1/Amon/pr/gr/"
-        / "v20240619/"
-        / CMIP6_REFERENCE_FILE.relative_path.name
-    )
-    if local.is_file():
-        return local
+def cmip6_reference_path():
+    """Resolve the CMIP6 fixture through the shared remote-data cache."""
     return resolve_remote_file(CMIP6_REFERENCE_FILE)
 
 
