@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+import pytest
 from compliance_checker.base import BaseCheck
 from netCDF4 import Dataset
 
@@ -114,6 +115,43 @@ def test_missing_registry_attribute_remains_required_when_value_is_expected(
     assert results[0].msgs == [
         "Required variable 'tas' attribute 'cell_measures' is missing."
     ]
+
+
+@pytest.mark.parametrize("marker", ["--MODEL", "--OPT", "--UGRID"])
+def test_special_cell_measures_marker_accepts_producer_value(tmp_path, marker):
+    with Dataset(tmp_path / "attributes.nc", "w") as dataset:
+        variable = dataset.createVariable("sidmasstrany", "f4")
+        variable.cell_measures = "area: areacello"
+        results = checker.check_attribute_suite(
+            dataset,
+            "cell_measures",
+            var_name="sidmasstrany",
+            severity=BaseCheck.MEDIUM,
+            value_type="str",
+            is_required=True,
+            cv_source_term_key="cell_measures",
+            expected_term=SimpleNamespace(cell_measures=marker),
+        )
+
+    assert all(result_passed(result) for result in results)
+
+
+@pytest.mark.parametrize("marker", ["--MODEL", "--OPT", "--UGRID"])
+def test_special_cell_measures_marker_does_not_require_attribute(tmp_path, marker):
+    with Dataset(tmp_path / "attributes.nc", "w") as dataset:
+        dataset.createVariable("sidmasstrany", "f4")
+        results = checker.check_attribute_suite(
+            dataset,
+            "cell_measures",
+            var_name="sidmasstrany",
+            severity=BaseCheck.MEDIUM,
+            value_type="str",
+            is_required=True,
+            cv_source_term_key="cell_measures",
+            expected_term=SimpleNamespace(cell_measures=[marker]),
+        )
+
+    assert results == []
 
 
 def test_missing_optional_registry_attribute_can_be_reported_as_advisory(tmp_path):

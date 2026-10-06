@@ -10,6 +10,9 @@ from compliance_checker.base import TestCtx
 
 from checks.utils import severity_word
 
+
+_UNRESTRICTED_CELL_MEASURES = {"--MODEL", "--OPT", "--UGRID"}
+
 # ESGVOC
 try:
     from esgvoc import api as voc  # type: ignore
@@ -81,6 +84,19 @@ def _expected_term_options(value: Any) -> list[str]:
         return [str(option).strip() for option in value if str(option).strip()]
     option = str(value).strip()
     return [option] if option else []
+
+
+def _has_unrestricted_cell_measures(
+    expected_term: Any,
+    key: Optional[str],
+) -> bool:
+    """Whether the registry delegates ``cell_measures`` to the producer."""
+    if key != "cell_measures":
+        return False
+    expected_options = _expected_term_options(
+        _expected_term_value(expected_term, key)
+    )
+    return bool(_UNRESTRICTED_CELL_MEASURES.intersection(expected_options))
 
 
 # -----------------------------------------------------------------------------
@@ -160,6 +176,11 @@ def check_attribute_suite(
     prefix = f"{context} " if context else ""
     label = f"{prefix}{where} '{attribute_name}'"
 
+    unrestricted_cell_measures = _has_unrestricted_cell_measures(
+        expected_term,
+        cv_source_term_key,
+    )
+
     # A main-variable attribute backed by branded-variable metadata is only
     # mandatory when that selected record actually defines an expected value.
     # When registry lookup itself failed, an issue with the same configured
@@ -167,7 +188,10 @@ def check_attribute_suite(
     if (
         cv_source_term_key
         and expected_term is not None
-        and not _has_expected_term_value(expected_term, cv_source_term_key)
+        and (
+            not _has_expected_term_value(expected_term, cv_source_term_key)
+            or unrestricted_cell_measures
+        )
     ):
         is_required = False
 
@@ -219,6 +243,7 @@ def check_attribute_suite(
         elif (
             report_missing_expected_term
             and cv_source_term_key
+            and not unrestricted_cell_measures
             and _has_expected_term_value(expected_term, cv_source_term_key)
         ):
             expected_options = _expected_term_options(
@@ -442,6 +467,10 @@ def check_attribute_suite(
             ctx.add_failure(
                 "Registry rule enabled but expected_term is None (registry not resolved)."
             )
+        elif unrestricted_cell_measures:
+            # These table markers delegate the choice of cell measure to the
+            # data producer. The CF checker validates any supplied value.
+            ctx.add_pass()
         else:
             expected_val = _expected_term_value(expected_term, cv_source_term_key)
             if expected_val is None or str(expected_val).strip() == "":
