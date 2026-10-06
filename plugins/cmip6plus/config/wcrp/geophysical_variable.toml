@@ -66,7 +66,9 @@ pattern = ".*"
 severity = "L"
 value_type = "str"
 is_required = false
-pattern = ".*"
+cv_source_term_key = "comment"
+expected_term_comparison = "contains"
+report_missing_expected_term = true
 
 [variable.attributes.description]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004

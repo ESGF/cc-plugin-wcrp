@@ -324,7 +324,19 @@ def validate_horizontal_grid(
     ]
     if not requested:
         return []
-    if resolution_error or topology is None:
+    zonal_mean = "latitude" in requested and "longitude" not in requested
+    if zonal_mean:
+        if resolution_error or topology != "rectilinear":
+            detail = resolution_error or f"The resolved topology is {topology!r}."
+            findings.add(
+                "recommendations",
+                "Only latitude is required, so the zonal-mean grid is verified "
+                f"as rectilinear regardless of its grid metadata. {detail} It is "
+                f"{findings.severity_word('recommendations')} to register or select a grid "
+                "with a (zonal-mean) rectilinear topology.",
+            )
+        topology = "rectilinear"
+    elif resolution_error or topology is None:
         findings.add(
             "grid",
             "The horizontal grid could not be verified. "

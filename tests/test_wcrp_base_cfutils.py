@@ -5,6 +5,7 @@ import pytest
 from compliance_checker.base import BaseCheck
 from netCDF4 import Dataset
 
+from checks.format_checks.check_compression import check_compression
 from checks.variable_checks.check_coords_cordex_cmip6 import (
     check_horizontal_axes_bounds,
     check_lat_lon_bounds,
@@ -278,7 +279,7 @@ def test_cordex_table_retrieval_failure_is_recorded(
     cf_dataset,
     monkeypatch,
 ):
-    checker = CordexCmip6ProjectCheck()
+    checker = CordexCmip6ProjectCheck({"verification_against_tables": True})
 
     def fail_retrieval(*_args, **_kwargs):
         raise OSError("table service unavailable")
@@ -288,7 +289,7 @@ def test_cordex_table_retrieval_failure_is_recorded(
     checker.setup(cf_dataset)
 
     assert any(
-        "Could not retrieve the CORDEX-CMIP6 CMOR tables" in warning
+        "Could not load the CORDEX-CMIP6 CMOR tables" in warning
         for warning in checker.setup_warnings
     )
 
@@ -496,7 +497,12 @@ def test_cordex_does_not_repeat_cf_discovery_after_loading_tables(
     tmp_path,
     monkeypatch,
 ):
-    checker = CordexCmip6ProjectCheck({"tables_dir": str(tmp_path)})
+    checker = CordexCmip6ProjectCheck(
+        {
+            "tables_dir": str(tmp_path),
+            "verification_against_tables": True,
+        }
+    )
     calls = {"time": 0, "coordinates": 0}
 
     def initialize_time():
@@ -726,3 +732,80 @@ def test_cordex_consumers_use_netCDF_and_cfutils(cf_dataset):
     ]
 
     assert all(not result.msgs for result in results)
+
+
+def test_horizontal_axes_bounds_ignore_auxiliary_lat_lon_vertices(tmp_path):
+    path = tmp_path / "rotated-grid.nc"
+    with Dataset(path, "w") as dataset:
+        dataset.createDimension("rlat", 2)
+        dataset.createDimension("rlon", 3)
+        dataset.createDimension("vertices", 4)
+        dataset.variable_id = "tas"
+
+        rlat = dataset.createVariable("rlat", "f8", ("rlat",))
+        rlat.axis = "Y"
+        rlat.standard_name = "grid_latitude"
+        rlat.units = "degrees"
+        rlat[:] = [-1.0, 1.0]
+
+        rlon = dataset.createVariable("rlon", "f8", ("rlon",))
+        rlon.axis = "X"
+        rlon.standard_name = "grid_longitude"
+        rlon.units = "degrees"
+        rlon[:] = [-2.0, 0.0, 2.0]
+
+        lat = dataset.createVariable("lat", "f8", ("rlat", "rlon"))
+        lat.standard_name = "latitude"
+        lat.units = "degrees_north"
+        lat.bounds = "vertices_lat"
+        lat[:] = [[49.0, 49.0, 49.0], [51.0, 51.0, 51.0]]
+
+        lon = dataset.createVariable("lon", "f8", ("rlat", "rlon"))
+        lon.standard_name = "longitude"
+        lon.units = "degrees_east"
+        lon.bounds = "vertices_lon"
+        lon[:] = [[8.0, 10.0, 12.0], [8.0, 10.0, 12.0]]
+
+        dataset.createVariable("vertices_lat", "f8", ("rlat", "rlon", "vertices"))[
+            :
+        ] = 0.0
+        dataset.createVariable("vertices_lon", "f8", ("rlat", "rlon", "vertices"))[
+            :
+        ] = 0.0
+
+        mapping = dataset.createVariable("rotated_pole", "i4")
+        mapping.grid_mapping_name = "rotated_latitude_longitude"
+
+        tas = dataset.createVariable("tas", "f4", ("rlat", "rlon"))
+        tas.standard_name = "air_temperature"
+        tas.coordinates = "lat lon"
+        tas.grid_mapping = "rotated_pole"
+        tas[:] = 280.0
+
+    with Dataset(path) as dataset:
+        checker = WCRPBaseCheck()
+        checker.setup(dataset)
+        result = check_horizontal_axes_bounds(checker)[0]
+
+    assert result.value == (0, 1)
+    assert result.msgs == [
+        "It is recommended for the variables 'rlat' and 'rlon' or 'x' and "
+        "'y' to have bounds defined."
+    ]
+
+
+def test_netcdf3_compression_is_reported_instead_of_raising(tmp_path):
+    path = tmp_path / "netcdf3.nc"
+    with Dataset(path, "w", format="NETCDF3_CLASSIC") as dataset:
+        dataset.createDimension("time", 1)
+        dataset.createVariable("tas", "f4", ("time",))[:] = [280.0]
+
+    with Dataset(path) as dataset:
+        result = check_compression(dataset, variable_name="tas")[0]
+
+    assert result.value == (0, 1)
+    assert result.msgs == [
+        "It is recommended that data variable be compressed with a 'deflate "
+        "level' of '1' and with the 'shuffle' option enabled. The data appears "
+        "uncompressed."
+    ]

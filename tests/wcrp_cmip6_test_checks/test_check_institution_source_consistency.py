@@ -1,26 +1,55 @@
+"""Unit coverage for institution/source consistency with mocked ESGVoc."""
 
-#!/usr/bin/env python
-"""
-Test for check_institution_source_consistency.py
-Author: Ayoub NACHITE ''IPSL''
-"""
+from types import SimpleNamespace
 
-import os
-from netCDF4 import Dataset
 from compliance_checker.base import BaseCheck
-from ...checks.consistency_checks import check_institution_source_consistency as checker
-from compliance_checker.tests import BaseTestCase
+from netCDF4 import Dataset
 
-class TestCheckInstitutionSourceConsistency(BaseTestCase):
+from checks.consistency_checks import check_institution_source_consistency as checker
+from tests.wcrp_cmip6_test_checks.conftest import result_passed
 
-    def test_check_institution_consistency(self):
-        file_path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__),
-            "..", "..", "data", "CMIP6", "CMIP", "IPSL", "IPSL-CM5A2-INCA", "historical", "r1i1p1f1", "Amon", "pr", "gr", "v20240619", "pr_Amon_IPSL-CM5A2-INCA_historical_r1i1p1f1_gr_185001-201412.nc"
-        ))
-        dataset = Dataset(file_path, mode="r")
-        results = checker.check_institution_consistency(dataset, severity=BaseCheck.MEDIUM, project_id="cmip6")
-        assert len(results) == 1
-        for res in results:
-            self.assert_result_is_good(res) 
 
+def test_institution_and_source_consistency(tmp_path, monkeypatch):
+    terms = {
+        ("institution_id", "ipsl"): SimpleNamespace(
+            id="ipsl",
+            description="Institut Pierre Simon Laplace",
+        ),
+        ("source_id", "ipsl-cm5a2-inca"): SimpleNamespace(
+            id="ipsl-cm5a2-inca",
+            organisation_id=["IPSL"],
+        ),
+    }
+
+    def get_term_in_collection(*, project_id, collection_id, term_id):
+        assert project_id == "cmip6"
+        return terms.get((collection_id, term_id))
+
+    monkeypatch.setattr(checker, "ESG_VOCAB_AVAILABLE", True)
+    monkeypatch.setattr(
+        checker.voc,
+        "get_term_in_collection",
+        get_term_in_collection,
+    )
+
+    with Dataset(tmp_path / "source.nc", "w") as dataset:
+        dataset.institution_id = "IPSL"
+        dataset.institution = "Institut Pierre Simon Laplace"
+        dataset.source_id = "IPSL-CM5A2-INCA"
+        results = [
+            *checker.check_institution_consistency(
+                dataset,
+                severity=BaseCheck.HIGH,
+                project_id="cmip6",
+            ),
+            *checker.check_source_consistency(
+                dataset,
+                severity=BaseCheck.HIGH,
+                project_id="cmip6",
+            ),
+        ]
+
+    assert len(results) == 2
+    assert all(result_passed(result) for result in results)
+    assert results[0].name.startswith("[ATTR009]")
+    assert results[1].name.startswith("[ATTR010]")

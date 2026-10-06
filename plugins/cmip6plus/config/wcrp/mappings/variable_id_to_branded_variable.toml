@@ -1617,6 +1617,7 @@
 "Omon.pp" = "pp_tavg-l-hxy-sea"
 "Omon.ppos" = "pp_tavg-z0m-hxy-sea"
 "Omon.pso" = "pso_tavg-u-hxy-sea"
+"Omon.prsn" = "prsn_tavg-u-hxy-u"
 "Omon.scint" = "scint_tavg-u-hxy-u"
 "Omon.sduo" = "sduo_tavg-u-hxy-sea"
 "Omon.sdvo" = "sdvo_tavg-u-hxy-sea"
@@ -1866,4 +1867,3 @@
 "SImon.sivol" = "?_tavg-u-hxy-sea"
 "SImon.sivoln" = "sivol_tavg-u-hm-u"
 "SImon.sivols" = "sivol_tavg-u-hm-u"
-"Omon.prsn" = "prsn_tavg-u-hxy-u"

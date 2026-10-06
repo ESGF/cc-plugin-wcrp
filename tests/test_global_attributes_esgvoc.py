@@ -21,6 +21,7 @@ class FakeSpec:
     attr_field_value_type: str
     attr_field_name: str | None = None
     is_required: bool = False
+    source_collection_key: str | None = None
 
 
 class FakeDataset:
@@ -175,6 +176,42 @@ def test_multiple_invalid_tokens_remain_one_attr004_assertion():
     assert len(attr004[0].msgs) == 1
     assert "BAD1" in attr004[0].msgs[0]
     assert "BAD2" in attr004[0].msgs[0]
+
+
+def test_specific_key_accepts_one_value_from_descriptor_list(monkeypatch):
+    source = "Regional Climate Model REMO (2023)"
+    report = GAReport(
+        project_id="cordex-cmip6",
+        filename="example.nc",
+        results=[
+            AttributeResult(
+                "source",
+                False,
+                "source not found",
+                source,
+                "source_id",
+            ),
+        ],
+    )
+    validator = FakeValidator(report)
+    validator._specs = [
+        FakeSpec("source_id", "string", "source", True, "source")
+    ]
+    monkeypatch.setattr(
+        "checks.attribute_checks.check_global_attributes_esgvoc.voc.get_term_in_collection",
+        lambda project_id, collection_id, term_id: SimpleNamespace(
+            source=["Regional Climate Model REMO", source]
+        ),
+    )
+
+    results = check_global_attributes_esgvoc(
+        FakeDataset({"source_id": "REMO2020-2-2", "source": source}),
+        "cordex-cmip6",
+        validator=validator,
+    )
+
+    assert len(results) == 2
+    assert all(not result.msgs for result in results)
 
 
 def test_esgvoc_failure_is_reported_once_as_setup_error():

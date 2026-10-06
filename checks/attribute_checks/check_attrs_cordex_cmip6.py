@@ -14,7 +14,14 @@ if not hasattr(cfutil, "get_geophysical_variables"):
     from compliance_checker import cfutil
 
 
-def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
+def check_grid_mapping(
+    CheckerObject,
+    severity=BaseCheck.MEDIUM,
+    missing_severity=BaseCheck.MEDIUM,
+    allowed_grid_mapping_names=(),
+    horizontal_topology=None,
+    topology_error=None,
+):
     """
     Checks if the grid_mapping label is compliant with the CORDEX-CMIP6 archive specifications.
 
@@ -23,7 +30,18 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
     CheckerObject : WCRPBaseCheck object
         The initialized WCRPBaseCheck object for the project/dataset being checked.
     severity : str
-        The severity of the check. Default: BaseCheck.MEDIUM.
+        The severity of invalid grid metadata. Default: BaseCheck.MEDIUM.
+    missing_severity : str
+        The severity of recommending Earth-size metadata when grid_mapping is absent.
+        Default: BaseCheck.MEDIUM.
+    allowed_grid_mapping_names : sequence of str
+        Project-configured allowed ``grid_mapping_name`` values.
+    horizontal_topology : str, optional
+        Independently inferred topology, used only to decide whether omission is
+        permitted for a rectilinear latitude-longitude grid.
+    topology_error : str, optional
+        Reason topology could not be inferred. COORD011 owns that failure, so it
+        is not duplicated here.
 
     Returns
     -------
@@ -32,32 +50,37 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
     check_id = "CDXA001"
     desc = f"[{check_id}] grid_mapping"
     testctx = TestCtx(severity, desc)
+    missingctx = TestCtx(
+        missing_severity,
+        f"[{check_id}] grid_mapping Earth description",
+    )
 
-    # The allowed grid_mapping_name attribute values in CORDEX-CMIP6
-    gmallowed = [
-        "lambert_conformal_conic",
-        "rotated_latitude_longitude",
-        "mercator",
-        "latitude_longitude",
-    ]
-    # The allowed exception for omitting the grid_mapping attribute, based on the global attribute 'grid'
-    gmomittedtext = "(no grid_mapping)"
+    gmallowed = tuple(dict.fromkeys(allowed_grid_mapping_names or ()))
+    omission_marker = "(no grid_mapping)"
     grid_description = str(getattr(CheckerObject.ds, "grid", "") or "").lower()
-    grid_mapping_optional = gmomittedtext in grid_description
+    ocean_omission = omission_marker in grid_description
     # One of the following attributes needs to be specified for the grid_mapping variable
     # assuming that means that the Earth is specified/described as requested
     # (the checking of the validity of the description is left to CF checks)
     gmoptattrs = ["earth_radius", "semi_major_axis"]
 
-    grid_mapping_name = False
-    if len(CheckerObject.varname) > 0:
-        crs = getattr(
-            CheckerObject.ds.variables[CheckerObject.varname[0]], "grid_mapping", False
-        )
-        if crs:
-            grid_mapping_name = getattr(
-                CheckerObject.ds.variables[crs], "grid_mapping_name", False
+    if CheckerObject.varname:
+        variable_name = CheckerObject.varname[0]
+        if variable_name not in CheckerObject.ds.variables:
+            testctx.add_failure(
+                f"The geophysical variable {variable_name!r} is absent, so its "
+                "grid_mapping attribute could not be checked."
             )
+            return [testctx.to_result()]
+        crs = getattr(CheckerObject.ds.variables[variable_name], "grid_mapping", "")
+        if crs and crs not in CheckerObject.ds.variables:
+            testctx.add_failure(
+                f"The grid_mapping attribute names {crs!r}, but that variable is "
+                "absent from the file."
+            )
+        elif crs:
+            mapping = CheckerObject.ds.variables[crs]
+            grid_mapping_name = getattr(mapping, "grid_mapping_name", "")
             # Check grid_mapping label
             if grid_mapping_name and crs in ["crs", grid_mapping_name]:
                 testctx.add_pass()
@@ -67,21 +90,17 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
                     " or equal to the grid_mapping_name (eg. 'rotated_latitude_longitude')."
                 )
             # Check grid_mapping_name
-            if grid_mapping_name and grid_mapping_name in gmallowed:
+            if grid_mapping_name and (not gmallowed or grid_mapping_name in gmallowed):
                 testctx.add_pass()
             else:
+                allowed = ", ".join(repr(name) for name in gmallowed)
                 testctx.add_failure(
-                    f"The grid_mapping_name '{grid_mapping_name}' must be one of:"
-                    f""" {", ".join(["'" + gm  + "'" for gm in gmallowed])}."""
+                    f"The grid_mapping_name {grid_mapping_name!r} must be one of: "
+                    f"{allowed or '(no values configured)'}."
                 )
             # Check presence of description of spherical / ellipsoid Earth
             # - leave actual checking of the validity of that info to CF
-            if any(
-                [
-                    getattr(CheckerObject.ds.variables[crs], attr, False)
-                    for attr in gmoptattrs
-                ]
-            ):
+            if any(getattr(mapping, attr, False) for attr in gmoptattrs):
                 testctx.add_pass()
             else:
                 testctx.add_failure(
@@ -90,131 +109,40 @@ def check_grid_mapping(CheckerObject, severity=BaseCheck.MEDIUM):
                     " of the CF-Conventions for further information."
                 )
             # Check data type of grid_mapping variable (int or char)
-            if (
-                CheckerObject.ds[crs].dtype == np.int32
-                or CheckerObject.ds[crs].dtype.kind == "S"
-            ):
+            if mapping.dtype == np.int32 or mapping.dtype.kind == "S":
                 testctx.add_pass()
             else:
                 testctx.add_failure(
                     f"The grid_mapping variable '{crs}' needs to be of type 'int' or 'char', "
-                    f"but is of type '{CheckerObject.ds[crs].dtype} ({CheckerObject.ds[crs].dtype.kind})'."
+                    f"but is of type '{mapping.dtype} ({mapping.dtype.kind})'."
                 )
         else:
-            has_1d_lat_lon = (
-                "lat" in CheckerObject.ds.variables
-                and "lon" in CheckerObject.ds.variables
-                and CheckerObject.ds.variables["lat"].ndim == 1
-                and CheckerObject.ds.variables["lon"].ndim == 1
+            missingctx.add_failure(
+                "No grid_mapping variable was found. It is "
+                f"{severity_word(missing_severity)} to define one with information "
+                "about the shape and size of the Earth used for the model grid, "
+                "even for latitude-longitude and ocean grids."
             )
-            if has_1d_lat_lon:
-                grid_mapping_name = "latitude_longitude"
-                testctx.add_failure(
-                    "No grid_mapping variable found. For regular latitude-longitude grids, "
-                    "it is recommended to define a grid_mapping variable with grid_mapping_name "
-                    "'latitude_longitude' to provide the Earth radius."
-                )
-            elif grid_mapping_optional:
+            if horizontal_topology == "rectilinear" or ocean_omission:
+                testctx.add_pass()
+            elif topology_error:
+                # COORD011 owns the topology failure; do not repeat its cause here.
                 testctx.add_pass()
             else:
                 testctx.add_failure(
-                    f"No grid_mapping variable, describing the coordinate reference system,"
-                    " could be found in the file."
-                    "The grid_mapping attribute can only be omitted for supported ocean grids, "
-                    f"when the global attribute 'grid' contains the text '{gmomittedtext}'."
+                    "No grid_mapping variable describing the coordinate reference "
+                    "system was found. It may be omitted for a rectilinear "
+                    "latitude-longitude grid, or for a supported ocean grid when "
+                    f"the global 'grid' attribute contains {omission_marker!r}."
                 )
 
     else:
         testctx.add_pass()
 
-    # lat and lon must be present for all grid mappings. For regular
-    # latitude-longitude grids they are 1D; for all other mappings they are 2D.
-    if grid_mapping_name and grid_mapping_name in gmallowed:
-        if (
-            "lat" not in CheckerObject.ds.variables
-            or "lon" not in CheckerObject.ds.variables
-        ):
-            testctx.add_failure(
-                f"The grid_mapping_name '{grid_mapping_name}' requires the variables"
-                " 'lat' and 'lon' to be present in the file."
-            )
-        elif grid_mapping_name == "latitude_longitude":
-            if (
-                CheckerObject.ds.variables["lat"].ndim != 1
-                or CheckerObject.ds.variables["lon"].ndim != 1
-            ):
-                testctx.add_failure(
-                    "The grid_mapping_name 'latitude_longitude' requires the variables"
-                    " 'lat' and 'lon' to be 1D."
-                )
-            else:
-                testctx.add_pass()
-        else:
-            if (
-                CheckerObject.ds.variables["lat"].ndim != 2
-                or CheckerObject.ds.variables["lon"].ndim != 2
-            ):
-                testctx.add_failure(
-                    f"The grid_mapping_name '{grid_mapping_name}' requires the variables"
-                    " 'lat' and 'lon' to be 2D."
-                )
-            else:
-                testctx.add_pass()
-
-    # rlat, rlon or y, x must be present in file, depending on the grid_mapping_name
-    if grid_mapping_name and grid_mapping_name in gmallowed:
-        if grid_mapping_name in ["lambert_conformal_conic", "mercator"]:
-            if (
-                "y" not in CheckerObject.ds.variables
-                or "x" not in CheckerObject.ds.variables
-            ):
-                testctx.add_failure(
-                    f"The grid_mapping_name '{grid_mapping_name}' requires the variables"
-                    " 'y' and 'x' to be present in the file defining the native coordinate"
-                    " system used by the RCM."
-                )
-            else:
-                testctx.add_pass()
-        elif grid_mapping_name == "rotated_latitude_longitude":
-            if (
-                "rlat" not in CheckerObject.ds.variables
-                or "rlon" not in CheckerObject.ds.variables
-            ):
-                testctx.add_failure(
-                    "The grid_mapping_name 'rotated_latitude_longitude' requires the variables"
-                    " 'rlat' and 'rlon' to be present in the file defining the native"
-                    " coordinate system used by the RCM."
-                )
-            else:
-                testctx.add_pass()
-        elif grid_mapping_name == "latitude_longitude":
-            if (
-                "rlat" in CheckerObject.ds.variables
-                or "rlon" in CheckerObject.ds.variables
-                or "y" in CheckerObject.ds.variables
-                or "x" in CheckerObject.ds.variables
-            ):
-                testctx.add_failure(
-                    "The grid_mapping_name 'latitude_longitude' does not require"
-                    " 'rlat', 'rlon', 'y', or 'x' coordinate variables; 'lat' and"
-                    " 'lon' are the coordinate variables in this case."
-                )
-            else:
-                testctx.add_pass()
-    else:
-        if grid_mapping_optional:
-            testctx.add_pass()
-        elif (
-            "rlat" in CheckerObject.ds.variables
-            and "rlon" in CheckerObject.ds.variables
-        ) or ("y" in CheckerObject.ds.variables and "x" in CheckerObject.ds.variables):
-            testctx.add_pass()
-        else:
-            testctx.add_failure(
-                "The variables 'rlat', 'rlon' or 'y' and 'x' need to be present in the"
-                " file defining the native coordinate system used by the RCM."
-            )
-    return [testctx.to_result()]
+    results = [testctx.to_result()]
+    if missingctx.messages:
+        results.append(missingctx.to_result())
+    return results
 
 
 def check_domain_id(CheckerObject, severity=BaseCheck.MEDIUM, use_esgvoc=False):

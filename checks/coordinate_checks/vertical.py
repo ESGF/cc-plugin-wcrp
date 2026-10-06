@@ -392,14 +392,7 @@ def validate_model_level(
     elif check_direct_physical_values and not expected_formula:
         check_direct_vertical_values(findings, var, name, level)
 
-    allowed_attributes = tuple(
-        attribute
-        for attribute in ("formula", "formula_terms")
-        if attribute in var.ncattrs()
-    )
-    bounds_var = check_bounds(
-        findings, ds, var, name, level, allowed_attributes=allowed_attributes
-    )
+    bounds_var = check_bounds(findings, ds, var, name, level)
     if bounds_var is not None and "formula" in bounds_var.ncattrs():
         if ncattr(bounds_var, "formula") != actual_formula:
             findings.add(

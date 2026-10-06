@@ -83,10 +83,32 @@ def coordinate(identifier, kind, out_name, **values):
     }
 
 
-def test_esgvoc_version_is_at_least_5_1_0():
-    with pytest.raises(CoordinateMetadataError, match=r"esgvoc>=5\.1\.0"):
-        require_supported_version("5.1.0.dev1")
-    assert require_supported_version("5.1.0") == "5.1.0"
+@pytest.mark.parametrize(
+    ("root", "expected"),
+    [
+        ("baresoilFrac", "baresoilFrac"),
+        (
+            {"id": "baresoilfrac", "drs_name": "baresoilFrac"},
+            "baresoilFrac",
+        ),
+        ({"id": "baresoilfrac"}, "baresoilfrac"),
+    ],
+)
+def test_catalog_resolves_variable_root_name_fallback(root, expected):
+    result = Catalog(
+        project_id="cmip7",
+        branded_variable_id="baresoilfrac_tavg-u-hxy-u",
+        branded_variable={"variable_root_name": root},
+        coordinate_ids=(),
+    )
+
+    assert result.data_variable_name == expected
+
+
+def test_esgvoc_version_is_at_least_6_2_0():
+    with pytest.raises(CoordinateMetadataError, match=r"esgvoc>=6\.2\.0"):
+        require_supported_version("6.2.0.dev1")
+    assert require_supported_version("6.2.0") == "6.2.0"
 
 
 def test_catalog_reads_each_coordinate_collection_once():
@@ -97,11 +119,13 @@ def test_catalog_reads_each_coordinate_collection_once():
         def get_term_in_collection(self, project, descriptor, identifier, fields):
             assert project == "cmip7"
             assert descriptor == "branded_variable"
+            assert "cell_methods" in fields
             self.calls.append(("one", descriptor))
             return {
                 "id": identifier,
                 "out_name": "ta",
                 "dimensions": ["time1"],
+                "cell_methods": ["area: time: mean", "area: mean time: mean"],
             }
 
         def get_all_terms_in_collection(self, project, descriptor, fields):
@@ -111,8 +135,12 @@ def test_catalog_reads_each_coordinate_collection_once():
             return [{"id": f"test_{descriptor}"}]
 
     api = API()
-    result = load_catalog("ta_ti-u-hxy-air", api=api, installed_version="5.1.0")
+    result = load_catalog("ta_ti-u-hxy-air", api=api, installed_version="6.2.0")
     assert result.coordinate_ids == ("time1",)
+    assert result.branded_variable["cell_methods"] == [
+        "area: time: mean",
+        "area: mean time: mean",
+    ]
     assert api.calls.count(("one", "branded_variable")) == 1
     assert api.calls.count(("all", "data_coordinate")) == 1
     assert [call for call in api.calls if call[0] == "all"] == [
@@ -147,7 +175,7 @@ def test_catalog_normalizes_mixed_case_branded_variable_id():
     result = load_catalog(
         "baresoilFrac_tavg-u-hxy-u",
         api=api,
-        installed_version="5.1.0",
+        installed_version="6.2.0",
     )
 
     assert api.requested_id == "baresoilfrac_tavg-u-hxy-u"
@@ -177,7 +205,7 @@ def test_setup_failure_is_one_verbose_high_result(nc, monkeypatch):
     assert checker.check_Coordinate_Standard(nc) == []
 
 
-def test_time001_still_runs_when_coordinate_catalogue_is_unavailable(nc):
+def test_time001_is_skipped_when_branded_variable_catalogue_is_unavailable(nc):
     nc.frequency = "monC"
     nc.table_id = "Amon"
     nc.variable_id = "tas"
@@ -202,9 +230,46 @@ def test_time001_still_runs_when_coordinate_catalogue_is_unavailable(nc):
 
     results = checker.check_Coordinates(nc)
 
-    time001 = next(result for result in results if "TIME001" in result.name)
-    assert "2 time values" in time001.msgs[0]
-    assert "First incident at index 1" in time001.msgs[0]
+    assert not any("TIME001" in result.name for result in results)
+
+
+@pytest.mark.parametrize("is_climatology", [False, True])
+def test_time003_uses_esgvoc_coordinate_climatology(
+    nc, monkeypatch, is_climatology
+):
+    nc.frequency = "mon"
+    nc.createDimension("time", 1)
+    time = nc.createVariable("time", "f8", ("time",))
+    time.units = "days since 2000-01-01"
+    time.calendar = "standard"
+    time[:] = [0.0]
+    nc.createVariable("ta", "f4", ("time",))
+    entry = coordinate(
+        "time_climatology" if is_climatology else "time",
+        "standard_1d",
+        "time",
+        axis="T",
+        cf_standard_name="time",
+        units="days since ?",
+        is_climatology=is_climatology,
+    )
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    checker._coordinate_catalog = catalog({entry["id"]: entry})
+    observed = {}
+
+    def capture(*args, **kwargs):
+        observed.update(kwargs)
+        return []
+
+    monkeypatch.setattr("plugins.cmip7.cmip7.check_time_squareness", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "plugins.cmip7.cmip7.check_time_range_vs_filename", capture
+    )
+
+    checker.check_Coordinates(nc)
+
+    assert observed["expected_is_climatology"] is is_climatology
 
 
 def test_calendar_message_wording_follows_configured_severity(nc):
@@ -465,8 +530,8 @@ def test_ordinary_empty_cv_attribute_requires_file_attribute_absence(
     information = next(item for item in result if "COORD004a" in item.name)
     assert information.weight == BaseCheck.LOW
     assert any(
-        f"defines {attribute}=" in message
-        and "permitted by the configured allowed_when_unset" in message
+        f"defines optional attribute {attribute}=" in message
+        and "this value cannot be verified" in message
         for message in information.msgs
     )
 
@@ -957,6 +1022,75 @@ def test_scalar_uses_units_and_valid_range_but_not_tolerance(nc):
     assert not any("permitted absolute" in msg for msg in found)
 
 
+def test_scalar_direct_values_allow_only_float_precision_noise(nc):
+    nc.createDimension("bnds", 2)
+    depth = nc.createVariable("depth", "f8")
+    depth.assignValue(549.9999999999)
+    depth.bounds = "depth_bnds"
+    bounds = nc.createVariable("depth_bnds", "f8", ("bnds",))
+    bounds[:] = [500.0000000001, 599.9999999999]
+    ta = nc.createVariable("ta", "f4")
+    ta.coordinates = "depth"
+    entry = coordinate(
+        "depth550m",
+        "scalar",
+        "depth",
+        coordinate_values=[550.0],
+        coordinate_bounds=[500.0, 600.0],
+        bounds_required=True,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"depth550m": entry}), severities=FAMILIES
+    )
+    requested_values = next(item for item in result if "COORD007" in item.name)
+    assert requested_values.value == (1, 1)
+
+    depth.assignValue(549.99)
+    bounds[:] = [500.0, 599.99]
+    result = check_coordinate_catalog(
+        nc, catalog({"depth550m": entry}), severities=FAMILIES
+    )
+    found = messages(result)
+    assert any(
+        "Scalar coordinate 'depth'=549.99" in message and "value is 550.0" in message
+        for message in found
+    )
+    assert any(
+        "Scalar bounds 'depth_bnds'=[500.0, 599.99]" in message for message in found
+    )
+
+
+def test_direct_1d_values_allow_only_float_precision_noise(nc):
+    nc.createDimension("level", 2)
+    level = nc.createVariable("level", "f8", ("level",))
+    level[:] = [549.9999999999, 650.0000000001]
+    nc.createVariable("ta", "f4", ("level",))
+    entry = coordinate(
+        "level",
+        "standard_1d",
+        "level",
+        stored_direction="increasing",
+        coordinate_values=[550.0, 650.0],
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"level": entry}), severities=FAMILIES
+    )
+    requested_values = next(item for item in result if "COORD007" in item.name)
+    assert requested_values.value == (1, 1)
+
+    level[:] = [549.99, 650.0]
+    result = check_coordinate_catalog(
+        nc, catalog({"level": entry}), severities=FAMILIES
+    )
+    assert any(
+        "'level' does not contain requested value(s)" in message
+        and "(550.0, 0.0)" in message
+        for message in messages(result)
+    )
+
+
 def test_data_dimensions_follow_reverse_esgvoc_cmor_order(nc):
     nc.createDimension("plev", 2)
     nc.createDimension("time", 3)
@@ -1085,6 +1219,38 @@ def test_climatology_rejects_regular_bounds_unless_climatology_names_them(nc):
         "required that climatological time coordinate 'time' does not define regular bounds variable"
         in msg
         for msg in found
+    )
+
+
+def test_regular_time_rejects_climatology_attribute(nc):
+    nc.createDimension("time", 2)
+    time = nc.createVariable("time", "f8", ("time",))
+    time[:] = [0, 1]
+    time.axis = "T"
+    time.standard_name = "time"
+    time.units = "days since 2000-01-01"
+    time.calendar = "standard"
+    time.climatology = "climatology_bnds"
+    nc.createVariable("ta", "f4", ("time",))
+    entry = coordinate(
+        "time",
+        "standard_1d",
+        "time",
+        axis="T",
+        cf_standard_name="time",
+        units="days since ?",
+        is_climatology=False,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"time": entry}), severities=FAMILIES
+    )
+    bounds = next(item for item in result if "COORD008" in item.name)
+
+    assert any(
+        "regular time coordinate 'time' not to define a climatology attribute"
+        in message
+        for message in bounds.msgs
     )
 
 
@@ -1559,6 +1725,110 @@ def test_rectilinear_grid_uses_generic_coordinate_records(nc):
     result = check_coordinate_catalog(
         nc, grid_catalog(), severities=FAMILIES, grid_topology="rectilinear"
     )
+    assert messages(result) == []
+
+
+@pytest.mark.parametrize(
+    ("topology", "resolution_error", "detail"),
+    [
+        ("curvilinear", None, "resolved topology is 'curvilinear'"),
+        ("unstructured", None, "resolved topology is 'unstructured'"),
+        (None, "No topology metadata was available.", "No topology metadata"),
+    ],
+)
+def test_zonal_mean_overrides_grid_metadata_with_rectilinear_grid(
+    nc, topology, resolution_error, detail
+):
+    nc.createDimension("lat", 2)
+    latitude = nc.createVariable("lat", "f8", ("lat",))
+    latitude[:] = [-45.0, 45.0]
+    latitude.axis = "Y"
+    latitude.standard_name = "latitude"
+    latitude.units = "degrees_north"
+    nc.createVariable("ta", "f4", ("lat",))
+    zonal_catalog = catalog(
+        {
+            "latitude": coordinate(
+                "latitude",
+                "generic_horizontal",
+                "lat",
+                axis="Y",
+                cf_standard_name="latitude",
+                units="degrees_north",
+            )
+        },
+        dimensions=["latitude"],
+    )
+
+    result = check_coordinate_catalog(
+        nc, zonal_catalog, severities=FAMILIES, grid_topology="rectilinear"
+    )
+    assert messages(result) == []
+
+    result = check_coordinate_catalog(
+        nc,
+        zonal_catalog,
+        severities=FAMILIES,
+        grid_topology=topology,
+        grid_resolution_error=resolution_error,
+    )
+
+    recommendation = next(item for item in result if "COORD004" in item.name)
+    assert recommendation.weight == BaseCheck.MEDIUM
+    assert any(
+        "zonal-mean grid is verified as rectilinear" in message
+        and detail in message
+        and "recommended to register or select a grid" in message
+        and "with a (zonal-mean) rectilinear topology" in message
+        for message in recommendation.msgs
+    )
+    grid = next(item for item in result if "COORD011" in item.name)
+    assert grid.value == (1, 1)
+
+
+def test_gridlatitude_is_checked_as_ordinary_1d_without_grid_topology(nc):
+    nc.createDimension("rlat", 2)
+    grid_latitude = nc.createVariable("rlat", "f8", ("rlat",))
+    grid_latitude[:] = [-1.0, 1.0]
+    grid_latitude.axis = "Y"
+    grid_latitude.standard_name = "grid_latitude"
+    grid_latitude.units = "degrees"
+    nc.createVariable("ta", "f4", ("rlat",))
+    reduced_catalog = catalog(
+        {
+            "gridlatitude": coordinate(
+                "gridlatitude",
+                "standard_1d",
+                "rlat",
+                axis="Y",
+                cf_standard_name="grid_latitude",
+                units="degrees",
+                stored_direction="increasing",
+            )
+        },
+        dimensions=["gridlatitude"],
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        reduced_catalog,
+        severities=FAMILIES,
+        grid_resolution_error="No grid topology was resolved.",
+    )
+
+    assert messages(result) == []
+
+
+def test_global_mean_does_not_require_grid_topology(nc):
+    nc.createVariable("ta", "f4")
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({}),
+        severities=FAMILIES,
+        grid_resolution_error="No grid topology was resolved.",
+    )
+
     assert messages(result) == []
 
 
@@ -2252,8 +2522,8 @@ def test_generic_vertical_computed_standard_name_is_required_only_when_defined(n
     information = next(item for item in result if "COORD004a" in item.name)
     assert information.weight == BaseCheck.LOW
     assert any(
-        "computed_standard_name='model_specific_height'" in msg
-        and "permitted by the configured allowed_when_unset" in msg
+        "optional attribute computed_standard_name='model_specific_height'" in msg
+        and "this value cannot be verified" in msg
         for msg in information.msgs
     )
 
@@ -2337,7 +2607,11 @@ def test_generic_vertical_empty_cv_formula_requires_attribute_absence(nc, file_v
     assert not any("attribute to be absent" in message for message in messages(result))
     information = next(item for item in result if "COORD004a" in item.name)
     assert information.weight == BaseCheck.LOW
-    assert any("defines formula=" in message for message in information.msgs)
+    assert any(
+        "defines optional attribute formula=" in message
+        and "cannot be verified" in message
+        for message in information.msgs
+    )
 
 
 @pytest.mark.parametrize("file_value", ["sigma: lev", ""])
@@ -2368,7 +2642,11 @@ def test_generic_vertical_without_formula_terms_requires_attribute_absence(
     assert not any("attribute to be absent" in message for message in messages(result))
     information = next(item for item in result if "COORD004a" in item.name)
     assert information.weight == BaseCheck.LOW
-    assert any("defines formula_terms=" in message for message in information.msgs)
+    assert any(
+        "defines optional attribute formula_terms=" in message
+        and "cannot be verified" in message
+        for message in information.msgs
+    )
 
 
 @pytest.mark.parametrize("dimensions", [(), ("lev",)])
@@ -2460,7 +2738,7 @@ def test_model_bounds_formula_is_optional_but_must_match_parent(nc, formula):
 
 
 @pytest.mark.parametrize("kind", ["ordinary", "time", "model"])
-def test_bounds_reject_unexpected_attributes(nc, kind):
+def test_bounds_attributes_are_delegated_to_cf_checker(nc, kind):
     if kind == "model":
         cv = _sigma_file_and_catalog(nc)
         bounds = nc.variables["lev_bnds"]
@@ -2482,5 +2760,5 @@ def test_bounds_reject_unexpected_attributes(nc, kind):
     bounds.units = "nonsense"
     result = check_coordinate_catalog(nc, cv, severities=FAMILIES)
     bounds_result = next(r for r in result if "COORD008" in r.name)
-    assert any("unexpected attributes ['units']" in msg for msg in bounds_result.msgs)
+    assert not any("unexpected attributes" in msg for msg in bounds_result.msgs)
     assert bounds_result.weight == BaseCheck.HIGH

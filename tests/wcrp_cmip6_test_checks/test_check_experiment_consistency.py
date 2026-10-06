@@ -1,26 +1,64 @@
+"""Unit coverage for atomic experiment consistency checks."""
 
-#!/usr/bin/env python
-"""
-Test for check_experiment_consistency.py
+from types import SimpleNamespace
 
-"""
-
-import os
-from netCDF4 import Dataset
 from compliance_checker.base import BaseCheck
-from ...checks.consistency_checks import check_experiment_consistency as checker
-from compliance_checker.tests import BaseTestCase
+from netCDF4 import Dataset
 
-class TestCheckExperimentConsistency(BaseTestCase):
+from checks.consistency_checks import check_experiment_consistency as checker
+from tests.wcrp_cmip6_test_checks.conftest import result_passed
 
-    def test_check_experiment_consistency(self):
-        file_path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__),
-            "..", "..", "data", "CMIP6", "CMIP", "IPSL", "IPSL-CM5A2-INCA", "historical", "r1i1p1f1", "Amon", "pr", "gr", "v20240619", "pr_Amon_IPSL-CM5A2-INCA_historical_r1i1p1f1_gr_185001-201412.nc"
-        ))
-        dataset = Dataset(file_path, mode="r")
-        results = checker.check_experiment_consistency(dataset, severity=BaseCheck.MEDIUM, project_id="cmip6")
-        assert len(results) == 1
-        for res in results:
-            self.assert_result_is_good(res) 
 
+def _mock_experiment(monkeypatch):
+    term = SimpleNamespace(
+        activity_id=["CMIP"],
+        experiment="all-forcing simulation of the recent past",
+        parent_experiment_id=["piControl"],
+        sub_experiment_id=["forecast"],
+    )
+    monkeypatch.setattr(checker, "ESG_VOCAB_AVAILABLE", True)
+    monkeypatch.setattr(checker, "resolve_experiment_term", lambda *_args: term)
+
+
+def test_atomic_experiment_consistency_checks(tmp_path, monkeypatch):
+    _mock_experiment(monkeypatch)
+    with Dataset(tmp_path / "experiment.nc", "w") as dataset:
+        dataset.experiment_id = "historical"
+        dataset.activity_id = "CMIP"
+        dataset.experiment = "all-forcing simulation of the recent past"
+        dataset.parent_experiment_id = "piControl"
+        dataset.sub_experiment_id = "forecast"
+
+        results = [
+            checker.check_experiment_id_vs_activity_id(dataset, BaseCheck.HIGH),
+            checker.check_experiment_id_vs_experiment(dataset, BaseCheck.HIGH),
+            checker.check_experiment_id_vs_parent_experiment_id(
+                dataset, BaseCheck.HIGH
+            ),
+            checker.check_experiment_id_vs_sub_experiment_id(dataset, BaseCheck.HIGH),
+        ]
+
+    flattened = [result for group in results for result in group]
+    assert len(flattened) == 4
+    assert all(result_passed(result) for result in flattened)
+    assert [result.name.split("]", 1)[0] + "]" for result in flattened] == [
+        "[ATTR007a]",
+        "[ATTR007b]",
+        "[ATTR007c]",
+        "[ATTR007d]",
+    ]
+
+
+def test_experiment_consistency_reports_mismatch(tmp_path, monkeypatch):
+    _mock_experiment(monkeypatch)
+    with Dataset(tmp_path / "experiment.nc", "w") as dataset:
+        dataset.experiment_id = "historical"
+        dataset.experiment = "incorrect description"
+        results = checker.check_experiment_id_vs_experiment(
+            dataset,
+            BaseCheck.HIGH,
+        )
+
+    assert len(results) == 1
+    assert not result_passed(results[0])
+    assert "CV expects" in results[0].msgs[0]

@@ -5,6 +5,9 @@ from compliance_checker.base import BaseCheck
 from compliance_checker.base import TestCtx as CheckContext
 from netCDF4 import Dataset
 
+from checks.consistency_checks.check_attributes_match_filename import (
+    check_filename_vs_global_attrs,
+)
 from plugins.c3scmip6.c3scmip6 import c3scmip6 as c3scmip6_module
 from plugins.c3scmip6.c3scmip6.c3scmip6 import C3SCmip6ProjectCheck
 from plugins.cmip6 import cmip6 as cmip6_module
@@ -123,3 +126,21 @@ def test_cmip6_consistency_entry_point_reports_inconsistent_metadata(
 
     assert set(result_by_id) == expected_failures
     assert all(result.value[0] < result.value[1] for result in result_by_id.values())
+
+
+def test_cmip6_filename_consistency_reports_unexpected_token_count(tmp_path):
+    filename = (
+        "ta_tavg-al-hxy-u_mon_glb_g122_Model_piControl_"
+        "r1i1p1f1_185101-185113.nc"
+    )
+    with Dataset(tmp_path / filename, "w") as dataset:
+        results = check_filename_vs_global_attrs(
+            dataset,
+            severity=BaseCheck.HIGH,
+            project_id="cmip6",
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[ATTR005]")
+    assert results[0].value[0] < results[0].value[1]
+    assert "does not have the expected 7 components" in results[0].msgs[0]

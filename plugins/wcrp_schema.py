@@ -68,6 +68,8 @@ class AttributeRule(BaseModel):
 
     # Variable Registry "expected-term" key (must be used alone)
     cv_source_term_key: Optional[str] = None
+    expected_term_comparison: Literal["equal", "contains"] = "equal"
+    report_missing_expected_term: bool = False
 
     @model_validator(mode="after")
     def exclusivity(self):
@@ -100,6 +102,14 @@ class AttributeRule(BaseModel):
                     "cv_source_term_key is mutually exclusive with other rules"
                 )
             return self
+
+        if self.report_missing_expected_term:
+            raise ValueError(
+                "report_missing_expected_term requires cv_source_term_key"
+            )
+
+        if self.expected_term_comparison != "equal":
+            raise ValueError("expected_term_comparison requires cv_source_term_key")
 
         # Otherwise, only ONE rule among value rules + vocab rule.
         active = [
@@ -148,6 +158,7 @@ class FileSection(BaseModel):
     compression: Optional[FileCompressionRule] = None
     internal_packing: Optional[FileInternalPackingRule] = None
 
+
 class FileInternalPackingRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
@@ -178,6 +189,8 @@ class DrsSection(BaseModel):
     attributes_vs_directory: Optional[DrsRule] = None
     filename_vs_directory: Optional[DrsRule] = None
     time_range: TimeRangeRule = Field(default_factory=TimeRangeRule)
+    directory_template_keys: List[str] = Field(default_factory=list)
+    filename_template_keys: List[str] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -198,10 +211,14 @@ class GlobalConsistency(BaseModel):
     experiment_id_vs_activity_id: Optional[ConsistencyRule] = None
     experiment_id_vs_experiment: Optional[ConsistencyRule] = None
     experiment_id_vs_parent_experiment_id: Optional[ConsistencyRule] = None
-    experiment_id_vs_sub_experiment_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+    experiment_id_vs_sub_experiment_id: Optional[ConsistencyRule] = (
+        None  # CMIP6/plus only
+    )
 
     # Institution / source (ATTR009, ATTR010)
     institution_id_vs_institution: Optional[ConsistencyRule] = None
+    source_id_vs_source: Optional[ConsistencyRule] = None
+    driving_source_id_vs_driving_source: Optional[ConsistencyRule] = None
     source_id_vs_institution_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
 
     # Frequency vs table (ATTR008)
@@ -303,6 +320,7 @@ class TimeCoverageRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
 
+
 class CalendarRecommendationRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
@@ -331,6 +349,7 @@ class CoordinateRegistrySection(BaseModel):
     associations: Optional[CoordinateGlobalRule] = None
     grid: Optional[CoordinateGlobalRule] = None
     formula: Optional[CoordinateGlobalRule] = None
+
 
 class CoordinateVariableConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")

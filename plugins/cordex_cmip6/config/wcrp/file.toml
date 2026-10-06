@@ -1,0 +1,9 @@
+[file.format]
+severity = "H"
+expected_format = "HDF5"
+allowed_data_models = ["NETCDF4_CLASSIC"]
+
+[file.compression]
+severity = "M"
+expected_complevel = 1
+expected_shuffle = true

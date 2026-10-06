@@ -65,7 +65,7 @@ from checks.dimension_checks.check_dimension_existence import check_dimension_ex
 from checks.dimension_checks.check_dimension_positive import check_dimension_positive
 
 from checks.time_checks.check_time_squareness import check_time_squareness
-import checks.time_checks.check_time_squareness as time_squareness_mod  
+import checks.time_checks.check_time_squareness as time_squareness_mod
 from checks.time_checks.check_time_bounds import check_time_bounds
 from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from checks.variable_checks.check_coordinate_monotonicity import (
@@ -265,9 +265,10 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
         )
         self._geo_var_cache = None
         self._expected_term_cache = None
+        self._expected_term_lookup_attempted = False
 
     # -------------------------------------------------------------------------
-    # CF-based geophysical variable identification 
+    # CF-based geophysical variable identification
     # -------------------------------------------------------------------------
     def _get_geo_var(
         self, ds: Dataset, severity: int
@@ -325,8 +326,9 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
     # Variable Registry expected_term lookup (CMIP6 mapping: table_id.variable_id)
     # -------------------------------------------------------------------------
     def _get_expected_from_registry(self, ds: Dataset, severity: int):
-        if self._expected_term_cache is not None:
+        if getattr(self, "_expected_term_lookup_attempted", False):
             return self._expected_term_cache, []
+        self._expected_term_lookup_attempted = True
 
         results = []
         if find_terms_in_data_descriptor is None:
@@ -402,7 +404,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
     # -------------------------------------------------------------------------
     # 3) DRS checks
     # -------------------------------------------------------------------------
-    
+
     def check_DRS(self, ds):
         res = []
         if not self.config or not self.config.drs:
@@ -488,6 +490,8 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             res.extend(vr_r)
 
         for attr_key, rule in vcfg.attributes.items():
+            if rule.cv_source_term_key and expected_term is None:
+                continue
             sev = self.get_severity(rule.severity)
             name_in_file = rule.attribute_name or attr_key
             res.extend(
@@ -511,6 +515,8 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                     project_name=self.project_name,
                     expected_term=expected_term,
                     cv_source_term_key=rule.cv_source_term_key,
+                    expected_term_comparison=rule.expected_term_comparison,
+                    report_missing_expected_term=rule.report_missing_expected_term,
                 )
             )
 
@@ -625,7 +631,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
         def _sev(x, default=BaseCheck.HIGH) -> int:
             """
             Get numeric severity for compliance-checker.
-            
+
             """
             try:
                 v = self.get_severity(x)
@@ -639,7 +645,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             nc_name = rule.name.variable_name if rule.name else key
             rule_by_nc[str(nc_name)] = rule
 
-        # CF detected coords 
+        # CF detected coords
         try:
             cf_coords = set(get_coordinate_variables(ds) or [])
         except Exception:
@@ -728,21 +734,25 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             # TIME001
             if getattr(rule, "squareness", None):
                 sev = _sev(rule.squareness.severity, default=BaseCheck.MEDIUM)
-                res.extend(
-                    check_time_squareness(
-                        ds,
-                        severity=sev,
-                        calendar=rule.squareness.ref_calendar or "",
-                        ref_time_units=rule.squareness.ref_time_units or "",
-                        frequency=None,
+                expected, lookup_results = self._get_expected_from_registry(ds, sev)
+                res.extend(lookup_results)
+                if expected is not None:
+                    res.extend(
+                        check_time_squareness(
+                            ds,
+                            severity=sev,
+                            calendar=rule.squareness.ref_calendar or "",
+                            ref_time_units=rule.squareness.ref_time_units or "",
+                            frequency=None,
+                            expected_cell_methods=expected.cell_methods,
+                        )
                     )
-                )
 
             # TIME002
             if getattr(rule, "coverage", None):
                 sev = _sev(rule.coverage.severity, default=BaseCheck.MEDIUM)
                 res.extend(check_time_bounds(ds, severity=sev))
-            
+
             # TIME003a (calendar recommendation)
             if getattr(rule, "calendar_recommendation", None):
                 sev = _sev(
@@ -779,6 +789,10 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                 )
 
         if check_time_range_vs_filename is not None:
+            expected, lookup_results = self._get_expected_from_registry(
+                ds, BaseCheck.HIGH
+            )
+            res.extend(lookup_results)
             precision_map = None
             climatology_suffix = ""
             severity = BaseCheck.HIGH
@@ -787,13 +801,15 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                 precision_map = time_range.label_precision
                 climatology_suffix = time_range.climatology_suffix
                 severity = self.get_severity(time_range.severity, "HIGH")
-            res.extend(
-                check_time_range_vs_filename(
-                    ds,
-                    severity,
-                    precision_by_frequency=precision_map,
-                    climatology_suffix=climatology_suffix,
+            if expected is not None and expected.time_is_climatology is not None:
+                res.extend(
+                    check_time_range_vs_filename(
+                        ds,
+                        severity,
+                        precision_by_frequency=precision_map,
+                        climatology_suffix=climatology_suffix,
+                        expected_is_climatology=expected.time_is_climatology,
+                    )
                 )
-            )
 
         return res

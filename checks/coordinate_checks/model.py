@@ -44,10 +44,24 @@ class Catalog:
     formula_terms: dict[str, dict] = field(default_factory=dict)
     grid_variables: dict[str, dict] = field(default_factory=dict)
     grid_axes: dict[str, dict] = field(default_factory=dict)
+    file_variable_name: str = ""
 
     @property
     def data_variable_name(self) -> str:
-        return str(self.branded_variable.get("out_name") or "")
+        root = self.branded_variable.get("variable_root_name")
+        if isinstance(root, str):
+            root_name = root
+        else:
+            resolved_root = as_dict(root)
+            root_name = (
+                resolved_root.get("drs_name") or resolved_root.get("id") or ""
+            )
+        return str(
+            self.file_variable_name
+            or self.branded_variable.get("out_name")
+            or root_name
+            or ""
+        )
 
 
 def records_by_id(records: Any) -> dict[str, dict]:

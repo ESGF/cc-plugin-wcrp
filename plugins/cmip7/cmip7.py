@@ -19,7 +19,7 @@ from checks.attribute_checks.check_attribute_suite import check_attribute_suite
 
 from checks.format_checks.check_format import check_format
 from checks.format_checks.check_compression import check_compression
-from checks.format_checks.check_internal_packing import  check_cmip7_packing
+from checks.format_checks.check_internal_packing import check_cmip7_packing
 from checks.consistency_checks.check_drs_filename_cv import (
     check_drs_filename,
     check_drs_directory,
@@ -575,7 +575,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 res.extend(check_dimension_existence(ds, d, sev))
                 res.extend(check_dimension_positive(ds, d, sev))
 
-        # shape 
+        # shape
         shape_rule = getattr(vcfg, "shape", None)
         if shape_rule:
             sev = self.get_severity(shape_rule.severity)
@@ -590,6 +590,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             res.extend(vr_r)
 
         for attr_key, rule in vcfg.attributes.items():
+            if rule.cv_source_term_key and expected_term is None:
+                continue
             sev = self.get_severity(rule.severity)
             name_in_file = rule.attribute_name or attr_key
             if is_flag and name_in_file in ("_FillValue", "missing_value"):
@@ -615,13 +617,15 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     project_name=self.project_name,
                     expected_term=expected_term,
                     cv_source_term_key=rule.cv_source_term_key,
+                    expected_term_comparison=rule.expected_term_comparison,
+                    report_missing_expected_term=rule.report_missing_expected_term,
                 )
             )
 
         return res
 
     # -------------------------------------------------------------------------
-    # 5) Global consistency 
+    # 5) Global consistency
     # -------------------------------------------------------------------------
     def check_Global_Consistency(self, ds):
         res = []
@@ -851,9 +855,9 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             str(entry.get("out_name") or identifier)
             for identifier, entry in self._coordinate_entries_for_axis("T")
         }
-        # Established time checks must remain runnable when the ESGVoc
-        # coordinate catalogue cannot be loaded. Their configured rules are
-        # independent of the catalogue and already identify the time variable.
+        # Configured rules identify the time variable even without the
+        # coordinate catalogue. Only TIME001 additionally needs the branded
+        # variable's cell_methods and is skipped if that metadata is unavailable.
         time_coordinate_names.update(
             str(rule.name.variable_name if rule.name else key)
             for key, rule in (coords_cfg.variables or {}).items()
@@ -881,16 +885,20 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 )
 
             if rule.squareness:
-                sev = self.get_severity(rule.squareness.severity)
-                res.extend(
-                    check_time_squareness(
-                        ds,
-                        severity=sev,
-                        calendar=rule.squareness.ref_calendar or "",
-                        ref_time_units=rule.squareness.ref_time_units or "",
-                        frequency=None,  # increments injected from TOML in setup()
+                if self._coordinate_catalog is not None:
+                    sev = self.get_severity(rule.squareness.severity)
+                    res.extend(
+                        check_time_squareness(
+                            ds,
+                            severity=sev,
+                            calendar=rule.squareness.ref_calendar or "",
+                            ref_time_units=rule.squareness.ref_time_units or "",
+                            frequency=None,  # increments injected from TOML in setup()
+                            expected_cell_methods=self._coordinate_catalog.branded_variable.get(
+                                "cell_methods"
+                            ),
+                        )
                     )
-                )
 
             if getattr(rule, "calendar_recommendation", None):
                 sev = self.get_severity(rule.calendar_recommendation.severity)
@@ -915,7 +923,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     result for result in attribute_results if "[ATTR004]" in result.name
                 )
 
-        if check_time_range_vs_filename is not None:
+        time_entries = self._coordinate_entries_for_axis("T")
+        if (
+            check_time_range_vs_filename is not None
+            and self._coordinate_catalog is not None
+            and ("time" not in ds.variables or len(time_entries) == 1)
+        ):
             precision_map = None
             climatology_suffix = ""
             severity = BaseCheck.HIGH
@@ -930,6 +943,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     severity,
                     precision_by_frequency=precision_map,
                     climatology_suffix=climatology_suffix,
+                    expected_is_climatology=(
+                        bool(time_entries[0][1].get("is_climatology"))
+                        if time_entries
+                        else False
+                    ),
+                    report_climatology_mismatch=False,
                 )
             )
 

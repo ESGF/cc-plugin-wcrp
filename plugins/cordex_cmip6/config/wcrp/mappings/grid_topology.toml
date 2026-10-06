@@ -1,0 +1,16 @@
+[coordinate_identification]
+allow_standard_name_fallback = true
+
+[grid_mapping]
+rotated_latitude_longitude = "curvilinear"
+lambert_conformal_conic = "curvilinear"
+polar_stereographic = "curvilinear"
+mercator = "curvilinear"
+transverse_mercator = "curvilinear"
+albers_conical_equal_area = "curvilinear"
+
+# Explicit projected mappings select topology here. Missing and
+# latitude_longitude mappings are classified by the CORDEX entry point from
+# the latitude/longitude coordinates discovered by Compliance Checker's CF
+# utilities. The project's free-text global grid attribute is used only for
+# the documented '(no grid_mapping)' ocean-grid omission marker.
