@@ -274,6 +274,12 @@ class CoordinateGlobalRule(BaseModel):
     severity: Optional[str] = None
 
 
+class CoordinateGridRule(CoordinateGlobalRule):
+    """Controls project-specific horizontal-grid structural requirements."""
+
+    require_explicit_grid_axes: bool = False
+
+
 class CoordinateDirectionRule(CoordinateGlobalRule):
     """Controls the optional physical parts of coordinate direction checks."""
 
@@ -347,7 +353,7 @@ class CoordinateRegistrySection(BaseModel):
     bounds: Optional[CoordinateGlobalRule] = None
     bounds_name: Optional[CoordinateBoundsNameRule] = None
     associations: Optional[CoordinateGlobalRule] = None
-    grid: Optional[CoordinateGlobalRule] = None
+    grid: Optional[CoordinateGridRule] = None
     formula: Optional[CoordinateGlobalRule] = None
 
 

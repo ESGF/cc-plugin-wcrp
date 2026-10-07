@@ -58,6 +58,7 @@ def check_coordinate_catalog(
     grid_topology=None,
     grid_resolution_error=None,
     allow_standard_name_fallback=True,
+    require_explicit_grid_axes=False,
     bounds_dimension_name="bnds",
     vertices_dimension_name="vertices",
     climatology_bounds_name="climatology_bnds",
@@ -92,6 +93,7 @@ def check_coordinate_catalog(
         topology=grid_topology,
         resolution_error=grid_resolution_error,
         allow_standard_name_fallback=allow_standard_name_fallback,
+        require_explicit_grid_axes=require_explicit_grid_axes,
     )
     for identifier in catalog.coordinate_ids:
         entry = catalog.data_coordinates[identifier]

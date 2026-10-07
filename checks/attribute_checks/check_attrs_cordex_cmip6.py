@@ -18,7 +18,6 @@ def check_grid_mapping(
     CheckerObject,
     severity=BaseCheck.MEDIUM,
     missing_severity=BaseCheck.MEDIUM,
-    allowed_grid_mapping_names=(),
     horizontal_topology=None,
     topology_error=None,
 ):
@@ -34,8 +33,6 @@ def check_grid_mapping(
     missing_severity : str
         The severity of recommending Earth-size metadata when grid_mapping is absent.
         Default: BaseCheck.MEDIUM.
-    allowed_grid_mapping_names : sequence of str
-        Project-configured allowed ``grid_mapping_name`` values.
     horizontal_topology : str, optional
         Independently inferred topology, used only to decide whether omission is
         permitted for a rectilinear latitude-longitude grid.
@@ -55,7 +52,6 @@ def check_grid_mapping(
         f"[{check_id}] grid_mapping Earth description",
     )
 
-    gmallowed = tuple(dict.fromkeys(allowed_grid_mapping_names or ()))
     omission_marker = "(no grid_mapping)"
     grid_description = str(getattr(CheckerObject.ds, "grid", "") or "").lower()
     ocean_omission = omission_marker in grid_description
@@ -89,14 +85,16 @@ def check_grid_mapping(
                     f"The grid_mapping label '{crs}' needs to be either 'crs'"
                     " or equal to the grid_mapping_name (eg. 'rotated_latitude_longitude')."
                 )
-            # Check grid_mapping_name
-            if grid_mapping_name and (not gmallowed or grid_mapping_name in gmallowed):
+            # CF owns validation of the grid-mapping name itself. CORDEX only
+            # requires the attribute here; topology resolution is handled by
+            # the coordinate checks using their separate mapping configuration.
+            if grid_mapping_name:
                 testctx.add_pass()
             else:
-                allowed = ", ".join(repr(name) for name in gmallowed)
                 testctx.add_failure(
-                    f"The grid_mapping_name {grid_mapping_name!r} must be one of: "
-                    f"{allowed or '(no values configured)'}."
+                    f"The grid_mapping variable '{crs}' does not define a "
+                    "grid_mapping_name. Valid names and their required "
+                    "attributes are checked by the CF checker."
                 )
             # Check presence of description of spherical / ellipsoid Earth
             # - leave actual checking of the validity of that info to CF
@@ -302,9 +300,7 @@ def check_references(CheckerObject, severity=BaseCheck.MEDIUM):
     return [testctx.to_result()]
 
 
-def check_version_realization_info(
-    CheckerObject, severity=BaseCheck.MEDIUM, use_esgvoc=False
-):
+def check_version_realization_info(CheckerObject, severity=BaseCheck.MEDIUM):
     """
     Checks if version_realization_info is defined when and as recommended in the CORDEX-CMIP6 archive specifications.
 
@@ -314,9 +310,6 @@ def check_version_realization_info(
         The initialized WCRPBaseCheck object for the project/dataset being checked.
     severity : str
         The severity of the check. Default: BaseCheck.MEDIUM.
-    use_esgvoc : bool
-        If True, skip the parts of the check that rely on the CORDEX-CMIP6 CV tables.
-
     Returns
     -------
     List of compliance_checker.base.Result
@@ -325,28 +318,22 @@ def check_version_realization_info(
     desc = f"[{check_id}] version_realization_info"
     testctx = TestCtx(severity, desc)
 
-    # Do not run comparison with CV if esgvoc is used
-    if use_esgvoc:
-        testctx.add_pass()
-        return [testctx.to_result()]
-
+    version_realization = str(
+        CheckerObject._get_attr("version_realization", default="") or ""
+    ).strip()
+    version_realization_info = str(
+        CheckerObject._get_attr("version_realization_info", default="") or ""
+    ).strip()
     if (
-        any(
-            [
-                x != "v1-r1"
-                for x in [
-                    CheckerObject.drs_fn["version_realization"],
-                    CheckerObject.drs_dir["version_realization"],
-                    CheckerObject.drs_gatts["version_realization"],
-                ]
-            ]
-        )
-        and CheckerObject._get_attr("version_realization_info", default="") == ""
+        version_realization
+        and version_realization != "v1-r1"
+        and not version_realization_info
     ):
         testctx.add_failure(
-            f"The global attribute 'version_realization_info' is missing. It is however {severity_word(severity)}, "
-            "if 'version_realization' deviates from 'v1-r1'. The attribute 'version_realization_info' "
-            "provides information on how reruns (eg. v2, v3) and/or realizations (eg. r2, r3) are generated."
+            "The global attribute 'version_realization_info' is missing. It is "
+            f"{severity_word(severity)} when 'version_realization' differs from "
+            "'v1-r1', and should describe why a new version was produced or how "
+            "the realization differs from 'v1-r1'."
         )
     else:
         testctx.add_pass()

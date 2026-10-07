@@ -328,6 +328,10 @@ def test_cordex_non_latitude_longitude_topology_uses_grid_mapping():
         "curvilinear",
         None,
     )
+    assert resolve_grid_topology(config, grid_mapping="lambert_azimuthal_equal_area") == (
+        "curvilinear",
+        None,
+    )
 
 
 def test_cordex_coordinate_loading_failure_is_reported_once(tmp_path, monkeypatch):
@@ -443,6 +447,7 @@ def test_cordex_catalogue_topology_check_is_enabled_in_toml():
     checker._load_split_config()
 
     assert checker.config.coordinates.registry.grid.severity == "H"
+    assert checker.config.coordinates.registry.grid.require_explicit_grid_axes is True
 
 
 def test_cordex_enabled_topology_ignores_free_text_grid_attributes(
@@ -757,10 +762,50 @@ def test_cordex_grid_mapping_check_does_not_validate_coordinates(tmp_path):
         results = check_grid_mapping(
             checker,
             severity=BaseCheck.HIGH,
-            allowed_grid_mapping_names=["latitude_longitude"],
         )
 
     assert _messages(results) == []
+
+
+def test_cordex_grid_mapping_name_validity_is_delegated_to_cf(tmp_path):
+    with Dataset(tmp_path / "mapping.nc", "w") as dataset:
+        mapping = dataset.createVariable("crs", "i4")
+        mapping.grid_mapping_name = "lambert_azimuthal_equal_area"
+        mapping.earth_radius = 6371229.0
+        data = dataset.createVariable("tas", "f4")
+        data.grid_mapping = "crs"
+        checker = SimpleNamespace(ds=dataset, varname=["tas"])
+
+        results = check_grid_mapping(checker, severity=BaseCheck.HIGH)
+
+    assert _messages(results) == []
+
+
+def test_cordex_version_realization_info_is_conditionally_recommended(tmp_path):
+    checker = CordexCmip6ProjectCheck()
+    checker.cordex_config = {
+        "attribute_checks": {
+            "check_version_realization_info": {"severity": "M"},
+        }
+    }
+    checker.verification_against_tables = False
+    with Dataset(tmp_path / "tas.nc", "w") as dataset:
+        dataset.version_realization = "v2-r1"
+        checker.dataset = dataset
+        checker.ds = dataset
+
+        missing = checker.check_attributes_cordex(dataset)
+        assert len(_messages(missing)) == 1
+        assert "version_realization_info" in _messages(missing)[0]
+
+        dataset.version_realization_info = "Corrected postprocessing"
+        present = checker.check_attributes_cordex(dataset)
+        assert _messages(present) == []
+
+        dataset.version_realization = "v1-r1"
+        del dataset.version_realization_info
+        first_release = checker.check_attributes_cordex(dataset)
+        assert _messages(first_release) == []
 
 
 def test_cordex_enabled_topology_infers_rectilinear_without_grid_mapping(

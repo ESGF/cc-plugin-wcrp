@@ -23,16 +23,6 @@ severity = "H"
 [attribute_checks.check_grid_mapping]
 severity = "H"
 missing_severity = "M"
-
-allowed_grid_mapping_names = [
-    "albers_conical_equal_area",
-    "lambert_conformal_conic",
-    "latitude_longitude",
-    "mercator",
-    "polar_stereographic",
-    "rotated_latitude_longitude",
-    "transverse_mercator",
-]
 [attribute_checks.check_domain_id]
 severity = "H"
 

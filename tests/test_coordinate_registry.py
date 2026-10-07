@@ -1668,6 +1668,62 @@ def test_curvilinear_grid_accepts_implicit_index_dimensions(nc):
     )
     assert messages(result) == []
 
+    mapping = nc.createVariable("crs", "i4")
+    mapping.grid_mapping_name = "latitude_longitude"
+    ta.grid_mapping = "crs"
+    result = check_coordinate_catalog(
+        nc,
+        grid_catalog(),
+        severities=FAMILIES,
+        grid_topology="curvilinear",
+        require_explicit_grid_axes=True,
+    )
+    assert messages(result) == []
+
+
+@pytest.mark.parametrize(
+    ("mapping_name", "expected_axes"),
+    [
+        ("rotated_latitude_longitude", "rlon/rlat"),
+        ("lambert_conformal_conic", "x/y"),
+    ],
+)
+def test_projected_grid_can_require_explicit_native_axes(
+    nc, mapping_name, expected_axes
+):
+    nc.createDimension("row", 2)
+    nc.createDimension("column", 3)
+    nc.createDimension("vertices", 4)
+    for role, units in (
+        ("latitude", "degrees_north"),
+        ("longitude", "degrees_east"),
+    ):
+        variable = nc.createVariable(role, "f8", ("row", "column"))
+        variable.standard_name = role
+        variable.units = units
+        variable.bounds = f"vertices_{role}"
+        nc.createVariable(
+            f"vertices_{role}", "f8", ("row", "column", "vertices")
+        )
+    mapping = nc.createVariable("crs", "i4")
+    mapping.grid_mapping_name = mapping_name
+    ta = nc.createVariable("ta", "f4", ("row", "column"))
+    ta.coordinates = "latitude longitude"
+    ta.grid_mapping = "crs"
+
+    result = check_coordinate_catalog(
+        nc,
+        grid_catalog(),
+        severities=FAMILIES,
+        grid_topology="curvilinear",
+        require_explicit_grid_axes=True,
+    )
+
+    assert any(
+        expected_axes in message and "implicit integer indices" in message
+        for message in messages(result)
+    )
+
 
 def test_rotated_grid_accepts_rlon_rlat_axis_pair(nc):
     nc.createDimension("rlat", 2)

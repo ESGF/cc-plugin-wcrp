@@ -764,6 +764,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 if self._grid_topology_config
                 else True
             ),
+            require_explicit_grid_axes=(
+                registry.grid.require_explicit_grid_axes if registry.grid else False
+            ),
             bounds_dimension_name=(naming.bounds_dimension_name if naming else "bnds"),
             vertices_dimension_name=(
                 naming.vertices_dimension_name if naming else "vertices"
@@ -928,16 +931,12 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 kwargs["missing_severity"] = self.get_severity(
                     rule.get("missing_severity"), "MEDIUM"
                 )
-                kwargs["allowed_grid_mapping_names"] = rule.get(
-                    "allowed_grid_mapping_names", []
-                )
                 kwargs["horizontal_topology"] = self._coordinate_grid_topology
                 kwargs["topology_error"] = self._coordinate_grid_error
             if name in {
                 "check_domain_id",
                 "check_institution",
                 "check_version_realization",
-                "check_version_realization_info",
                 "check_driving_attributes",
             }:
                 kwargs["use_esgvoc"] = not self.verification_against_tables

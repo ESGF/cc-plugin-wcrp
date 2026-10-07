@@ -54,6 +54,9 @@ severity = "H"
 # grid_mapping rather than from a unique grid label or project EMD record.
 [coordinates.registry.grid]
 severity = "H"
+# Native projected CORDEX grids require explicit rlon/rlat or x/y axes.
+# Missing and latitude_longitude mappings may still use implicit index dimensions.
+require_explicit_grid_axes = true
 
 [coordinates.registry.formula]
 severity = "H"
