@@ -43,6 +43,31 @@ _GRID_MAPPING_FAILURE = ExpectedFailure(
     ),
 )
 
+_PACKING_METADATA_FAILURE = ExpectedFailure(
+    name="[FILE004a] Internal packing : Consolidated internal metadata",
+    severity=2,
+    messages=("does not have consolidated internal metadata",),
+)
+
+_PACKING_TIME_FAILURES = (
+    ExpectedFailure(
+        name="[FILE004b] Internal packing : Time coordinate chunking",
+        severity=2,
+        messages=("24 chunks",),
+    ),
+    ExpectedFailure(
+        name="[FILE004c] Internal packing : Time bounds chunking ('time_bnds')",
+        severity=2,
+        messages=("24 chunks",),
+    ),
+)
+
+_PACKING_DATA_FAILURE = ExpectedFailure(
+    name="[FILE004d] Internal packing : Data variable chunking ('tas')",
+    severity=2,
+    messages=("at least 6 time steps per chunk for frequency 'mon'",),
+)
+
 
 def _checks(
     *,
@@ -50,6 +75,8 @@ def _checks(
     standard_results: int,
     variable_results: int,
     variable_name: str,
+    packing_time_results: int,
+    packing_fails: bool,
 ):
     """Return a complete independent expectation mapping for one dataset."""
     return {
@@ -59,6 +86,15 @@ def _checks(
         "check_DRS": ExpectedCheck(4),
         "check_File_Compression": ExpectedCheck(1, (_COMPRESSION_FAILURE,)),
         "check_File_Format": ExpectedCheck(1),
+        "check_File_Internal_Packing_Data": ExpectedCheck(
+            1, (_PACKING_DATA_FAILURE,) if packing_fails else ()
+        ),
+        "check_File_Internal_Packing_Metadata": ExpectedCheck(
+            1, (_PACKING_METADATA_FAILURE,) if packing_fails else ()
+        ),
+        "check_File_Internal_Packing_Time": ExpectedCheck(
+            packing_time_results, _PACKING_TIME_FAILURES if packing_fails else ()
+        ),
         "check_Geophysical_Variable": ExpectedCheck(
             variable_results,
             (
@@ -110,6 +146,8 @@ TAS_REMO = RemoteDataset(
         standard_results=14,
         variable_results=43,
         variable_name="tas",
+        packing_time_results=2,
+        packing_fails=True,
     ),
 )
 
@@ -132,6 +170,8 @@ OROG_REMO = RemoteDataset(
         standard_results=13,
         variable_results=37,
         variable_name="orog",
+        packing_time_results=0,
+        packing_fails=False,
     ),
 )
 

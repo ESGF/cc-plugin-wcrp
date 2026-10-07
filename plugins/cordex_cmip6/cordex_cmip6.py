@@ -52,6 +52,10 @@ from checks.dimension_checks.check_dimension_existence import check_dimension_ex
 from checks.dimension_checks.check_dimension_positive import check_dimension_positive
 from checks.format_checks.check_compression import check_compression
 from checks.format_checks.check_format import check_format
+from checks.format_checks.check_internal_packing import (
+    check_internal_packing,
+    finalize_internal_packing_session,
+)
 from checks.time_checks.check_time_bounds import check_time_bounds
 from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from checks.time_checks.check_time_cordex_cmip6 import (
@@ -512,6 +516,77 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             expected_shuffle=rule.expected_shuffle,
             severity=self.get_severity(rule.severity),
         )
+
+    def check_File_Internal_Packing_Metadata(self, ds):
+        """
+        [FILE004a] Internal packing consolidated metadata check.
+        """
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
+            )
+            if not rule or not rule.metadata:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.metadata.severity),
+                run_metadata=True,
+                run_time=False,
+                run_data=False,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
+
+    def check_File_Internal_Packing_Time(self, ds):
+        """
+        [FILE004b-c] Internal packing time and time-bounds checks.
+        """
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
+            )
+            if not rule or not rule.time:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.time.severity),
+                run_metadata=False,
+                run_time=True,
+                run_data=False,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
+
+    def check_File_Internal_Packing_Data(self, ds):
+        """
+        [FILE004d] Internal packing data-variable chunking check.
+        """
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
+            )
+            if not rule or not rule.data:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.data.severity),
+                min_chunk_size_bytes=(
+                    rule.data.min_chunk_size_bytes or 4 * (2**20)
+                ),
+                frequency=self.frequency,
+                frequency_min_timesteps=rule.data.frequency_min_timesteps,
+                run_metadata=False,
+                run_time=False,
+                run_data=True,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
 
     def check_Global_Attributes(self, ds):
         return self._check_global_attributes(ds)

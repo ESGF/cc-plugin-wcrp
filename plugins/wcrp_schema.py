@@ -6,6 +6,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    field_validator,
     model_validator,
     AliasChoices,
 )
@@ -152,16 +153,42 @@ class FileCompressionRule(BaseModel):
     expected_shuffle: Optional[bool] = None
 
 
+class FileInternalPackingSectionRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    severity: Optional[str] = None
+
+
+class FileInternalPackingDataRule(FileInternalPackingSectionRule):
+    min_chunk_size_bytes: Optional[int] = Field(default=None, ge=1)
+    frequency_min_timesteps: Optional[Dict[str, int]] = None
+
+    @field_validator("frequency_min_timesteps", mode="before")
+    @classmethod
+    def _validate_frequency_min_timesteps(cls, value):
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("frequency_min_timesteps must be a table")
+        for frequency, steps in value.items():
+            if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
+                raise ValueError(
+                    f"frequency_min_timesteps[{frequency!r}] must be a positive integer"
+                )
+        return value
+
+
+class FileInternalPackingRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metadata: Optional[FileInternalPackingSectionRule] = None
+    time: Optional[FileInternalPackingSectionRule] = None
+    data: Optional[FileInternalPackingDataRule] = None
+
+
 class FileSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     format: Optional[FileFormatRule] = None
     compression: Optional[FileCompressionRule] = None
     internal_packing: Optional[FileInternalPackingRule] = None
-
-
-class FileInternalPackingRule(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    severity: Optional[str] = None
 
 
 # =============================================================================

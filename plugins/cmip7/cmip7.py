@@ -19,7 +19,10 @@ from checks.attribute_checks.check_attribute_suite import check_attribute_suite
 
 from checks.format_checks.check_format import check_format
 from checks.format_checks.check_compression import check_compression
-from checks.format_checks.check_internal_packing import check_cmip7_packing
+from checks.format_checks.check_internal_packing import (
+    check_internal_packing,
+    finalize_internal_packing_session,
+)
 from checks.consistency_checks.check_drs_filename_cv import (
     check_drs_filename,
     check_drs_directory,
@@ -479,18 +482,67 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         except TypeError:
             return check_compression(ds, sev)
 
-    def check_File_Internal_Packing(self, ds):
-        if (
-            not self.config
-            or not self.config.file
-            or not self.config.file.internal_packing
-        ):
-            return []
+    def check_File_Internal_Packing_Metadata(self, ds):
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
+            )
+            if not rule or not rule.metadata:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.metadata.severity),
+                run_metadata=True,
+                run_time=False,
+                run_data=False,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
 
-        r = self.config.file.internal_packing
-        sev = self.get_severity(r.severity)
+    def check_File_Internal_Packing_Time(self, ds):
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
+            )
+            if not rule or not rule.time:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.time.severity),
+                run_metadata=False,
+                run_time=True,
+                run_data=False,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
 
-        return check_cmip7_packing(ds, severity=sev)
+    def check_File_Internal_Packing_Data(self, ds):
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
+            )
+            if not rule or not rule.data:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.data.severity),
+                min_chunk_size_bytes=(
+                    rule.data.min_chunk_size_bytes or 4 * (2**20)
+                ),
+                frequency=self.frequency,
+                frequency_min_timesteps=rule.data.frequency_min_timesteps,
+                run_metadata=False,
+                run_time=False,
+                run_data=True,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
 
     # -------------------------------------------------------------------------
     # 2) Global attributes
