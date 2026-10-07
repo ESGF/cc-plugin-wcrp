@@ -570,6 +570,27 @@ def test_comment_is_catalogue_backed_for_all_requested_projects():
         assert rule.report_missing_expected_term is True
 
 
+def test_main_variable_data_type_policy_is_project_configured():
+    root = Path(__file__).parents[1]
+    configurations = {
+        "plugins/cmip7/config/wcrp/geophysical_variable.toml": ["real", "double"],
+        "plugins/cmip6/config/wcrp/geophysical_variable.toml": ["real", "double"],
+        "plugins/cmip6plus/config/wcrp/geophysical_variable.toml": [
+            "real",
+            "double",
+        ],
+        "plugins/c3scmip6/c3scmip6/config/wcrp/geophysical_variable.toml": [
+            "real",
+            "double",
+        ],
+        "plugins/cordex_cmip6/config/wcrp/geophysical_variable.toml": ["real"],
+    }
+
+    for relative_path, expected in configurations.items():
+        data = toml.load(root / relative_path)
+        assert data["variable"]["type"]["data_type"] == expected
+
+
 def test_cordex_drs_uses_project_templates(tmp_path, monkeypatch):
     checker = CordexCmip6ProjectCheck()
     checker._load_split_config()

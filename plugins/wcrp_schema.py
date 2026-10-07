@@ -249,7 +249,7 @@ class VarExistenceRule(BaseModel):
 class VarTypeRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
-    data_type: Optional[str] = None  # e.g. "float", "double", "int"
+    data_type: Optional[str | list[str]] = None  # e.g. "real" or ["real", "double"]
 
 
 class VarDimensionsRule(BaseModel):

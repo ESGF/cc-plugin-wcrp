@@ -2,16 +2,6 @@
 # Used only with the optional verification_against_tables route.
 base_url = "https://raw.githubusercontent.com/WCRP-CORDEX/cordex-cmip6-cmor-tables/main/Tables/"
 
-[variable_checks.check_coord_data_types]
-severity = "H"
-ctype = "double"
-auxtype = "real"
-
-[variable_checks.check_var_data_type]
-severity = "H"
-vartype = "real"
-var = "main"
-
 [variable_checks.check_lat_lon_bounds]
 severity = "M"
 

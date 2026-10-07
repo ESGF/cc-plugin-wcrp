@@ -6,18 +6,15 @@ from compliance_checker.base import BaseCheck
 from netCDF4 import Dataset
 
 from checks.format_checks.check_compression import check_compression
+from checks.time_checks.check_time_cordex_cmip6 import check_time_range
+from checks.time_checks.time_constants import FREQ_INC
+from checks.utils import infer_frequency
 from checks.variable_checks.check_coords_cordex_cmip6 import (
     check_horizontal_axes_bounds,
     check_lat_lon_bounds,
     check_lon_value_range,
 )
-from checks.variable_checks.check_data_types import (
-    check_coord_data_types,
-    check_var_data_type,
-)
-from checks.time_checks.check_time_cordex_cmip6 import check_time_range
-from checks.time_checks.time_constants import FREQ_INC
-from checks.utils import infer_frequency
+from checks.variable_checks.check_variable_type import check_variable_type
 from plugins import wcrp_base
 from plugins.cordex_cmip6 import cordex_cmip6 as cordex_cmip6_module
 from plugins.cordex_cmip6.cordex_cmip6 import CordexCmip6ProjectCheck
@@ -439,11 +436,33 @@ def test_setup_preserves_formula_term_coordinates(tmp_path):
         }
         assert set(checker.coords) >= {"lev", "a", "b", "ps"}
         assert checker.varname == ["tas"]
-        assert not check_coord_data_types(
-            checker,
-            ctype="double",
-            auxtype="real",
-        )[0].msgs
+
+
+@pytest.mark.parametrize(
+    ("dtype", "allowed_types", "passes"),
+    [
+        ("f4", ["real"], True),
+        ("f8", ["real"], False),
+        ("f4", ["real", "double"], True),
+        ("f8", ["real", "double"], True),
+        ("i4", ["real", "double"], False),
+        ("S1", ["str"], True),
+    ],
+)
+def test_variable_type_archive_precision(tmp_path, dtype, allowed_types, passes):
+    path = tmp_path / "data-type.nc"
+    with Dataset(path, "w") as dataset:
+        dataset.createDimension("time", 1)
+        dataset.createVariable("tas", dtype, ("time",))
+
+    with Dataset(path) as dataset:
+        result = check_variable_type(
+            dataset,
+            "tas",
+            allowed_types=allowed_types,
+        )[0]
+
+    assert bool(result.msgs) is not passes
 
 
 def test_derived_plugin_writes_consistency_output_with_existing_schema(
@@ -724,7 +743,6 @@ def test_cordex_consumers_use_netCDF_and_cfutils(cf_dataset):
     checker.drs_fn = {"time_range": "200001-200002"}
 
     results = [
-        check_var_data_type(checker, vartype="real")[0],
         check_lon_value_range(checker)[0],
         check_horizontal_axes_bounds(checker)[0],
         check_lat_lon_bounds(checker)[0],

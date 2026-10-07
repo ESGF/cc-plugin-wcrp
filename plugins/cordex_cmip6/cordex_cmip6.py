@@ -74,12 +74,11 @@ from checks.variable_checks.check_coords_cordex_cmip6 import (
     check_lon_value_range,
     infer_horizontal_topology,
 )
-from checks.variable_checks.check_data_types import (
-    check_coord_data_types,
-    check_var_data_type,
-)
 from checks.variable_checks.check_variable_existence import check_variable_existence
-from checks.variable_checks.check_variable_type import check_variable_type
+from checks.variable_checks.check_variable_type import (
+    check_variable_type,
+    configured_data_types,
+)
 from checks.variable_checks.known_branded_variable import (
     KnownBrandedVariableLookupError,
     lookup_expected_variable_metadata_in_collection,
@@ -580,16 +579,16 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 )
             )
         if config.type:
-            expected = (config.type.data_type or "").lower()
-            allowed = ["f"] if expected in {"float", "double", "real"} else None
-            results.extend(
-                check_variable_type(
-                    ds,
-                    variable_name,
-                    allowed_types=allowed,
-                    severity=self.get_severity(config.type.severity),
+            allowed = configured_data_types(config.type.data_type)
+            if allowed:
+                results.extend(
+                    check_variable_type(
+                        ds,
+                        variable_name,
+                        allowed_types=allowed,
+                        severity=self.get_severity(config.type.severity),
+                    )
                 )
-            )
         if config.dimensions:
             severity = self.get_severity(config.dimensions.severity)
             for dimension in ds.variables[variable_name].dimensions:
@@ -883,28 +882,6 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
 
     def _specific(self, section, name):
         return self.cordex_config.get(section, {}).get(name)
-
-    def check_data_types(self, ds):
-        results = []
-        if rule := self._specific("variable_checks", "check_coord_data_types"):
-            results.extend(
-                check_coord_data_types(
-                    CheckerObject=self,
-                    ctype=rule.get("ctype"),
-                    auxtype=rule.get("auxtype"),
-                    severity=self.get_severity(rule.get("severity")),
-                )
-            )
-        if rule := self._specific("variable_checks", "check_var_data_type"):
-            results.extend(
-                check_var_data_type(
-                    CheckerObject=self,
-                    var=rule.get("var"),
-                    vartype=rule.get("vartype"),
-                    severity=self.get_severity(rule.get("severity")),
-                )
-            )
-        return results
 
     def check_time_chunking(self, ds):
         rule = self._specific("time_checks", "check_time_chunking_cordex")

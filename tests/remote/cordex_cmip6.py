@@ -80,7 +80,6 @@ def _checks(
         "check_attributes_cordex": ExpectedCheck(8, (_GRID_MAPPING_FAILURE,)),
         "check_calendar": ExpectedCheck(1),
         "check_consistency_output": ExpectedCheck(1),
-        "check_data_types": ExpectedCheck(1),
         "check_horizontal_axes_bounds": ExpectedCheck(
             1, (_HORIZONTAL_AXES_BOUNDS_FAILURE,)
         ),

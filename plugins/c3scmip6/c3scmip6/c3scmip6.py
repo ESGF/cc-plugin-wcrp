@@ -59,7 +59,10 @@ except Exception:
     check_time_range_vs_filename = None
 
 from checks.variable_checks.check_variable_existence import check_variable_existence
-from checks.variable_checks.check_variable_type import check_variable_type
+from checks.variable_checks.check_variable_type import (
+    check_variable_type,
+    configured_data_types,
+)
 
 from checks.dimension_checks.check_dimension_existence import check_dimension_existence
 from checks.dimension_checks.check_dimension_positive import check_dimension_positive
@@ -466,8 +469,7 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
         # type
         if vcfg.type:
             sev = self.get_severity(vcfg.type.severity)
-            dt = (vcfg.type.data_type or "").lower()
-            allowed = ["f"] if dt in {"float", "double", "real"} else None
+            allowed = configured_data_types(vcfg.type.data_type)
             if allowed:
                 res.extend(
                     check_variable_type(ds, geo, allowed_types=allowed, severity=sev)
@@ -704,8 +706,7 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
             # type
             if getattr(rule, "type", None):
                 sev = _sev(rule.type.severity, default=BaseCheck.MEDIUM)
-                dt = (rule.type.data_type or "").lower()
-                allowed = ["f"] if dt in {"float", "double", "real"} else None
+                allowed = configured_data_types(rule.type.data_type)
                 if allowed:
                     res.extend(
                         check_variable_type(
