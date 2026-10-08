@@ -168,7 +168,7 @@ def test_cordex_catalog_uses_universe_when_project_coordinate_collections_are_em
         "tas_tavg-h2m-hxy-u",
         project_id="cordex-cmip6",
         api=api,
-        installed_version="6.2.0",
+        installed_version="7.0.0",
         branded_collection="known_branded_variable",
         file_variable_name="tas",
         allow_universe_coordinate_fallback=True,

@@ -105,10 +105,10 @@ def test_catalog_resolves_variable_root_name_fallback(root, expected):
     assert result.data_variable_name == expected
 
 
-def test_esgvoc_version_is_at_least_6_2_0():
-    with pytest.raises(CoordinateMetadataError, match=r"esgvoc>=6\.2\.0"):
-        require_supported_version("6.2.0.dev1")
-    assert require_supported_version("6.2.0") == "6.2.0"
+def test_esgvoc_version_is_at_least_7_0_0():
+    with pytest.raises(CoordinateMetadataError, match=r"esgvoc>=7\.0\.0"):
+        require_supported_version("7.0.0.dev1")
+    assert require_supported_version("7.0.0") == "7.0.0"
 
 
 def test_catalog_reads_each_coordinate_collection_once():
@@ -135,7 +135,7 @@ def test_catalog_reads_each_coordinate_collection_once():
             return [{"id": f"test_{descriptor}"}]
 
     api = API()
-    result = load_catalog("ta_ti-u-hxy-air", api=api, installed_version="6.2.0")
+    result = load_catalog("ta_ti-u-hxy-air", api=api, installed_version="7.0.0")
     assert result.coordinate_ids == ("time1",)
     assert result.branded_variable["cell_methods"] == [
         "area: time: mean",
@@ -175,7 +175,7 @@ def test_catalog_normalizes_mixed_case_branded_variable_id():
     result = load_catalog(
         "baresoilFrac_tavg-u-hxy-u",
         api=api,
-        installed_version="6.2.0",
+        installed_version="7.0.0",
     )
 
     assert api.requested_id == "baresoilfrac_tavg-u-hxy-u"

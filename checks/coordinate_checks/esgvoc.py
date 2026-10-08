@@ -13,7 +13,7 @@ from checks.coordinate_checks.model import (
     reference_ids,
 )
 
-MINIMUM_ESGVOC_VERSION = Version("6.2.0")
+MINIMUM_ESGVOC_VERSION = Version("7.0.0")
 
 DATA_COORDINATE_FIELDS = [
     "id",

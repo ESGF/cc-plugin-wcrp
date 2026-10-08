@@ -22,7 +22,7 @@ dependencies = [
   "netCDF4",
   "cftime",
   "toml",
-  "esgvoc>=6.2.0",
+  "esgvoc>=7.0.0",
   "pooch",
   "pyfive >= 1.1.2",
   "pydantic>=2.12.5",

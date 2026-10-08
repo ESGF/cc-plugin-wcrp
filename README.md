@@ -19,8 +19,8 @@ pip install esgvoc --upgrade
 ```
 
 [!CAUTION]
-> The CMIP7 and CORDEX-CMIP6 coordinate checks require `esgvoc>6.2.0`, including the coordinate
-> descriptor models and configured project/universe databases. If the installed
+> The CMIP7 and CORDEX-CMIP6 coordinate checks require `esgvoc>=7.0.0`, including the coordinate
+> descriptor models and compatible configured project/universe databases. If the installed
 > version is too old or the required records cannot be read, the plugin emits one
 > high-severity `COORD000` result with the technical reason and skips the
 > dependent coordinate checks.
