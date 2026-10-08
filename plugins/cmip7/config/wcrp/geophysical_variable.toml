@@ -9,7 +9,7 @@ severity = "H"
 [variable.type]
 # Checks VAR005
 severity = "H"
-data_type = "float"
+data_type = ["real", "double"]
 
 [variable.dimensions]
 # Checks VAR006 VAR002 DIM001 DIM002 DIM003
@@ -66,7 +66,9 @@ pattern = ".*"
 severity = "L"
 value_type = "str"
 is_required = false
-pattern = ".*"
+cv_source_term_key = "comment"
+expected_term_comparison = "contains"
+report_missing_expected_term = true
 
 [variable.attributes.description]
 # Checks ATTR001 ATTR002 ATTR003 ATTR004

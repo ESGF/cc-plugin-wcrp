@@ -22,12 +22,18 @@ dependencies = [
   "netCDF4",
   "cftime",
   "toml",
-  "esgvoc>=5.1.0",
+  "esgvoc>=7.0.0",
   "pooch",
-  "pyfive >= 1.1.1",
+  "pyfive >= 1.1.2",
   "pydantic>=2.12.5",
 ]
 version = "2.4.0b1"
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7",
+  "pytest-cov>=4",
+]
 
 [project.entry-points."compliance_checker.suites"]
 
@@ -37,5 +43,19 @@ plugin_c3scmip6 = "plugins.c3scmip6.c3scmip6.c3scmip6:C3SCmip6ProjectCheck"
 plugin_cc6 = "plugins.cordex_cmip6.cordex_cmip6:CordexCmip6ProjectCheck"
 plugin_cmip7 = "plugins.cmip7.cmip7:Cmip7ProjectCheck"
 plugin_data = "plugins.data_plausibility.wcrp_data:DatapluginProjectCheck"
+
 [tool.setuptools.packages.find]
 include = ["plugins*", "checks*"]
+
+[tool.pytest.ini_options]
+addopts = "-v --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "remote_data: downloads and validates pinned remote NetCDF regression files",
+]
+
+[tool.coverage.run]
+source = ["checks", "plugins"]
+
+[tool.coverage.report]
+show_missing = true

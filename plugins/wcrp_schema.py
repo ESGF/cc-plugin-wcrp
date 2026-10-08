@@ -6,6 +6,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    field_validator,
     model_validator,
     AliasChoices,
 )
@@ -68,6 +69,8 @@ class AttributeRule(BaseModel):
 
     # Variable Registry "expected-term" key (must be used alone)
     cv_source_term_key: Optional[str] = None
+    expected_term_comparison: Literal["equal", "contains"] = "equal"
+    report_missing_expected_term: bool = False
 
     @model_validator(mode="after")
     def exclusivity(self):
@@ -100,6 +103,14 @@ class AttributeRule(BaseModel):
                     "cv_source_term_key is mutually exclusive with other rules"
                 )
             return self
+
+        if self.report_missing_expected_term:
+            raise ValueError(
+                "report_missing_expected_term requires cv_source_term_key"
+            )
+
+        if self.expected_term_comparison != "equal":
+            raise ValueError("expected_term_comparison requires cv_source_term_key")
 
         # Otherwise, only ONE rule among value rules + vocab rule.
         active = [
@@ -142,15 +153,42 @@ class FileCompressionRule(BaseModel):
     expected_shuffle: Optional[bool] = None
 
 
+class FileInternalPackingSectionRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    severity: Optional[str] = None
+
+
+class FileInternalPackingDataRule(FileInternalPackingSectionRule):
+    min_chunk_size_bytes: Optional[int] = Field(default=None, ge=1)
+    frequency_min_timesteps: Optional[Dict[str, int]] = None
+
+    @field_validator("frequency_min_timesteps", mode="before")
+    @classmethod
+    def _validate_frequency_min_timesteps(cls, value):
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("frequency_min_timesteps must be a table")
+        for frequency, steps in value.items():
+            if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
+                raise ValueError(
+                    f"frequency_min_timesteps[{frequency!r}] must be a positive integer"
+                )
+        return value
+
+
+class FileInternalPackingRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metadata: Optional[FileInternalPackingSectionRule] = None
+    time: Optional[FileInternalPackingSectionRule] = None
+    data: Optional[FileInternalPackingDataRule] = None
+
+
 class FileSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     format: Optional[FileFormatRule] = None
     compression: Optional[FileCompressionRule] = None
     internal_packing: Optional[FileInternalPackingRule] = None
-
-class FileInternalPackingRule(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    severity: Optional[str] = None
 
 
 # =============================================================================
@@ -178,6 +216,8 @@ class DrsSection(BaseModel):
     attributes_vs_directory: Optional[DrsRule] = None
     filename_vs_directory: Optional[DrsRule] = None
     time_range: TimeRangeRule = Field(default_factory=TimeRangeRule)
+    directory_template_keys: List[str] = Field(default_factory=list)
+    filename_template_keys: List[str] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -198,10 +238,14 @@ class GlobalConsistency(BaseModel):
     experiment_id_vs_activity_id: Optional[ConsistencyRule] = None
     experiment_id_vs_experiment: Optional[ConsistencyRule] = None
     experiment_id_vs_parent_experiment_id: Optional[ConsistencyRule] = None
-    experiment_id_vs_sub_experiment_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+    experiment_id_vs_sub_experiment_id: Optional[ConsistencyRule] = (
+        None  # CMIP6/plus only
+    )
 
     # Institution / source (ATTR009, ATTR010)
     institution_id_vs_institution: Optional[ConsistencyRule] = None
+    source_id_vs_source: Optional[ConsistencyRule] = None
+    driving_source_id_vs_driving_source: Optional[ConsistencyRule] = None
     source_id_vs_institution_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
 
     # Frequency vs table (ATTR008)
@@ -232,7 +276,7 @@ class VarExistenceRule(BaseModel):
 class VarTypeRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
-    data_type: Optional[str] = None  # e.g. "float", "double", "int"
+    data_type: Optional[str | list[str]] = None  # e.g. "real" or ["real", "double"]
 
 
 class VarDimensionsRule(BaseModel):
@@ -255,6 +299,12 @@ class GeophysicalVariableSection(BaseModel):
 class CoordinateGlobalRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
+
+
+class CoordinateGridRule(CoordinateGlobalRule):
+    """Controls project-specific horizontal-grid structural requirements."""
+
+    require_explicit_grid_axes: bool = False
 
 
 class CoordinateDirectionRule(CoordinateGlobalRule):
@@ -303,6 +353,7 @@ class TimeCoverageRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
 
+
 class CalendarRecommendationRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
@@ -329,8 +380,9 @@ class CoordinateRegistrySection(BaseModel):
     bounds: Optional[CoordinateGlobalRule] = None
     bounds_name: Optional[CoordinateBoundsNameRule] = None
     associations: Optional[CoordinateGlobalRule] = None
-    grid: Optional[CoordinateGlobalRule] = None
+    grid: Optional[CoordinateGridRule] = None
     formula: Optional[CoordinateGlobalRule] = None
+
 
 class CoordinateVariableConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")

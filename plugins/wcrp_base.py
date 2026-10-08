@@ -1,9 +1,11 @@
 # Simplified base class for WCRP plugins.
 
 import json
+import logging
 import os
 import re
 from hashlib import md5
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +36,11 @@ try:
 
     ESG_VOCAB_AVAILABLE = True
 except ImportError:
+    ev = None
     ESG_VOCAB_AVAILABLE = False
+
+
+_ESGVOC_PROJECT_SETUP_ERRORS = {}
 
 
 class WCRPBaseCheck(BaseCheck):
@@ -61,11 +67,78 @@ class WCRPBaseCheck(BaseCheck):
     _cc_display_headers = {3: "Mandatory", 2: "Warning", 1: "Optional"}
     # A subclass may defer writing until it has initialized additional metadata.
     _defer_consistency_output = False
+    # Enable for plugins whose global-attribute or DRS checks use ESGVoc's
+    # project specification rather than direct collection access alone.
+    _uses_esgvoc_project_specs = False
 
     def __init__(self, options=None):
         super().__init__(options)
         self.config = None
         self.project_config_path = None  # To be set by the specific WCRP plugin class
+        self._esgvoc_project_setup_error = None
+
+    def _initialize_esgvoc_project_specs(self):
+        """Verify once per process that ESGVoc can read the active project DB."""
+        project_id = getattr(self, "project_name", None)
+        cache_key = (project_id, ev)
+        if cache_key in _ESGVOC_PROJECT_SETUP_ERRORS:
+            self._esgvoc_project_setup_error = _ESGVOC_PROJECT_SETUP_ERRORS[
+                cache_key
+            ]
+            return
+
+        if not ESG_VOCAB_AVAILABLE or ev is None:
+            error = "ESGVoc is not installed or could not be imported."
+            self._esgvoc_project_setup_error = error
+            _ESGVOC_PROJECT_SETUP_ERRORS[cache_key] = error
+            return
+
+        try:
+            # get_project() logs schema-validation failures and returns None.
+            # The checker reports that condition below, so do not duplicate it
+            # on stderr for every compliance-checker worker.
+            project_logger = logging.getLogger("esgvoc.api.projects")
+            logger_was_disabled = project_logger.disabled
+            project_logger.disabled = True
+            try:
+                project = ev.get_project(project_id)
+            finally:
+                project_logger.disabled = logger_was_disabled
+        except Exception as exc:
+            error = (
+                f"ESGVoc could not load project {project_id!r}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            self._esgvoc_project_setup_error = error
+            _ESGVOC_PROJECT_SETUP_ERRORS[cache_key] = error
+            return
+
+        if project is not None:
+            self._esgvoc_project_setup_error = None
+            _ESGVOC_PROJECT_SETUP_ERRORS[cache_key] = None
+            return
+
+        try:
+            database_info = ev.get_active_database_info(project_id)
+        except Exception:
+            database_info = None
+        database_version = (
+            f"version {database_info.get('version')!r}"
+            if isinstance(database_info, dict) and database_info.get("version")
+            else "an unknown version"
+        )
+        try:
+            esgvoc_version = package_version("esgvoc")
+        except PackageNotFoundError:
+            esgvoc_version = "unknown"
+        error = (
+            f"ESGVoc returned no usable project specifications for "
+            f"{project_id!r}. The active project database ({database_version}) "
+            f"may be absent or incompatible with esgvoc=={esgvoc_version}. "
+            "Update ESGVoc and the project database together."
+        )
+        self._esgvoc_project_setup_error = error
+        _ESGVOC_PROJECT_SETUP_ERRORS[cache_key] = error
 
     def setup(self, dataset):
         """
@@ -97,6 +170,9 @@ class WCRPBaseCheck(BaseCheck):
         self.consistency_output = self.options.get("consistency_output", False)
         self.consistency_output_error = None
         self.setup_warnings = []
+        self._esgvoc_project_setup_error = None
+        if self._uses_esgvoc_project_specs:
+            self._initialize_esgvoc_project_specs()
         self.frequency_inferred = False
         self.varname = []
         self.time = None
@@ -242,6 +318,8 @@ class WCRPBaseCheck(BaseCheck):
 
     def _check_global_attributes(self, dataset):
         """Run ESGVoc validation, then TOML rules absent from ESGVoc."""
+        if self._esgvoc_project_setup_error:
+            return []
         if not self.config or not getattr(self.config, "global_", None):
             return []
 
@@ -595,7 +673,17 @@ class WCRPBaseCheck(BaseCheck):
                 )
         else:
             testctx.add_pass()
-        return [testctx.to_result()]
+        results = [testctx.to_result()]
+        if self._esgvoc_project_setup_error:
+            registry_ctx = TestCtx(BaseCheck.HIGH, "Variable Registry")
+            registry_ctx.add_failure(
+                "The ESGVoc project database could not be initialized. "
+                "Project-specification-driven global-attribute and DRS checks "
+                "were skipped for this file. Technical reason: "
+                f"{self._esgvoc_project_setup_error}"
+            )
+            results.append(registry_ctx.to_result())
+        return results
 
     def check_consistency_output(self, ds):
         """Report a recoverable consistency-output error as low severity."""
@@ -622,7 +710,11 @@ class WCRPBaseCheck(BaseCheck):
             )
         # required_attributes = []
         # Retrieve via esgvoc
-        if required_attributes == [] and ESG_VOCAB_AVAILABLE:
+        if (
+            required_attributes == []
+            and ESG_VOCAB_AVAILABLE
+            and not self._esgvoc_project_setup_error
+        ):
             eproj = ev.get_project(self.project_name)
             if eproj:
                 for eatt in eproj.attr_specs:

@@ -1,0 +1,105 @@
+# ==============================================================================
+# == Catalogue-backed coordinate checks
+# ==============================================================================
+
+# Each registry subsection controls one reusable result family. Omitting a
+# subsection disables that family.
+[coordinates.registry.setup]
+severity = "H"
+
+[coordinates.registry.identity]
+severity = "H"
+
+[coordinates.registry.dimension_order]
+severity = "H"
+
+[coordinates.registry.attributes]
+severity = "H"
+# A model may supply this CF attribute even while its coordinate-catalogue
+# field is empty. Other checked attributes with empty definitions must be absent.
+allowed_when_unset = ["computed_standard_name"]
+allowed_when_unset_severity = "L"
+
+[coordinates.registry.recommendations]
+severity = "M"
+
+[coordinates.registry.direction]
+severity = "H"
+# These physical checks can be disabled independently while retaining the
+# ordinary coordinate monotonicity and stored_direction checks in COORD005.
+check_direct_physical_values = true
+check_formula_derived_profile = true
+
+[coordinates.registry.valid_range]
+severity = "H"
+
+[coordinates.registry.requested_values]
+severity = "H"
+
+[coordinates.registry.bounds]
+severity = "H"
+
+[coordinates.registry.bounds_name]
+severity = "M"
+# Recommended bounds-related names; structure, existence, and dimension sizes
+# remain HIGH checks under coordinates.registry.bounds/grid.
+bounds_dimension_name = "bnds"
+vertices_dimension_name = "vertices"
+climatology_bounds_name = "climatology_bnds"
+
+[coordinates.registry.associations]
+severity = "H"
+
+# CORDEX resolves topology from CF-discovered file coordinates and the
+# grid_mapping rather than from a unique grid label or project EMD record.
+[coordinates.registry.grid]
+severity = "H"
+# Native projected CORDEX grids require explicit rlon/rlat or x/y axes.
+# Missing and latitude_longitude mappings may still use implicit index dimensions.
+require_explicit_grid_axes = true
+
+[coordinates.registry.formula]
+severity = "H"
+
+# ==============================================================================
+# == Established time checks not replaced by the coordinate catalogue
+# ==============================================================================
+
+[coordinates.time.name]
+variable_name = "time"
+
+[coordinates.time.monotonicity]
+# VAR005
+severity = "H"
+direction = "increasing"
+
+[coordinates.time.attributes.calendar]
+# ATTR004 allowed-value validation. Presence is owned by COORD003.
+severity = "H"
+enum = [
+    "standard",
+    "proleptic_gregorian",
+    "noleap",
+    "365_day",
+    "all_leap",
+    "julian",
+    "366_day",
+    "360_day",
+    "utc",
+    "tai",
+]
+
+[coordinates.time.squareness]
+# TIME001
+severity = "H"
+ref_calendar = ""
+ref_time_units = ""
+ref_increment = ""
+
+[coordinates.time.coverage]
+# TIME002; the coordinate itself is selected dynamically from ESGVoc axis="T".
+severity = "H"
+
+[coordinates.time.calendar_recommendation]
+# TIME003a
+severity = "M"

@@ -1,0 +1,51 @@
+[drs]
+directory_template_keys = [
+  "project_id",
+  "activity_id",
+  "domain_id",
+  "institution_id",
+  "driving_source_id",
+  "driving_experiment_id",
+  "driving_variant_label",
+  "source_id",
+  "version_realization",
+  "frequency",
+  "variable_id",
+  "version",
+]
+filename_template_keys = [
+  "variable_id",
+  "domain_id",
+  "driving_source_id",
+  "driving_experiment_id",
+  "driving_variant_label",
+  "institution_id",
+  "source_id",
+  "version_realization",
+  "frequency",
+  "time_range",
+]
+
+[drs.filename]
+severity = "H"
+
+[drs.directory]
+severity = "H"
+
+[drs.attributes_vs_directory]
+severity = "H"
+
+[drs.filename_vs_directory]
+severity = "H"
+
+[drs.time_range]
+severity = "H"
+climatology_suffix = ""
+
+[drs.time_range.label_precision]
+default = "yyyyMMddhhmm"
+mon = "yyyyMM"
+day = "yyyyMMdd"
+"6hr" = "yyyyMMddhhmm"
+"3hr" = "yyyyMMddhhmm"
+"1hr" = "yyyyMMddhhmm"

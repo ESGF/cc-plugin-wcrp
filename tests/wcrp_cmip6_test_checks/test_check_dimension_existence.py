@@ -5,7 +5,7 @@ Author : Iliana GHAZALI ''Meteo France''
 """
 
 from compliance_checker.base import BaseCheck
-from ...checks.checks.dimension_checks import check_dimension_existence as checker
+from checks.dimension_checks import check_dimension_existence as checker
 from compliance_checker.tests import BaseTestCase
 from compliance_checker.tests.resources import STATIC_FILES
 

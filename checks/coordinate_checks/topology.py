@@ -48,6 +48,7 @@ class GridTopologyConfig:
 
     grid_labels: dict[str, str] = field(default_factory=dict)
     grid_types: dict[str, str] = field(default_factory=dict)
+    grid_mappings: dict[str, str] = field(default_factory=dict)
     grid_type_and_mapping: dict[tuple[str, str], str] = field(default_factory=dict)
     allow_standard_name_fallback: bool = True
 
@@ -97,6 +98,10 @@ def _parse_config(source: Mapping) -> GridTopologyConfig:
         str(key): _topology(value, f"grid_type {key!r}")
         for key, value in _mapping_table(source, "grid_type").items()
     }
+    grid_mappings = {
+        str(key): _topology(value, f"grid_mapping {key!r}")
+        for key, value in _mapping_table(source, "grid_mapping").items()
+    }
     combinations = {}
     for key, value in _mapping_table(source, "grid_type_and_mapping").items():
         parts = str(key).split("|", 1)
@@ -110,6 +115,7 @@ def _parse_config(source: Mapping) -> GridTopologyConfig:
     return GridTopologyConfig(
         labels,
         grid_types,
+        grid_mappings,
         combinations,
         allow_standard_name_fallback,
     )
@@ -158,20 +164,24 @@ def resolve_grid_topology(
         topology = config.grid_types.get(type_id)
         if topology:
             return topology, None
+    if mapping_id:
+        topology = config.grid_mappings.get(mapping_id)
+        if topology:
+            return topology, None
     if label:
         topology = config.grid_labels.get(label)
         if topology:
             return topology, None
-    if type_id:
-        detail = f"grid_type={type_id!r}"
-        if mapping_id:
+    if type_id or mapping_id:
+        detail = f"grid_type={type_id!r}" if type_id else f"grid_mapping={mapping_id!r}"
+        if type_id and mapping_id:
             detail += f" and grid_mapping={mapping_id!r}"
         if label:
             detail += f", or fallback grid_label={label!r}"
         return None, f"No horizontal topology is configured for {detail}."
     if not label:
         return None, (
-            "The file has no non-empty global 'grid_label' attribute and ESGVoc "
-            "does not yet expose the EMD grid_type/grid_mapping relationship."
+            "The file has no non-empty global 'grid_label' attribute and no "
+            "grid_type/grid_mapping relationship was supplied by the project metadata."
         )
     return None, f"No horizontal topology is configured for grid_label={label!r}."

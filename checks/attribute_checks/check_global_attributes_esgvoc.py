@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 from compliance_checker.base import BaseCheck, TestCtx
+from esgvoc import api as voc
 from esgvoc.apps.ncattvalid import GAValidator
 
 @cache
@@ -60,6 +61,60 @@ def get_global_attribute_names(validator: GAValidator) -> set[str]:
         if name:
             names.add(str(name))
     return names
+
+
+def _matches_list_valued_specific_key(
+    validator: GAValidator,
+    project_id: str,
+    attributes: Mapping[str, Any],
+    name: str,
+) -> bool:
+    """Match one file value against a list-valued descriptor field.
+
+    ESGVoc 6.2 uses an exact database lookup for ``source_collection_key``
+    fields, which cannot find one string stored inside a list. Resolve the term
+    through the corresponding ID attribute and compare its permitted values.
+    """
+    spec = next(
+        (
+            item
+            for item in getattr(validator, "_specs", ())
+            if (
+                getattr(item, "attr_field_name", None)
+                or getattr(item, "source_collection", None)
+            )
+            == name
+        ),
+        None,
+    )
+    if spec is None or not getattr(spec, "source_collection_key", None):
+        return False
+
+    term_id = attributes.get(spec.source_collection)
+    actual = attributes.get(name)
+    if not isinstance(term_id, str) or actual is None:
+        return False
+
+    try:
+        term = voc.get_term_in_collection(
+            project_id,
+            spec.source_collection,
+            term_id.strip().lower(),
+        )
+    except Exception:  # Preserve ESGVoc's original validation failure.
+        return False
+    if term is None:
+        return False
+
+    expected = getattr(term, spec.source_collection_key, None)
+    if not isinstance(expected, (list, tuple, set)):
+        return False
+
+    actual_normalized = " ".join(str(actual).strip().split())
+    return any(
+        actual_normalized == " ".join(str(option).strip().split())
+        for option in expected
+    )
 
 
 def normalize_global_attributes(ds, validator: GAValidator) -> dict[str, Any]:
@@ -159,7 +214,17 @@ def check_global_attributes_esgvoc(
             severity,
             f"[ATTR004] Global attribute '{name}' vocabulary check",
         )
-        failures = [item for item in vocabulary_results if not item.is_valid]
+        failures = [
+            item
+            for item in vocabulary_results
+            if not item.is_valid
+            and not _matches_list_valued_specific_key(
+                active_validator,
+                project_id,
+                attributes,
+                name,
+            )
+        ]
         if failures:
             # One attribute is one ATTR004 assertion, including string arrays.
             # Combining token failures preserves the existing check score and

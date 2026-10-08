@@ -1,20 +1,29 @@
+"""Integration coverage for filename time ranges without a live ESGVoc DB."""
 
-import os
-from netCDF4 import Dataset
-from ...checks.time_checks import check_time_range_vs_filename as checker
-from compliance_checker.tests import BaseTestCase
+from types import SimpleNamespace
+
+import pytest
 from compliance_checker.base import BaseCheck
 
-class TestCheckTimeRangeVsFilename(BaseTestCase):
+from checks.time_checks import check_time_range_vs_filename as checker
+from tests.wcrp_cmip6_test_checks.conftest import result_passed
 
-    def test_check_time_range_vs_filename(self):
-        file_path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), "..", "..", "data", "CMIP6", "CMIP", "IPSL", "IPSL-CM5A2-INCA",
-            "historical", "r1i1p1f1", "Amon", "pr", "gr", "v20240619",
-            "pr_Amon_IPSL-CM5A2-INCA_historical_r1i1p1f1_gr_185001-201412.nc"
-        ))
-        dataset = Dataset(file_path, mode="r")
-        results = checker.check_time_range_vs_filename(dataset, severity=BaseCheck.MEDIUM)
-        assert len(results) == 1
-        for res in results:
-            self.assert_result_is_good(res) 
+pytestmark = pytest.mark.remote_data
+
+
+class _DrsValidator:
+    def validate_file_name(self, _filename):
+        return SimpleNamespace(errors=[])
+
+
+def test_check_time_range_vs_filename(cmip6_reference_dataset, monkeypatch):
+    monkeypatch.setattr(checker, "_get_validator", lambda _project_id: _DrsValidator())
+
+    results = checker.check_time_range_vs_filename(
+        cmip6_reference_dataset,
+        severity=BaseCheck.MEDIUM,
+    )
+
+    assert len(results) == 1
+    assert result_passed(results[0])
+    assert results[0].name.startswith("[TIME003]")

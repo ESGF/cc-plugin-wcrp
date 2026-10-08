@@ -117,10 +117,48 @@ def test_configured_climatology_suffix_is_accepted(tmp_path):
 
     with Dataset(path) as ds:
         result = check_time_range_vs_filename(
-            ds, severity=BaseCheck.HIGH, climatology_suffix="-clim"
+            ds,
+            severity=BaseCheck.HIGH,
+            climatology_suffix="-clim",
+            expected_is_climatology=True,
         )[0]
 
     assert result.value == (1, 1)
+
+
+def test_coordinate_metadata_requires_climatology_attribute(tmp_path):
+    path = tmp_path / "tas_Amon_200001-201012-clim.nc"
+    _make_climatology_file(path, climatology_attribute=None)
+
+    with Dataset(path) as ds:
+        result = check_time_range_vs_filename(
+            ds,
+            severity=BaseCheck.HIGH,
+            climatology_suffix="-clim",
+            expected_is_climatology=True,
+        )[0]
+
+    assert any(
+        "coordinate definition identifies climatological time" in message
+        for message in _messages(result)
+    )
+
+
+def test_coordinate_metadata_rejects_unexpected_climatology_attribute(tmp_path):
+    path = tmp_path / "tas_Amon_200007-201007.nc"
+    _make_climatology_file(path)
+
+    with Dataset(path) as ds:
+        result = check_time_range_vs_filename(
+            ds,
+            severity=BaseCheck.HIGH,
+            expected_is_climatology=False,
+        )[0]
+
+    assert any(
+        "coordinate definition identifies regular time" in message
+        for message in _messages(result)
+    )
 
 
 def test_configured_climatology_suffix_is_required(tmp_path):

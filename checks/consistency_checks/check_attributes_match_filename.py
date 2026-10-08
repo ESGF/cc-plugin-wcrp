@@ -119,12 +119,6 @@ def _parse_cordex_cmip6_filename(filename: str):
     }
 
 
-def _unwrap_facets(maybe_tuple):
-    if isinstance(maybe_tuple, tuple) and len(maybe_tuple) > 0 and isinstance(maybe_tuple[0], dict):
-        return maybe_tuple[0]
-    return maybe_tuple
-
-
 def check_filename_vs_global_attrs(
     ds, severity, project_id="cmip6", filename_template_keys=None
 ):
@@ -167,12 +161,11 @@ def check_filename_vs_global_attrs(
     # ---------------- CMIP6 / CMIP6Plus ----------------
     elif project_id in ("cmip6", "cmip6plus"):
         parse_keys = filename_template_keys or _FILENAME_KEYS_CMIP6_PARSE
-        facets = _parse_filename_components(filename, parse_keys)
-        facets = _unwrap_facets(facets)  # <-- FIX: tuple -> dict
+        facets, parse_error = _parse_filename_components(filename, parse_keys)
 
         if facets is None:
             ctx.add_failure(
-                f"Could not perform check. Reason: Filename '{filename}' does not have the expected {len(parse_keys)} components (or {len(parse_keys)-1} for time invariant variables)."
+                f"Could not perform check. Reason: {parse_error}"
             )
             return [ctx.to_result()]
         compare_keys = _FILENAME_KEYS_CMIP6_COMPARE

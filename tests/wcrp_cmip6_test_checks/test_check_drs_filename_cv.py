@@ -1,38 +1,53 @@
+"""Unit coverage for ESGVoc DRS validation adapters."""
 
-#!/usr/bin/env python
-"""
-Test for check_drs_filename_cv.py
-Author: Ayoub NACHITE ''IPSL''
-"""
+from types import SimpleNamespace
 
-import os
-from netCDF4 import Dataset
+import pytest
 from compliance_checker.base import BaseCheck
-from ...checks.consistency_checks import check_drs_filename_cv as checker
-from compliance_checker.tests import BaseTestCase
 
-class TestCheckDrsFilenameCv(BaseTestCase):
+from checks.consistency_checks import check_drs_filename_cv as checker
+from tests.wcrp_cmip6_test_checks.conftest import result_passed
 
-    def test_check_drs_filename(self):
-        file_path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__),
-            "..", "..", "data", "CMIP6", "CMIP", "IPSL", "IPSL-CM5A2-INCA", "historical", "r1i1p1f1", "Amon", "pr", "gr", "v20240619", "pr_Amon_IPSL-CM5A2-INCA_historical_r1i1p1f1_gr_185001-201412.nc"
-        ))
-        dataset = Dataset(file_path, mode="r")
-        results = checker.check_drs_filename(dataset, severity=BaseCheck.HIGH, project_id="cmip6")
-        assert len(results) == 1
-        for res in results:
-            self.assert_result_is_good(res) 
-        
-        
-    def test_check_drs_directory(self):
-        file_path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__),
-            "..", "..", "data", "CMIP6", "CMIP", "IPSL", "IPSL-CM5A2-INCA", "historical", "r1i1p1f1", "Amon", "pr", "gr", "v20240619", "pr_Amon_IPSL-CM5A2-INCA_historical_r1i1p1f1_gr_185001-201412.nc"
-        ))
-        dataset = Dataset(file_path, mode="r")
-        results = checker.check_drs_filename(dataset, severity=BaseCheck.HIGH, project_id="cmip6")
-        assert len(results) == 1
-        for res in results:
-            self.assert_result_is_good(res) 
+pytestmark = pytest.mark.remote_data
 
+
+class _DrsValidator:
+    def __init__(self, *, project_id):
+        assert project_id == "cmip6"
+
+    def validate_file_name(self, _filename):
+        return SimpleNamespace(errors=[])
+
+    def validate_directory(self, _directory):
+        return SimpleNamespace(errors=[])
+
+
+def _mock_esgvoc(monkeypatch):
+    monkeypatch.setattr(checker, "ESG_VOCAB_AVAILABLE", True)
+    monkeypatch.setattr(checker, "DrsValidator", _DrsValidator)
+
+
+def test_check_drs_filename(cmip6_reference_dataset, monkeypatch):
+    _mock_esgvoc(monkeypatch)
+    results = checker.check_drs_filename(
+        cmip6_reference_dataset,
+        severity=BaseCheck.HIGH,
+        project_id="cmip6",
+    )
+
+    assert len(results) == 1
+    assert result_passed(results[0])
+    assert "Filename Vocabulary" in results[0].name
+
+
+def test_check_drs_directory(cmip6_reference_dataset, monkeypatch):
+    _mock_esgvoc(monkeypatch)
+    results = checker.check_drs_directory(
+        cmip6_reference_dataset,
+        severity=BaseCheck.HIGH,
+        project_id="cmip6",
+    )
+
+    assert len(results) == 1
+    assert result_passed(results[0])
+    assert "Directory Vocabulary" in results[0].name

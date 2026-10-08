@@ -9,6 +9,7 @@ from checks.coordinate_checks.utils import (
     bound_tolerances,
     bounds_pairs,
     compare_units,
+    direct_numeric_equal,
     formatted,
     ncattr,
     neutral_dtype,
@@ -55,7 +56,7 @@ class Findings:
                 f"{self.severity_word('recommendations', noun=True)}s"
             ),
             "allowed_when_unset": (
-                "[COORD004a] Allowed attributes with unset definitions"
+                "[COORD004a] Additional permitted coordinate metadata"
             ),
             "direction": "[COORD005] Coordinate monotonicity and stored direction",
             "valid_range": "[COORD006] Coordinate valid range",
@@ -206,9 +207,10 @@ def report_allowed_when_unset(
         return False
     findings.add(
         "allowed_when_unset",
-        f"'{name}' defines {attribute}={formatted(actual)} although its coordinate "
-        "definition is empty; this is permitted by the configured "
-        "allowed_when_unset exception.",
+        f"Coordinate '{name}' defines optional attribute "
+        f"{attribute}={formatted(actual)}. No expected value is currently "
+        "specified in the coordinate vocabulary, so this value cannot be "
+        "verified.",
     )
     return True
 
@@ -464,12 +466,13 @@ def check_requested_numeric(findings: Findings, var, name: str, entry: dict):
     factor = entry.get("tolerance")
     missing = []
     for index, expected_value in enumerate(expected):
-        tolerance = (
-            requested_tolerance(index, expected, float(factor))
-            if factor is not None
-            else 0.0
-        )
-        if not np.any(np.abs(array - expected_value) <= tolerance):
+        if factor is None:
+            tolerance = 0.0
+            matched = np.any(direct_numeric_equal(array, expected_value))
+        else:
+            tolerance = requested_tolerance(index, expected, float(factor))
+            matched = np.any(np.abs(array - expected_value) <= tolerance)
+        if not matched:
             missing.append((expected_value, tolerance))
     if missing:
         findings.add(
@@ -488,7 +491,6 @@ def check_bounds(
     *,
     scalar=False,
     recommended_name: str | None = None,
-    allowed_attributes=(),
 ):
     """Follow the coordinate's bounds attribute and validate that variable."""
     time_coverage_owned_by_time002 = (
@@ -523,14 +525,6 @@ def check_bounds(
         return None
     bounds_var = ds.variables[declared]
     check_dtype(findings, bounds_var, declared, entry, family="bounds")
-    unexpected = sorted(set(bounds_var.ncattrs()) - set(allowed_attributes))
-    if unexpected:
-        findings.add(
-            "bounds",
-            f"Bounds variable '{declared}' has unexpected attributes {unexpected}; "
-            f"the {findings.severity_word('bounds')} allowed attributes are "
-            f"{list(allowed_attributes)}.",
-        )
 
     check_trailing_dimension(
         findings,
@@ -635,7 +629,7 @@ def check_bounds(
     if expected_pairs:
         if scalar:
             expected_pair = np.asarray(expected_pairs[0])
-            if not np.array_equal(pairs[0], expected_pair):
+            if not np.all(direct_numeric_equal(pairs[0], expected_pair)):
                 findings.add(
                     "requested_values",
                     f"Scalar bounds '{declared}'={pairs[0].tolist()}; the "

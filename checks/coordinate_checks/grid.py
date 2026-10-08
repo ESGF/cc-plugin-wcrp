@@ -38,6 +38,20 @@ def _grid_entry(catalog, role):
     return catalog.grid_variables.get(role, {})
 
 
+def _grid_mapping_name(ds, data_var):
+    if data_var is None:
+        return ""
+    mapping_attribute = ncattr(data_var, "grid_mapping")
+    mapping_variable = (
+        mapping_attribute.split()[0].rstrip(":")
+        if isinstance(mapping_attribute, str) and mapping_attribute
+        else ""
+    )
+    if mapping_variable in ds.variables:
+        return ncattr(ds.variables[mapping_variable], "grid_mapping_name")
+    return ""
+
+
 def _grid_dimensions(catalog, entry, dimensions, vertex_dimension=None):
     """Resolve CV dimension order through the chosen horizontal axis scheme."""
     # Bare indices have no X/Y metadata: their two positions define Y then X.
@@ -218,6 +232,7 @@ def _validate_grid_axes(findings, ds, dimensions, catalog, data_var):
     """Accept a matching rlon/rlat, x/y, x_deg/y_deg, index, or implicit pair."""
     if not dimensions:
         return
+    mapping_name = _grid_mapping_name(ds, data_var)
     explicit = [name for name in dimensions if name in ds.variables]
     if not explicit:
         return  # implicit integer indices are explicitly permitted
@@ -278,16 +293,6 @@ def _validate_grid_axes(findings, ds, dimensions, catalog, data_var):
             f"{matched} for dimensions {list(dimensions)}.",
         )
 
-    mapping_name = ""
-    if data_var is not None:
-        mapping_attribute = ncattr(data_var, "grid_mapping")
-        mapping_variable = (
-            mapping_attribute.split()[0].rstrip(":")
-            if isinstance(mapping_attribute, str) and mapping_attribute
-            else ""
-        )
-        if mapping_variable in ds.variables:
-            mapping_name = ncattr(ds.variables[mapping_variable], "grid_mapping_name")
     matched_ids = set(matched.values())
     if mapping_name == "rotated_latitude_longitude":
         if matched_ids != {"grid_longitude", "grid_latitude"}:
@@ -316,6 +321,7 @@ def validate_horizontal_grid(
     topology=None,
     resolution_error=None,
     allow_standard_name_fallback=True,
+    require_explicit_grid_axes=False,
 ):
     requested = [
         identifier
@@ -324,7 +330,19 @@ def validate_horizontal_grid(
     ]
     if not requested:
         return []
-    if resolution_error or topology is None:
+    zonal_mean = "latitude" in requested and "longitude" not in requested
+    if zonal_mean:
+        if resolution_error or topology != "rectilinear":
+            detail = resolution_error or f"The resolved topology is {topology!r}."
+            findings.add(
+                "recommendations",
+                "Only latitude is required, so the zonal-mean grid is verified "
+                f"as rectilinear regardless of its grid metadata. {detail} It is "
+                f"{findings.severity_word('recommendations')} to register or select a grid "
+                "with a (zonal-mean) rectilinear topology.",
+            )
+        topology = "rectilinear"
+    elif resolution_error or topology is None:
         findings.add(
             "grid",
             "The horizontal grid could not be verified. "
@@ -434,6 +452,27 @@ def validate_horizontal_grid(
             return []
         dimensions = list(available[0].dimensions)
         if topology in {"curvilinear", "unstructured"}:
-            _validate_grid_axes(findings, ds, dimensions, catalog, data_var)
+            mapping_name = _grid_mapping_name(ds, data_var)
+            explicit = [name for name in dimensions if name in ds.variables]
+            if (
+                require_explicit_grid_axes
+                and mapping_name
+                and mapping_name != "latitude_longitude"
+                and not explicit
+            ):
+                expected = (
+                    "rlon/rlat"
+                    if mapping_name == "rotated_latitude_longitude"
+                    else "x/y"
+                )
+                findings.add(
+                    "grid",
+                    f"The {findings.severity_word('grid')} native grid axes for "
+                    f"grid_mapping_name={mapping_name!r} are explicit 1-D "
+                    f"{expected} coordinate variables; dimensions {dimensions} "
+                    "have only implicit integer indices.",
+                )
+            else:
+                _validate_grid_axes(findings, ds, dimensions, catalog, data_var)
         return _grid_dimensions(catalog, _grid_entry(catalog, requested[0]), dimensions)
     return []

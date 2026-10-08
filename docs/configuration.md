@@ -6,7 +6,7 @@ This page explains how WCRP plugin configuration works, how the TOML files are o
 
 ## 1. Configuration layout
 
-CMIP6/CMIP7 plugins load their configuration from a **split TOML tree** (CORDEX-CMIP6 and the Data plugin currently use a legacy single-file layout):
+CMIP6, CMIP7, and CORDEX-CMIP6 load their configuration from a **split TOML tree** (the Data plugin retains a legacy single-file layout):
 
 ```text
 plugins/<project>/
@@ -38,8 +38,7 @@ This repository ships reference configurations for each WCRP plugin:
 
 - **CMIP6 (`wcrp_cmip6`)**: split-TOML configuration under `plugins/cmip6/config/wcrp/`.
 - **CMIP7 (`wcrp_cmip7`)**: split-TOML configuration under `plugins/cmip7/config/wcrp/`.
-- **CORDEX-CMIP6 (`wcrp_cordex_cmip6`)**: currently uses the legacy layout with a single `wcrp_config.toml` (and a `mapping_variables.toml`).  
-  This will be migrated to the split-TOML structure used by CMIP6/CMIP7.
+- **CORDEX-CMIP6 (`wcrp_cordex_cmip6`)**: split-TOML configuration under `plugins/cordex_cmip6/config/wcrp/`; its `cordex.toml` contains only project-specific checks.
 - **Data plugin (`wcrp_data`)**: currently kept as a single TOML configuration (data plausibility focused).
 
 When creating a custom configuration, it is recommended to start from the closest existing project config and adapt it (see Section 6).

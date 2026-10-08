@@ -7,6 +7,7 @@ import numpy as np
 from checks.coordinate_checks.utils import (
     coordinate_type,
     decode_character,
+    direct_numeric_equal,
     ncattr,
     neutral_dtype,
     values,
@@ -19,8 +20,8 @@ from checks.coordinate_checks.validation import (
     check_direct_vertical_values,
     check_direction,
     check_dtype,
-    check_trailing_dimension,
     check_requested_numeric,
+    check_trailing_dimension,
     check_valid_range,
 )
 
@@ -84,6 +85,14 @@ def validate_time_semantics(findings, ds, var, name, entry):
     if not ncattr(var, "calendar"):
         findings.add("attributes", f"Time coordinate '{name}' is missing calendar.")
     if not entry.get("is_climatology"):
+        climatology = ncattr(var, "climatology")
+        if climatology:
+            findings.add(
+                "bounds",
+                f"It is {findings.severity_word('bounds')} for regular time "
+                f"coordinate '{name}' not to define a climatology attribute; "
+                f"found {climatology!r}.",
+            )
         return
     climatology = ncattr(var, "climatology")
     if not climatology:
@@ -231,9 +240,9 @@ def validate_scalar(
             try:
                 actual = float(np.asarray(var[...]).reshape(-1)[0])
                 expected_numeric = float(expected)
-                # The specification deliberately does not apply coordinate
-                # tolerance to scalar values.
-                if actual != expected_numeric:
+                # Scalar values have no coordinate tolerance, but direct
+                # comparisons allow negligible floating-point representation noise.
+                if not direct_numeric_equal(actual, expected_numeric):
                     lower, upper = entry.get("valid_min"), entry.get("valid_max")
                     in_range = (lower is None or actual >= float(lower)) and (
                         upper is None or actual <= float(upper)

@@ -16,6 +16,9 @@ from checks.utils import add_time_increment, severity_word
 
 NDECIMALS = 6
 _TIME_RANGE_RE = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$", re.IGNORECASE)
+_TIME_UNIT_RE = re.compile(r"^\s*([A-Za-z_]+)\s+since\b", re.IGNORECASE)
+_TIME_CELL_METHOD_RE = re.compile(r"(?:^|\s)time:\s*([A-Za-z_]+)", re.IGNORECASE)
+_USE_FILE_CELL_METHODS = object()
 
 
 class RepresentativeIntervalError(ValueError):
@@ -117,6 +120,50 @@ def _is_instantaneous(ds, target_var: str | None, freq_id: str) -> bool:
     if freq_id in set(AVERAGE_CORRECTION_FREQ):
         return False
     return True
+
+
+def _expected_time_sampling(cell_methods, freq_id: str) -> tuple[bool | None, str | None]:
+    """Derive one point/interval interpretation from all permitted values."""
+    if isinstance(cell_methods, str):
+        allowed = [cell_methods]
+    else:
+        allowed = list(cell_methods or [])
+    allowed = [str(value).strip() for value in allowed if str(value).strip()]
+    if not allowed:
+        return None, "the known branded variable does not define cell_methods"
+
+    interpretations = set()
+    for value in allowed:
+        # Parenthetical interval information and comments do not change whether
+        # the time coordinate represents a point or an interval statistic.
+        without_comments = re.sub(r"\([^)]*\)", "", value)
+        methods = _TIME_CELL_METHOD_RE.findall(without_comments)
+        if methods:
+            interpretations.update(method.lower() == "point" for method in methods)
+        else:
+            interpretations.add(freq_id not in set(AVERAGE_CORRECTION_FREQ))
+
+    if len(interpretations) != 1:
+        return (
+            None,
+            "the permitted cell_methods values imply both point and interval "
+            f"time sampling: {allowed!r}",
+        )
+    return interpretations.pop(), None
+
+
+def _fixed_step_num(d0, d1, units: str, calendar: str) -> float:
+    """Return a fixed increment in file units without epoch cancellation."""
+    match = _TIME_UNIT_RE.match(units)
+    if match is None:
+        raise ValueError(f"Unsupported time units {units!r}")
+
+    # Subtracting two large absolute date2num values introduces a tiny error
+    # that grows with every step. Use the same unit with d0 as a local origin,
+    # where the subtraction is between zero and one small increment.
+    local_units = f"{match.group(1)} since {d0}"
+    local_values = cftime.date2num([d0, d1], units=local_units, calendar=calendar)
+    return float(local_values[1] - local_values[0])
 
 
 def _midpoint_num(d0, d1, units: str, calendar: str) -> float:
@@ -295,7 +342,12 @@ def _resolve_increment(table_id: str, freq_id: str, fallback_freq: dict | None):
 
 
 def check_time_squareness(
-    ds, severity=BaseCheck.HIGH, calendar="", ref_time_units="", frequency=None
+    ds,
+    severity=BaseCheck.HIGH,
+    calendar="",
+    ref_time_units="",
+    frequency=None,
+    expected_cell_methods=_USE_FILE_CELL_METHODS,
 ):
     """
     TIME001: Time axis check for a single file.
@@ -304,7 +356,8 @@ def check_time_squareness(
     - Declared climatological bounds: coordinate midpoint
     - Primary: FREQ_INC (table_id, frequency)
     - Start: filename start boundary
-    - Average data: midpoint convention for AVERAGE_CORRECTION_FREQ
+    - Sampling semantics: permitted branded-variable cell_methods when supplied,
+      otherwise the file metadata used by legacy/direct callers
     - Optional policy: calendar / ref_time_units equality checks
     """
     ctx = TestCtx(severity, "[TIME001] Check Time Squareness ")
@@ -394,9 +447,21 @@ def check_time_squareness(
         )
         return [ctx.to_result()]
 
-    # Instantaneous vs average
+    # Instantaneous vs interval sampling. Project plugins supply the registry
+    # values; the file fallback remains for direct/legacy callers.
     target = _resolve_target_variable(ds)
-    instantaneous = _is_instantaneous(ds, target, freq_id)
+    if expected_cell_methods is _USE_FILE_CELL_METHODS:
+        instantaneous = _is_instantaneous(ds, target, freq_id)
+    else:
+        instantaneous, reason = _expected_time_sampling(
+            expected_cell_methods, freq_id
+        )
+        if instantaneous is None:
+            ctx.add_failure(
+                "TIME001 cannot determine the required time sampling because "
+                f"{reason}; the dependent axis check was skipped."
+            )
+            return [ctx.to_result()]
     use_midpoint = not instantaneous
 
     # Read actual time axis
@@ -423,8 +488,7 @@ def check_time_squareness(
             d0 = start_boundary
             d1 = add_time_increment(d0, inc_val, inc_unit, cal)
             reference_n0 = float(cftime.date2num(d0, units=units, calendar=cal))
-            reference_n1 = float(cftime.date2num(d1, units=units, calendar=cal))
-            step_num = reference_n1 - reference_n0
+            step_num = _fixed_step_num(d0, d1, units, cal)
             n0 = (
                 float(actual[0]) - step_num / 2.0
                 if use_midpoint and label_is_representative

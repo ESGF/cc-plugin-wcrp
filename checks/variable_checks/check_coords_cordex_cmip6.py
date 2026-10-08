@@ -24,6 +24,35 @@ def _true_horizontal_coordinates(dataset):
     return latitudes, longitudes
 
 
+def infer_horizontal_topology(dataset):
+    """Infer CORDEX topology from unambiguous CF latitude/longitude discovery."""
+    latitudes, longitudes = _true_horizontal_coordinates(dataset)
+    if len(latitudes) != 1 or len(longitudes) != 1:
+        return None, (
+            "Horizontal topology could not be inferred unambiguously. CF "
+            f"coordinate discovery found latitude variables {latitudes} and "
+            f"longitude variables {longitudes}; exactly one of each is required."
+        )
+    latitude = dataset.variables[latitudes[0]]
+    longitude = dataset.variables[longitudes[0]]
+    if latitude.ndim == longitude.ndim == 1:
+        if latitude.dimensions == longitude.dimensions:
+            return "unstructured", None
+        return "rectilinear", None
+    if (
+        latitude.ndim == longitude.ndim == 2
+        and latitude.dimensions == longitude.dimensions
+    ):
+        return "curvilinear", None
+    return None, (
+        "Horizontal topology could not be inferred from CF latitude/longitude "
+        f"coordinates {latitudes[0]!r}{list(latitude.dimensions)} and "
+        f"{longitudes[0]!r}{list(longitude.dimensions)}. Expected separate 1-D "
+        "dimensions for a rectilinear grid, one shared 1-D dimension for an "
+        "unstructured grid, or two shared dimensions for a curvilinear grid."
+    )
+
+
 def _has_1d_lat_lon(dataset):
     """Whether CF discovery finds one-dimensional true lat/lon coordinates."""
     latitudes, longitudes = _true_horizontal_coordinates(dataset)
@@ -51,6 +80,16 @@ def _axis_names(CheckerObject, axis):
         if getattr(CheckerObject.ds.variables[name], "axis", None) == axis:
             names.append(name)
     return list(dict.fromkeys(names))
+
+
+def _native_axis_names(CheckerObject, axis):
+    """Return one-dimensional coordinate variables for a native grid axis."""
+    return [
+        name
+        for name in _axis_names(CheckerObject, axis)
+        if name in CheckerObject.ds.dimensions
+        and CheckerObject.ds.variables[name].dimensions == (name,)
+    ]
 
 
 def _all_true(values):
@@ -239,8 +278,11 @@ def check_horizontal_axes_bounds(CheckerObject, severity=BaseCheck.MEDIUM):
             )
         return [testctx.to_result()]
 
-    x_axes = _axis_names(CheckerObject, "X")
-    y_axes = _axis_names(CheckerObject, "Y")
+    # CF axis discovery also returns two-dimensional auxiliary latitude and
+    # longitude coordinates. Their vertices do not satisfy the recommendation
+    # for bounds on the native rlat/rlon or x/y axes.
+    x_axes = _native_axis_names(CheckerObject, "X")
+    y_axes = _native_axis_names(CheckerObject, "Y")
     if any(name in bounds_map for name in x_axes) and any(
         name in bounds_map for name in y_axes
     ):

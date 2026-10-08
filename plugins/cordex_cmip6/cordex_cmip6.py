@@ -1,24 +1,15 @@
 #!/usr/bin/env python
+"""WCRP CORDEX-CMIP6 compliance checker."""
 
-# =============================================================================
-# WCRP CORDEX-CMIP6 project
-#
-# This module defines the WCRP CORDEX-CMIP6 compliance checker, which serves as
-# the main entry point for executing a series of validation checks on
-# climate data submitted to the CORDEX-CMIP6 Archive.
-# It relies on configuration defined in a TOML file.
-# =============================================================================
+from __future__ import annotations
 
-
-# --- Standard library imports ---
 import os
+from typing import Any, Optional
 
 import toml
+from compliance_checker.base import BaseCheck, TestCtx
+from netCDF4 import Dataset
 
-from checks.attribute_checks.check_attribute_cv import (
-    check_required_global_attributes_existence_cv,
-    check_required_global_attributes_value_cv,
-)
 from checks.attribute_checks.check_attribute_suite import check_attribute_suite
 from checks.attribute_checks.check_attrs_cordex_cmip6 import (
     check_domain_id,
@@ -39,697 +30,1018 @@ from checks.consistency_checks.check_drs_consistency import (
 )
 from checks.consistency_checks.check_drs_filename_cv import (
     check_drs_directory,
-    check_drs_directory_cv,
     check_drs_filename,
-    check_drs_filename_cv,
 )
+from checks.consistency_checks.check_institution_source_consistency import (
+    check_id_attribute_consistency,
+)
+from checks.coordinate_checks import (
+    CoordinateMetadataError,
+    GridTopologyConfigError,
+    check_coordinate_catalog,
+    load_catalog,
+    load_grid_topology_config,
+    resolve_grid_topology,
+)
+from checks.coordinate_checks.cmor import (
+    catalog_from_cmor,
+    expected_variable_from_cmor,
+)
+from checks.coordinate_checks.utils import coordinate_type, ncattr
+from checks.dimension_checks.check_dimension_existence import check_dimension_existence
+from checks.dimension_checks.check_dimension_positive import check_dimension_positive
 from checks.format_checks.check_compression import check_compression
 from checks.format_checks.check_format import check_format
+from checks.format_checks.check_internal_packing import (
+    check_internal_packing,
+    finalize_internal_packing_session,
+)
+from checks.time_checks.check_time_bounds import check_time_bounds
+from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from checks.time_checks.check_time_cordex_cmip6 import (
     check_calendar,
     check_time_chunking,
     check_time_units,
 )
 from checks.time_checks.check_time_range_vs_filename import (
-        check_time_range_vs_filename,
-    )
+    check_time_range_vs_filename,
+)
+from checks.time_checks.check_time_squareness import check_time_squareness
+import checks.time_checks.check_time_squareness as time_squareness_mod
 from checks.utils import retrieve
+from checks.variable_checks.check_coordinate_monotonicity import (
+    check_coordinate_monotonicity,
+)
 from checks.variable_checks.check_coords_cordex_cmip6 import (
     check_horizontal_axes_bounds,
     check_lat_lon_bounds,
     check_lon_value_range,
+    infer_horizontal_topology,
 )
-from checks.variable_checks.check_data_types import (
-    check_coord_data_types,
-    check_var_data_type,
+from checks.variable_checks.check_variable_existence import check_variable_existence
+from checks.variable_checks.check_variable_type import (
+    check_variable_type,
+    configured_data_types,
 )
-
-# --- Import of checks and utils ---
+from checks.variable_checks.known_branded_variable import (
+    KnownBrandedVariableLookupError,
+    lookup_expected_variable_metadata_in_collection,
+)
 from plugins.wcrp_base import WCRPBaseCheck
+from plugins.wcrp_schema import WCRPConfig
 
-# --- Esgvoc universe import ---
 try:
-    from esgvoc.api.universe import find_terms_in_data_descriptor
+    from compliance_checker.cf.util import get_geophysical_variables
+except ImportError as exc:
+    raise ImportError("Unable to import compliance-checker CF utilities.") from exc
 
-    ESG_VOCAB_AVAILABLE = True
-except ImportError:
-    ESG_VOCAB_AVAILABLE = False
+try:
+    import esgvoc.api as esgvoc_api
+except Exception:
+    esgvoc_api = None
 
 
-# --- CMOR tables URL ---
-CORDEX_CMIP6_CMOR_TABLES_URL = "https://raw.githubusercontent.com/WCRP-CORDEX/cordex-cmip6-cmor-tables/main/Tables/"
+DEFAULT_CORDEX_CMIP6_CMOR_TABLES_URL = (
+    "https://raw.githubusercontent.com/WCRP-CORDEX/"
+    "cordex-cmip6-cmor-tables/main/Tables/"
+)
 
 
-# --- Class definition of the CORDEX-CMIP6 checker from cc-plugin-wcrp ---
+def _deep_merge(left: dict, right: dict) -> dict:
+    merged = dict(left)
+    for key, value in right.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_toml(path: str) -> dict:
+    with open(path, encoding="utf-8") as stream:
+        return toml.load(stream)
+
+
+def _option_enabled(options: dict, name: str) -> bool:
+    if name not in options:
+        return False
+    value = options[name]
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"", "0", "false", "no", "off"}
+
+
 class CordexCmip6ProjectCheck(WCRPBaseCheck):
-    """
-    Class for WCRP CORDEX-CMIP6 project-specific compliance checks.
-    """
+    """CORDEX-CMIP6 checks with ESGVoc as the default metadata source."""
 
     _cc_spec = "wcrp_cordex_cmip6"
     _cc_spec_version = "1.0"
     _cc_description = "WCRP CORDEX-CMIP6 Project Checks"
+    _uses_esgvoc_project_specs = True
     _cc__url = "https://doi.org/10.5281/zenodo.15047096"
     _cc_display_headers = {3: "Required", 2: "Recommended", 1: "Suggested"}
-    # Consistency output must include metadata initialized from the CMOR tables.
     _defer_consistency_output = True
+    supported_ds = [Dataset]
 
     def __init__(self, options=None):
         super().__init__(options)
-        if options and "project_config_path" in options:
-            self.project_config_path = options["project_config_path"]
+        self.project_name = "cordex-cmip6"
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        self.project_config_dir = (
+            options.get("project_config_dir")
+            if options and options.get("project_config_dir")
+            else os.path.join(this_dir, "config", "wcrp")
+        )
+        self.config: Optional[WCRPConfig] = None
+        self.cfg: dict = {}
+        self.cordex_config: dict = {}
+        self.variable_mapping: dict[str, str] = {}
+        self.table_id_to_time_increment: dict[str, Any] = {}
+        self.verification_against_tables = False
+        self._geo_var_cache: Optional[str] = None
+        self._expected_term_cache = None
+        self._coordinate_catalog = None
+        self._coordinate_setup_error: Optional[str] = None
+        self._grid_topology_config = None
+        self._grid_topology_config_error: Optional[str] = None
+        self._coordinate_grid_topology: Optional[str] = None
+        self._coordinate_grid_error: Optional[str] = None
+
+    def _load_split_config(self):
+        merged = {}
+        for filename in (
+            "project.toml",
+            "file.toml",
+            "drs.toml",
+            "global_attributes.toml",
+            "geophysical_variable.toml",
+            "coordinate_variables.toml",
+        ):
+            path = os.path.join(self.project_config_dir, filename)
+            if not os.path.isfile(path):
+                self._record_setup_warning(
+                    f"Project configuration file not found at '{path}'"
+                )
+                continue
+            merged = _deep_merge(merged, _load_toml(path))
+        self.cfg = merged
+        self.config = WCRPConfig.model_validate(merged)
+
+        cordex_path = os.path.join(self.project_config_dir, "cordex.toml")
+        self.cordex_config = (
+            _load_toml(cordex_path) if os.path.isfile(cordex_path) else {}
+        )
+
+    def _load_mappings(self):
+        mapping_dir = os.path.join(self.project_config_dir, "mappings")
+        files = {
+            "variable_mapping": (
+                "frequency_and_variable_id_to_branded_variable.toml",
+                "mapping_variables",
+            ),
+            "table_id_to_time_increment": (
+                "table_id_to_time_increment.toml",
+                "time_increment_mapping",
+            ),
+        }
+        for attribute, (filename, section) in files.items():
+            path = os.path.join(mapping_dir, filename)
+            if not os.path.isfile(path):
+                self._record_setup_warning(
+                    f"Project mapping file not found at '{path}'"
+                )
+                setattr(self, attribute, {})
+                continue
+            setattr(self, attribute, _load_toml(path).get(section, {}) or {})
+
+        topology_path = os.path.join(mapping_dir, "grid_topology.toml")
+        try:
+            self._grid_topology_config = load_grid_topology_config(topology_path)
+        except GridTopologyConfigError as exc:
+            self._grid_topology_config_error = str(exc)
+
+    def _install_time_increment_mapping(self):
+        mapping = {}
+        for key, value in self.table_id_to_time_increment.items():
+            if (
+                not isinstance(key, str)
+                or "." not in key
+                or not isinstance(value, (list, tuple))
+                or len(value) != 2
+            ):
+                self._record_setup_warning(
+                    f"Ignored invalid time-increment mapping {key!r}: {value!r}"
+                )
+                continue
+            table_id, frequency = key.split(".", 1)
+            try:
+                mapping[(table_id, frequency)] = (
+                    int(str(value[0]).strip()),
+                    str(value[1]).strip(),
+                )
+            except (TypeError, ValueError) as exc:
+                self._record_setup_warning(
+                    f"Could not interpret time-increment mapping for {key!r}", exc
+                )
+        if mapping:
+            # Preserve shared defaults for frequencies CORDEX does not override.
+            # Replacing the process-global table would affect other project
+            # checkers and later files in the same compliance-checker process.
+            combined = dict(time_squareness_mod.FREQ_INC)
+            combined.update(mapping)
+            time_squareness_mod.FREQ_INC = combined
+
+    def _load_cmor_tables(self):
+        if getattr(self, "CT", None):
+            return
+        cmor_config = self.cordex_config.get("cmor_tables", {})
+        base_url = (
+            str(
+                cmor_config.get("base_url") or DEFAULT_CORDEX_CMIP6_CMOR_TABLES_URL
+            ).rstrip("/")
+            + "/"
+        )
+        tables_path = self.options.get("tables") or self.options.get(
+            "tables_dir", "~/.wcrp_metadata/cordex-cmip6-cmor-tables"
+        )
+        for table in (
+            "coordinate",
+            "grids",
+            "formula_terms",
+            "CV",
+            "1hr",
+            "3hr",
+            "6hr",
+            "day",
+            "mon",
+            "fx",
+        ):
+            filename = f"CORDEX-CMIP6_{table}.json"
+            retrieve(
+                base_url + filename,
+                filename,
+                tables_path,
+                force=_option_enabled(self.options, "force_table_download"),
+            )
+        self._initialize_CV_info(tables_path)
+
+    def _mapping_key(self, ds):
+        variable_id = str(self._get_attr("variable_id", "") or "")
+        frequency = str(self._get_attr("frequency", "") or "")
+        if not frequency:
+            frequency = str(self._get_attr("table_id", "") or "")
+        return f"{frequency}.{variable_id}", variable_id
+
+    def _mapped_branded_variable(self, ds):
+        key, _ = self._mapping_key(ds)
+        return self.variable_mapping.get(key)
+
+    def _cmor_variable_entry(self, ds):
+        key, variable_id = self._mapping_key(ds)
+        frequency = key.split(".", 1)[0]
+        table = (getattr(self, "CT", {}) or {}).get(frequency)
+        if table is None:
+            table_id = str(self._get_attr("table_id", "") or "")
+            table = (getattr(self, "CT", {}) or {}).get(table_id)
+        entries = (table or {}).get("variable_entry", {})
+        if variable_id in entries:
+            return variable_id, entries[variable_id]
+        for identifier, entry in entries.items():
+            if entry.get("out_name") == variable_id:
+                return identifier, entry
+        raise LookupError(
+            f"No CMOR variable entry was found for frequency/variable_id {key!r}."
+        )
+
+    def _grid_mapping_name(self, ds):
+        geo = self._geo_var_cache
+        if not geo or geo not in ds.variables:
+            _, variable_id = self._mapping_key(ds)
+            geo = variable_id if variable_id in ds.variables else None
+        if not geo:
+            return ""
+        mapping = ncattr(ds.variables[geo], "grid_mapping")
+        mapping_variable = (
+            mapping.split()[0].rstrip(":")
+            if isinstance(mapping, str) and mapping
+            else ""
+        )
+        if mapping_variable in ds.variables:
+            return ncattr(ds.variables[mapping_variable], "grid_mapping_name")
+        return ""
+
+    def _initialize_coordinate_catalog(self, ds):
+        registry = (
+            self.config.coordinates.registry
+            if self.config and self.config.coordinates
+            else None
+        )
+        if registry is None:
+            return
+        branded = self._mapped_branded_variable(ds)
+        key, variable_id = self._mapping_key(ds)
+        if not branded:
+            raise CoordinateMetadataError(
+                f"No known-branded-variable mapping exists for {key!r}."
+            )
+        if self.verification_against_tables:
+            identifier, entry = self._cmor_variable_entry(ds)
+            self._coordinate_catalog = catalog_from_cmor(
+                str(branded),
+                variable_id or entry.get("out_name") or identifier,
+                entry,
+                self.CTcoords,
+                self.CTgrids,
+                self.CTformulas,
+            )
         else:
-            this_dir = os.path.dirname(os.path.abspath(__file__))
-            self.project_config_path = os.path.join(
-                this_dir, "resources", "wcrp_config.toml"
+            self._coordinate_catalog = load_catalog(
+                str(branded).lower(),
+                project_id=self.project_name,
+                branded_collection="known_branded_variable",
+                file_variable_name=variable_id,
+                allow_universe_coordinate_fallback=True,
             )
 
-        # Define project name here for vocabulary checks
-        self.project_name = "cordex-cmip6"
+        requires_horizontal = any(
+            coordinate_type(entry) == "generic_horizontal"
+            for identifier, entry in self._coordinate_catalog.data_coordinates.items()
+            if identifier in self._coordinate_catalog.coordinate_ids
+        )
+        if not requires_horizontal:
+            return
+        grid_mapping = self._grid_mapping_name(ds)
+        if grid_mapping in {"", "latitude_longitude"}:
+            geometry_topology, geometry_error = infer_horizontal_topology(ds)
+            self._coordinate_grid_topology = geometry_topology
+            self._coordinate_grid_error = None if geometry_topology else geometry_error
+            return
+        if self._grid_topology_config_error:
+            self._coordinate_grid_error = (
+                "The CORDEX-CMIP6 grid-topology mapping could not be loaded. "
+                f"Technical reason: {self._grid_topology_config_error}"
+            )
+            return
+        if self._grid_topology_config is None:
+            self._coordinate_grid_error = (
+                "The CORDEX-CMIP6 grid-topology mapping is unavailable."
+            )
+            return
+        (
+            self._coordinate_grid_topology,
+            self._coordinate_grid_error,
+        ) = resolve_grid_topology(
+            self._grid_topology_config,
+            grid_mapping=grid_mapping,
+        )
 
     def setup(self, ds):
-        """Loads the main configuration and the variable mapping file before running checks."""
         super().setup(ds)
         self._run_setup_step(
             "load the CORDEX-CMIP6 project configuration",
-            self._load_project_config,
+            self._load_split_config,
         )
-        # print(self.config)
-        # for k,v in vars(self).items(): print(k,v); print()
+        self._run_setup_step("load the CORDEX-CMIP6 mappings", self._load_mappings)
+        self._run_setup_step(
+            "install the CORDEX-CMIP6 time-increment mapping",
+            self._install_time_increment_mapping,
+        )
+        self.verification_against_tables = _option_enabled(
+            self.options, "verification_against_tables"
+        ) or bool(self.options.get("tables"))
+        self._geo_var_cache = None
+        self._expected_term_cache = None
+        self._coordinate_catalog = None
+        self._coordinate_setup_error = None
+        self._coordinate_grid_topology = None
+        self._coordinate_grid_error = None
 
-        # Load variable mapping directly from 'mapping_variables.toml' located in the same folder as the config
-        base_dir = os.path.dirname(self.project_config_path)
-        mapping_filepath = os.path.join(base_dir, "mapping_variables.toml")
-
+        if self.verification_against_tables:
+            self._run_setup_step(
+                "load the CORDEX-CMIP6 CMOR tables", self._load_cmor_tables
+            )
         try:
-            with open(mapping_filepath) as f:
-                self.variable_mapping = toml.load(f).get("mapping_variables", {})
+            self._initialize_coordinate_catalog(ds)
+        except Exception as exc:
+            self._coordinate_setup_error = (
+                str(exc)
+                if isinstance(exc, CoordinateMetadataError)
+                else f"Unexpected {type(exc).__name__}: {exc}"
+            )
+        if self.consistency_output:
+            self._write_consistency_output()
 
-        except FileNotFoundError:
-            self.variable_mapping = {}
-            self._record_setup_warning(
-                f"Variable mapping file not found at '{mapping_filepath}'"
+    def _get_geo_var(self, ds, severity):
+        if self._geo_var_cache and self._geo_var_cache in ds.variables:
+            return self._geo_var_cache, []
+        variable_id = str(self._get_attr("variable_id", "") or "")
+        if variable_id in ds.variables:
+            self._geo_var_cache = variable_id
+            return variable_id, []
+        candidates = list(get_geophysical_variables(ds) or [])
+        if len(candidates) == 1:
+            self._geo_var_cache = candidates[0]
+            return candidates[0], []
+        ctx = TestCtx(severity, "Geophysical Variable Detection")
+        if not candidates:
+            ctx.add_failure("No geophysical variable detected in the file.")
+        else:
+            ctx.add_failure(
+                f"Expected exactly 1 geophysical variable, found "
+                f"{len(candidates)}: {candidates}."
             )
-        except Exception as e:
-            self.variable_mapping = {}
-            self._record_setup_warning(
-                f"Could not load variable mapping file '{mapping_filepath}'",
-                e,
-            )
+        return None, [ctx.to_result()]
 
-        # Make use of CMOR tables for variable checks
-        #  at a later time ESGVOC will be used for variable checks
-        self.verification_against_tables = True
-        if self.verification_against_tables is True or (
-            "verification_against_tables" in self.options
-            and (
-                self.options["verification_against_tables"] is None
-                or (
-                    isinstance(self.options["verification_against_tables"], bool)
-                    and self.options["verification_against_tables"]
-                )
-                or (
-                    isinstance(self.options["verification_against_tables"], str)
-                    and self.options["verification_against_tables"].lower() != "false"
-                )
-            )
-        ):
-            self.verification_against_tables = True
-            if not self.options.get("tables", False):
-                tables_path = self.options.get(
-                    "tables_dir", "~/.wcrp_metadata/cordex-cmip6-cmor-tables"
-                )
-                try:
-                    for table in [
-                        "coordinate",
-                        "grids",
-                        "formula_terms",
-                        "CV",
-                        "1hr",
-                        "3hr",
-                        "6hr",
-                        "day",
-                        "mon",
-                        "fx",
-                    ]:
-                        filename = "CORDEX-CMIP6_" + table + ".json"
-                        url = CORDEX_CMIP6_CMOR_TABLES_URL + filename
-                        filename_retrieved = retrieve(
-                            CORDEX_CMIP6_CMOR_TABLES_URL
-                            + "CORDEX-CMIP6_"
-                            + table
-                            + ".json",
-                            filename,
-                            tables_path,
-                            force="force_table_download" in self.options
-                            and (
-                                self.options["force_table_download"] is None
-                                or (
-                                    isinstance(
-                                        self.options["force_table_download"], bool
-                                    )
-                                    and self.options["force_table_download"]
-                                )
-                                or (
-                                    isinstance(
-                                        self.options["force_table_download"], str
-                                    )
-                                    and self.options[
-                                        "force_table_download"
-                                    ].lower()
-                                    != "false"
-                                )
-                            ),
-                        )
-                        if (
-                            os.path.basename(os.path.realpath(filename_retrieved))
-                            != filename
-                        ):
-                            raise AssertionError(
-                                f"Download failed for CV table "
-                                f"'{filename_retrieved}' (source: '{url}')."
-                            )
-                except Exception as exc:
-                    self._record_setup_warning(
-                        "Could not retrieve the CORDEX-CMIP6 CMOR tables",
-                        exc,
+    def _get_expected_variable_metadata(self, ds, severity):
+        if self._expected_term_cache is not None:
+            return self._expected_term_cache, []
+        results = []
+        branded = self._mapped_branded_variable(ds)
+        key, variable_id = self._mapping_key(ds)
+        if not branded:
+            ctx = TestCtx(severity, "Variable Registry")
+            ctx.add_failure(f"No known-branded-variable mapping found for {key!r}.")
+            return None, [ctx.to_result()]
+        try:
+            if self.verification_against_tables:
+                identifier, entry = self._cmor_variable_entry(ds)
+                expected = expected_variable_from_cmor(identifier, entry)
+            else:
+                if esgvoc_api is None:
+                    raise KnownBrandedVariableLookupError(
+                        "ESGVoc is not installed or could not be imported."
                     )
-                else:
-                    self._run_setup_step(
-                        "initialize metadata from the CORDEX-CMIP6 CMOR tables",
-                        self._initialize_CV_info,
-                        tables_path,
-                    )
-            if self.consistency_output:
-                self._write_consistency_output()
-
-    def check_format(self, ds):
-        """
-        [FILE002] Checks if the file is in the expected format according to the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "format_checks" not in self.config:
-            return results
-
-        config = self.config.get("format_checks", {})
-
-        if "check_format" in config:
-            check_config = config["check_format"]
-            results.extend(
-                check_format(
-                    ds=ds,
-                    expected_format=check_config.get("expected_format"),
-                    allowed_data_models=check_config.get("allowed_data_models"),
-                    severity=self.get_severity(check_config.get("severity")),
+                lookup = lookup_expected_variable_metadata_in_collection(
+                    esgvoc_api.get_term_in_collection,
+                    self.project_name,
+                    str(branded),
+                    fallback_variable_id=variable_id.lower(),
+                    branded_collection="known_branded_variable",
+                    variable_collection="variable_id",
                 )
+                expected = lookup.expected
+                if lookup.warning:
+                    ctx = TestCtx(severity, "Variable Registry")
+                    ctx.add_failure(lookup.warning)
+                    results.append(ctx.to_result())
+        except (KnownBrandedVariableLookupError, LookupError) as exc:
+            ctx = TestCtx(severity, "Variable Registry")
+            ctx.add_failure(str(exc))
+            return None, [ctx.to_result()]
+        self._expected_term_cache = expected
+        return expected, results
+
+    def check_File_Format(self, ds):
+        if not self.config or not self.config.file or not self.config.file.format:
+            return []
+        rule = self.config.file.format
+        return check_format(
+            ds,
+            rule.expected_format,
+            rule.allowed_data_models,
+            self.get_severity(rule.severity),
+        )
+
+    def check_File_Compression(self, ds):
+        if not self.config or not self.config.file or not self.config.file.compression:
+            return []
+        rule = self.config.file.compression
+        geo, _ = self._get_geo_var(ds, BaseCheck.HIGH)
+        return check_compression(
+            ds,
+            variable_name=geo,
+            expected_complevel=rule.expected_complevel,
+            expected_shuffle=rule.expected_shuffle,
+            severity=self.get_severity(rule.severity),
+        )
+
+    def check_File_Internal_Packing_Metadata(self, ds):
+        """
+        [FILE004a] Internal packing consolidated metadata check.
+        """
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
             )
+            if not rule or not rule.metadata:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.metadata.severity),
+                run_metadata=True,
+                run_time=False,
+                run_data=False,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
 
-        return results
+    def check_File_Internal_Packing_Time(self, ds):
+        """
+        [FILE004b-c] Internal packing time and time-bounds checks.
+        """
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
+            )
+            if not rule or not rule.time:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.time.severity),
+                run_metadata=False,
+                run_time=True,
+                run_data=False,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
 
-    def check_compression(self, ds):
+    def check_File_Internal_Packing_Data(self, ds):
         """
-        [FILE003] Checks if the data compression is as expected according to the CORDEX-CMIP6 Archive Specifications.
+        [FILE004d] Internal packing data-variable chunking check.
         """
+        try:
+            rule = (
+                self.config.file.internal_packing
+                if self.config and self.config.file
+                else None
+            )
+            if not rule or not rule.data:
+                return []
+            return check_internal_packing(
+                ds,
+                severity=self.get_severity(rule.data.severity),
+                min_chunk_size_bytes=(
+                    rule.data.min_chunk_size_bytes or 4 * (2**20)
+                ),
+                frequency=self.frequency,
+                frequency_min_timesteps=rule.data.frequency_min_timesteps,
+                run_metadata=False,
+                run_time=False,
+                run_data=True,
+            )
+        finally:
+            finalize_internal_packing_session(ds)
+
+    def check_Global_Attributes(self, ds):
+        return self._check_global_attributes(ds)
+
+    def check_DRS(self, ds):
         results = []
-        if "format_checks" not in self.config:
+        if self._esgvoc_project_setup_error:
             return results
-
-        config = self.config.get("format_checks", {})
-
-        if "check_compression" in config:
-            check_config = config["check_compression"]
-            results.extend(
-                check_compression(
-                    ds=ds,
-                    variable_name=self.varname[0] if self.varname != [] else None,
-                    expected_complevel=check_config.get("expected_complevel"),
-                    expected_shuffle=check_config.get("expected_shuffle"),
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        return results
-
-    def check_data_types(self, ds):
-        """
-        [VAR011] Checks if the coordinate and variable data types are as expected according to the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "variable_checks" not in self.config:
+        if not self.config or not self.config.drs:
             return results
-
-        config = self.config.get("variable_checks", {})
-
-        if "check_coord_data_types" in config:
-            check_config = config["check_coord_data_types"]
+        drs = self.config.drs
+        if drs.filename:
             results.extend(
-                check_coord_data_types(
-                    CheckerObject=self,
-                    ctype=check_config.get("ctype"),
-                    auxtype=check_config.get("auxtype"),
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-        if "check_var_data_type" in config:
-            check_config = config["check_var_data_type"]
-            results.extend(
-                check_var_data_type(
-                    CheckerObject=self,
-                    var=check_config.get("var"),
-                    vartype=check_config.get("vartype"),
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        return results
-
-    def check_time_chunking(self, ds):
-        """
-        [CDXT001] Checks if the chunking with respect to the time dimension is in accordance with the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "time_checks" not in self.config:
-            return results
-
-        config = self.config.get("time_checks", {})
-
-        if "check_time_chunking_cordex" in config:
-            check_config = config["check_time_chunking_cordex"]
-            results.extend(
-                check_time_chunking(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        return results
-
-    def check_time_range(self, ds):
-        """
-        [TIME003] Checks if the time range is as expected according to the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "time_checks" not in self.config:
-            return results
-
-        config = self.config.get("time_checks", {})
-
-        if "check_time_range_cordex" in config:
-            check_config = config["check_time_range_cordex"]
-            precision_by_frequency = None
-            if isinstance(check_config.get("time_range_label_precision"), dict):
-                precision_by_frequency = check_config.get("time_range_label_precision")
-            results.extend(
-                check_time_range_vs_filename(
+                check_drs_filename(
                     ds,
-                    severity=self.get_severity(check_config.get("severity")),
-                    precision_by_frequency=precision_by_frequency,
-                    climatology_suffix=check_config.get("climatology_suffix", ""),
+                    self.get_severity(drs.filename.severity),
+                    project_id=self.project_name,
                 )
             )
-
+        if drs.directory:
+            results.extend(
+                check_drs_directory(
+                    ds,
+                    self.get_severity(drs.directory.severity),
+                    project_id=self.project_name,
+                )
+            )
+        if drs.attributes_vs_directory:
+            results.extend(
+                check_attributes_match_directory_structure(
+                    ds,
+                    self.get_severity(drs.attributes_vs_directory.severity),
+                    project_id=self.project_name,
+                    dir_template_keys=drs.directory_template_keys or None,
+                    filename_template_keys=drs.filename_template_keys or None,
+                )
+            )
+        if drs.filename_vs_directory:
+            results.extend(
+                check_filename_matches_directory_structure(
+                    ds,
+                    self.get_severity(drs.filename_vs_directory.severity),
+                    project_id=self.project_name,
+                    dir_template_keys=drs.directory_template_keys or None,
+                    filename_template_keys=drs.filename_template_keys or None,
+                )
+            )
         return results
 
-    def check_calendar(self, ds):
-        """
-        [CDXT003] Checks if the calendar is as expected according to the CORDEX-CMIP6 Archive Specifications.
-        """
+    def check_Geophysical_Variable(self, ds):
         results = []
-        if "time_checks" not in self.config:
+        if not self.config or not self.config.variable:
             return results
-
-        config = self.config.get("time_checks", {})
-
-        if "check_calendar_cordex" in config:
-            check_config = config["check_calendar_cordex"]
-            results.extend(
-                check_calendar(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        return results
-
-    def check_time_units(self, ds):
-        """
-        [CDXT004] Checks if the time units are as expected according to the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "time_checks" not in self.config:
+        variable_name, detection = self._get_geo_var(ds, BaseCheck.HIGH)
+        results.extend(detection)
+        if not variable_name:
             return results
-
-        config = self.config.get("time_checks", {})
-
-        if "check_time_units_cordex" in config:
-            check_config = config["check_time_units_cordex"]
+        config = self.config.variable
+        if config.existence:
             results.extend(
-                check_time_units(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
+                check_variable_existence(
+                    ds,
+                    variable_name,
+                    self.get_severity(config.existence.severity),
                 )
             )
-
-        return results
-
-    def check_attributes_cordex(self, ds):
-        """
-        [CDXA001] Checks compliance of certain CORDEX-CMIP6 global attributes with the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "attribute_checks" not in self.config:
-            return results
-
-        config = self.config.get("attribute_checks", {})
-
-        if "check_grid_mapping" in config:
-            check_config = config["check_grid_mapping"]
-            results.extend(
-                check_grid_mapping(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
+        if config.type:
+            allowed = configured_data_types(config.type.data_type)
+            if allowed:
+                results.extend(
+                    check_variable_type(
+                        ds,
+                        variable_name,
+                        allowed_types=allowed,
+                        severity=self.get_severity(config.type.severity),
+                    )
                 )
+        if config.dimensions:
+            severity = self.get_severity(config.dimensions.severity)
+            for dimension in ds.variables[variable_name].dimensions:
+                results.extend(check_dimension_existence(ds, dimension, severity))
+                results.extend(check_dimension_positive(ds, dimension, severity))
+
+        expected_term = None
+        if any(rule.cv_source_term_key for rule in config.attributes.values()):
+            expected_term, lookup_results = self._get_expected_variable_metadata(
+                ds, BaseCheck.HIGH
             )
-
-        if "check_domain_id" in config:
-            check_config = config["check_domain_id"]
-            results.extend(
-                check_domain_id(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                    use_esgvoc=not self.verification_against_tables,
-                )
-            )
-
-        if "check_institution" in config:
-            check_config = config["check_institution"]
-            results.extend(
-                check_institution(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                    use_esgvoc=not self.verification_against_tables,
-                )
-            )
-
-        if "check_references" in config:
-            check_config = config["check_references"]
-            results.extend(
-                check_references(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        if "check_version_realization" in config:
-            check_config = config["check_version_realization"]
-            results.extend(
-                check_version_realization(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                    use_esgvoc=not self.verification_against_tables,
-                )
-            )
-
-        if "check_version_realization_info" in config:
-            check_config = config["check_version_realization_info"]
-            results.extend(
-                check_version_realization_info(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                    use_esgvoc=not self.verification_against_tables,
-                )
-            )
-
-        if "check_grid" in config:
-            check_config = config["check_grid"]
-            results.extend(
-                check_grid(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        if "check_driving_attributes" in config:
-            check_config = config["check_driving_attributes"]
-            results.extend(
-                check_driving_attributes(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                    use_esgvoc=not self.verification_against_tables,
-                )
-            )
-
-        return results
-
-    def check_lat_lon_bounds(self, ds):
-        """
-        [CDXV001] Checks existence of latitude and longitude bounds as recommended in the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "variable_checks" not in self.config:
-            return results
-
-        config = self.config.get("variable_checks", {})
-
-        if "check_lat_lon_bounds" in config:
-            check_config = config["check_lat_lon_bounds"]
-            results.extend(
-                check_lat_lon_bounds(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        return results
-
-    def check_horizontal_axes_bounds(self, ds):
-        """
-        [CDXV002] Checks existence of rlat/rlon or x/y bounds as recommended in the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "variable_checks" not in self.config:
-            return results
-
-        config = self.config.get("variable_checks", {})
-
-        if "check_horizontal_axes_bounds" in config:
-            check_config = config["check_horizontal_axes_bounds"]
-            results.extend(
-                check_horizontal_axes_bounds(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        return results
-
-    def check_lon_value_range(self, ds):
-        """
-        [CDXV003] Checks if longitude values are within the range required by the CORDEX-CMIP6 Archive Specifications.
-        """
-        results = []
-        if "variable_checks" not in self.config:
-            return results
-
-        config = self.config.get("variable_checks", {})
-
-        if "check_lon_value_range" in config:
-            check_config = config["check_lon_value_range"]
-            results.extend(
-                check_lon_value_range(
-                    self,
-                    severity=self.get_severity(check_config.get("severity")),
-                )
-            )
-
-        return results
-
-    def check_drs_esgvoc(self, ds):
-        """
-        [FILE001] DRS filename and directory path checks against CV pattern using ESGVOC.
-        """
-        results = []
-        if "drs_checks" not in self.config:
-            return results
-
-        config = self.config["drs_checks"]
-        severity = self.get_severity(config.get("severity"))
-
-        # Call filename CV check
-        results.extend(
-            check_drs_filename(ds=ds, severity=severity, project_id=self.project_name)
-        )
-
-        # Call Drs CV check
-        results.extend(
-            check_drs_directory(ds=ds, severity=severity, project_id=self.project_name)
-        )
-
-        return results
-
-    def check_drs_cv(self, ds):
-        """
-        [FILE001] DRS filename and directory path checks against CV pattern using <project>_CV.json.
-        """
-        results = []
-        if "drs_checks_cv" not in self.config:
-            return results
-
-        config = self.config["drs_checks_cv"]
-        severity = self.get_severity(config.get("severity"))
-        drs_elements_hard_checks = config.get("drs_element_hard_checks", [])
-        project_name = config.get("project_id", self.project_name)
-
-        # Call filename CV check
-        results.extend(
-            check_drs_filename_cv(
-                CheckerObject=self,
-                severity=severity,
-                project_id=project_name,
-                drs_elements_hard_checks=drs_elements_hard_checks,
-                use_esgvoc=not self.verification_against_tables,
-            )
-        )
-
-        # Call Drs CV check
-        results.extend(
-            check_drs_directory_cv(
-                CheckerObject=self,
-                severity=severity,
-                project_id=project_name,
-                drs_elements_hard_checks=drs_elements_hard_checks,
-                use_esgvoc=not self.verification_against_tables,
-            )
-        )
-
-        return results
-
-    def check_global_attributes(self, ds):
-        """[ATTR001-004] Orchestrates checks for both global and variable attributes defined via the TOML config."""
-        results = []
-        if not self.config:
-            return results
-
-        global_attrs_config = self.config.get("global_attributes", {})
-        for attr_name, attr_config in global_attrs_config.items():
+            results.extend(lookup_results)
+        for key, rule in config.attributes.items():
+            if rule.cv_source_term_key and expected_term is None:
+                continue
             results.extend(
                 check_attribute_suite(
                     ds=ds,
-                    attribute_name=attr_name,
-                    severity=self.get_severity(attr_config.get("severity")),
-                    expected_type=attr_config.get("expected_type"),
-                    constraint=attr_config.get("constraint"),
-                    var_name=None,
+                    var_name=variable_name,
+                    attribute_name=rule.attribute_name or key,
+                    severity=self.get_severity(rule.severity),
+                    value_type=rule.value_type,
+                    is_required=rule.is_required,
+                    na_value=rule.na_value,
+                    pattern=rule.pattern,
+                    constant=rule.constant,
+                    threshold=rule.threshold,
+                    is_above_threshold=rule.is_above_threshold,
+                    enum=rule.enum,
+                    as_variable=rule.as_variable,
+                    is_positive=rule.is_positive,
+                    cv_source_collection=rule.cv_source_collection,
+                    cv_source_collection_key=rule.cv_source_collection_key,
                     project_name=self.project_name,
+                    expected_term=expected_term,
+                    cv_source_term_key=rule.cv_source_term_key,
+                    expected_term_comparison=rule.expected_term_comparison,
+                    report_missing_expected_term=rule.report_missing_expected_term,
                 )
             )
-
-        variable_attrs_config = self.config.get("variable_attributes", {})
-        for var_name, attributes_to_check in variable_attrs_config.items():
-            for attr_name, attr_config in attributes_to_check.items():
-                results.extend(
-                    check_attribute_suite(
-                        ds=ds,
-                        attribute_name=attr_name,
-                        severity=self.get_severity(attr_config.get("severity")),
-                        expected_type=attr_config.get("expected_type"),
-                        constraint=attr_config.get("constraint"),
-                        var_name=var_name,
-                        project_name=self.project_name,
-                    )
-                )
-
         return results
 
-    def check_global_attributes_cv(self, ds):
-        """[ATTR001/004] Checks existence and value of required global attributes against CORDEX-CMIP6_CV.json."""
+    def check_Global_Consistency(self, ds):
+        if (
+            not self.config
+            or not self.config.global_
+            or not self.config.global_.consistency
+        ):
+            return []
+
+        consistency = self.config.global_.consistency
         results = []
-        if "required_global_attributes_checks_cv" not in self.config:
-            return results
-
-        config = self.config.get("required_global_attributes_checks_cv", {})
-
-        severity = self.get_severity(config.get("severity"))
-        global_attrs_hard_checks = config.get("global_attrs_hard_checks", [])
-
-        # Existence
-        results.extend(
-            check_required_global_attributes_existence_cv(
-                self,
-                severity=severity,
-                use_esgvoc=not self.verification_against_tables,
-            )
-        )
-        # Value
-        results.extend(
-            check_required_global_attributes_value_cv(
-                self,
-                severity=severity,
-                global_attrs_hard_checks=global_attrs_hard_checks,
-                use_esgvoc=not self.verification_against_tables,
-            )
-        )
-        return results
-
-    def check_consistency_drs(self, ds):
-        """
-        [PATH001/002] Checks consistency of DRS directory structure with filename and global attributes.
-        """
-        results = []
-        if "consistency_checks" not in self.config:
-            return results
-
-        config = self.config["consistency_checks"]
-
-        if "drs" in config:
-            severity = self.get_severity(config["drs"].get("severity"))
-            project_id = self.project_name
-            dir_template_keys = config["drs"].get("dir_template_keys")
-            filename_template_keys = config["drs"].get("filename_template_keys")
-
-            # Call check PATH001
-            results.extend(
-                check_attributes_match_directory_structure(
-                    ds=ds,
-                    severity=severity,
-                    project_id=project_id,
-                    dir_template_keys=dir_template_keys,
-                    filename_template_keys=filename_template_keys,
-                )
-            )
-
-            # Call check PATH002
-            results.extend(
-                check_filename_matches_directory_structure(
-                    ds=ds,
-                    severity=severity,
-                    project_id=project_id,
-                    dir_template_keys=dir_template_keys,
-                    filename_template_keys=filename_template_keys,
-                )
-            )
-
-        return results
-
-    def check_consistency_filename_from_config(self, ds):
-        """
-        [ATTR005] Checks consistency of filename and global attributes.
-        """
-        results = []
-        if "consistency_checks" not in self.config:
-            return results
-
-        config = self.config.get("consistency_checks", {})
-
-        if "filename_vs_attributes" in config:
-            check_config = config["filename_vs_attributes"]
+        if consistency.filename_vs_attributes:
+            rule = consistency.filename_vs_attributes
             results.extend(
                 check_filename_vs_global_attrs(
-                    ds=ds,
-                    severity=self.get_severity(check_config.get("severity")),
+                    ds,
+                    self.get_severity(rule.severity),
                     project_id=self.project_name,
-                    filename_template_keys=check_config.get("filename_template_keys"),
                 )
             )
 
+        pairs = (
+            ("institution_id_vs_institution", "institution_id", "institution"),
+            ("source_id_vs_source", "source_id", "source"),
+            (
+                "driving_source_id_vs_driving_source",
+                "driving_source_id",
+                "driving_source",
+            ),
+        )
+        for rule_name, id_attribute, value_attribute in pairs:
+            rule = getattr(consistency, rule_name)
+            if rule is None:
+                continue
+            results.extend(
+                check_id_attribute_consistency(
+                    ds,
+                    self.get_severity(rule.severity),
+                    project_id=self.project_name,
+                    id_attribute=id_attribute,
+                    value_attribute=value_attribute,
+                )
+            )
         return results
+
+    def _coordinate_entries_for_axis(self, axis):
+        if self._coordinate_catalog is None:
+            return []
+        return [
+            (identifier, self._coordinate_catalog.data_coordinates[identifier])
+            for identifier in self._coordinate_catalog.coordinate_ids
+            if self._coordinate_catalog.data_coordinates[identifier].get("axis") == axis
+        ]
+
+    def check_Coordinate_Metadata_Setup(self, ds):
+        registry = (
+            self.config.coordinates.registry
+            if self.config and self.config.coordinates
+            else None
+        )
+        if registry is None or registry.setup is None:
+            return []
+        severity = self.get_severity(registry.setup.severity, "HIGH")
+        ctx = TestCtx(severity, "[COORD000] Coordinate metadata initialization")
+        if self._coordinate_setup_error:
+            source = "CMOR tables" if self.verification_against_tables else "ESGVoc"
+            ctx.add_failure(
+                f"The CORDEX-CMIP6 coordinate checks could not read their "
+                f"metadata from {source}, so all catalogue-driven coordinate "
+                f"checks were skipped. Technical reason: "
+                f"{self._coordinate_setup_error}"
+            )
+        elif self._coordinate_catalog is None:
+            ctx.add_failure(
+                "The CORDEX-CMIP6 coordinate catalog is unavailable for an "
+                "unknown reason; all catalogue-driven checks were skipped."
+            )
+        else:
+            ctx.add_pass()
+        return [ctx.to_result()]
+
+    def check_Coordinate_Standard(self, ds):
+        registry = (
+            self.config.coordinates.registry
+            if self.config and self.config.coordinates
+            else None
+        )
+        if registry is None or self._coordinate_catalog is None:
+            return []
+        families = (
+            "identity",
+            "dimension_order",
+            "attributes",
+            "recommendations",
+            "direction",
+            "valid_range",
+            "requested_values",
+            "bounds",
+            "bounds_name",
+            "associations",
+            "grid",
+            "formula",
+        )
+        severities = {
+            family: self.get_severity(rule.severity, "HIGH")
+            for family in families
+            if (rule := getattr(registry, family)) is not None
+        }
+        naming = registry.bounds_name
+        direction = registry.direction
+        attributes = registry.attributes
+        if attributes is not None and attributes.allowed_when_unset:
+            severities["allowed_when_unset"] = self.get_severity(
+                attributes.allowed_when_unset_severity, "LOW"
+            )
+        coverage_rule = next(
+            (
+                rule.coverage
+                for rule in self.config.coordinates.variables.values()
+                if rule.coverage is not None
+            ),
+            None,
+        )
+        results = check_coordinate_catalog(
+            ds,
+            self._coordinate_catalog,
+            severities=severities,
+            grid_topology=self._coordinate_grid_topology,
+            grid_resolution_error=self._coordinate_grid_error,
+            allow_standard_name_fallback=(
+                self._grid_topology_config.allow_standard_name_fallback
+                if self._grid_topology_config
+                else True
+            ),
+            require_explicit_grid_axes=(
+                registry.grid.require_explicit_grid_axes if registry.grid else False
+            ),
+            bounds_dimension_name=(naming.bounds_dimension_name if naming else "bnds"),
+            vertices_dimension_name=(
+                naming.vertices_dimension_name if naming else "vertices"
+            ),
+            climatology_bounds_name=(
+                naming.climatology_bounds_name if naming else "climatology_bnds"
+            ),
+            time_bounds_delegated=coverage_rule is not None,
+            check_direct_physical_values=(
+                direction.check_direct_physical_values if direction else False
+            ),
+            check_formula_derived_profile=(
+                direction.check_formula_derived_profile if direction else False
+            ),
+            attributes_allowed_when_unset=(
+                attributes.allowed_when_unset if attributes else ()
+            ),
+        )
+        if coverage_rule is not None:
+            severity = self.get_severity(coverage_rule.severity, "HIGH")
+            for identifier, entry in self._coordinate_entries_for_axis("T"):
+                if not entry.get("is_climatology"):
+                    results.extend(
+                        check_time_bounds(
+                            ds,
+                            severity=severity,
+                            coord_name=str(entry.get("out_name") or identifier),
+                        )
+                    )
+        return results
+
+    def check_Coordinates(self, ds):
+        results = []
+        if not self.config or not self.config.coordinates:
+            return results
+        for key, rule in self.config.coordinates.variables.items():
+            name = str(rule.name.variable_name if rule.name else key)
+            if name not in ds.variables:
+                continue
+            if rule.monotonicity and name in ds.dimensions:
+                results.extend(
+                    check_coordinate_monotonicity(
+                        ds,
+                        coord_name=name,
+                        direction=rule.monotonicity.direction,
+                        severity=self.get_severity(rule.monotonicity.severity),
+                    )
+                )
+            if rule.squareness:
+                if self._coordinate_catalog is not None:
+                    results.extend(
+                        check_time_squareness(
+                            ds,
+                            severity=self.get_severity(rule.squareness.severity),
+                            calendar=rule.squareness.ref_calendar or "",
+                            ref_time_units=rule.squareness.ref_time_units or "",
+                            frequency=None,
+                            expected_cell_methods=self._coordinate_catalog.branded_variable.get(
+                                "cell_methods"
+                            ),
+                        )
+                    )
+            if rule.calendar_recommendation:
+                results.extend(
+                    check_calendar_recommendation(
+                        ds,
+                        severity=self.get_severity(
+                            rule.calendar_recommendation.severity
+                        ),
+                    )
+                )
+            for attr_key, attr_rule in rule.attributes.items():
+                if (
+                    attr_rule.attribute_name or attr_key
+                ) != "calendar" or not attr_rule.enum:
+                    continue
+                checked = check_attribute_suite(
+                    ds=ds,
+                    var_name=name,
+                    attribute_name=attr_rule.attribute_name or attr_key,
+                    severity=self.get_severity(attr_rule.severity),
+                    is_required=False,
+                    enum=attr_rule.enum,
+                    project_name=self.project_name,
+                    context="Coordinate",
+                )
+                results.extend(
+                    result for result in checked if "[ATTR004]" in result.name
+                )
+        time_entries = self._coordinate_entries_for_axis("T")
+        if self._coordinate_catalog is not None and (
+            "time" not in ds.variables or len(time_entries) == 1
+        ):
+            time_range = self.config.drs.time_range if self.config.drs else None
+            results.extend(
+                check_time_range_vs_filename(
+                    ds,
+                    self.get_severity(
+                        time_range.severity if time_range else None, "HIGH"
+                    ),
+                    precision_by_frequency=(
+                        time_range.label_precision if time_range else None
+                    ),
+                    climatology_suffix=(
+                        time_range.climatology_suffix if time_range else ""
+                    ),
+                    expected_is_climatology=(
+                        bool(time_entries[0][1].get("is_climatology"))
+                        if time_entries
+                        else False
+                    ),
+                    report_climatology_mismatch=False,
+                )
+            )
+        return results
+
+    def _specific(self, section, name):
+        return self.cordex_config.get(section, {}).get(name)
+
+    def check_time_chunking(self, ds):
+        rule = self._specific("time_checks", "check_time_chunking_cordex")
+        return (
+            check_time_chunking(self, severity=self.get_severity(rule.get("severity")))
+            if rule
+            else []
+        )
+
+    def check_calendar(self, ds):
+        rule = self._specific("time_checks", "check_calendar_cordex")
+        return (
+            check_calendar(self, severity=self.get_severity(rule.get("severity")))
+            if rule
+            else []
+        )
+
+    def check_time_units(self, ds):
+        rule = self._specific("time_checks", "check_time_units_cordex")
+        return (
+            check_time_units(self, severity=self.get_severity(rule.get("severity")))
+            if rule
+            else []
+        )
+
+    def check_attributes_cordex(self, ds):
+        results = []
+        checks = {
+            "check_grid_mapping": check_grid_mapping,
+            "check_domain_id": check_domain_id,
+            "check_institution": check_institution,
+            "check_references": check_references,
+            "check_version_realization": check_version_realization,
+            "check_version_realization_info": check_version_realization_info,
+            "check_grid": check_grid,
+            "check_driving_attributes": check_driving_attributes,
+        }
+        for name, function in checks.items():
+            rule = self._specific("attribute_checks", name)
+            if not rule:
+                continue
+            kwargs = {"severity": self.get_severity(rule.get("severity"))}
+            if name == "check_grid_mapping":
+                kwargs["missing_severity"] = self.get_severity(
+                    rule.get("missing_severity"), "MEDIUM"
+                )
+                kwargs["horizontal_topology"] = self._coordinate_grid_topology
+                kwargs["topology_error"] = self._coordinate_grid_error
+            if name in {
+                "check_domain_id",
+                "check_institution",
+                "check_version_realization",
+                "check_driving_attributes",
+            }:
+                kwargs["use_esgvoc"] = not self.verification_against_tables
+            results.extend(function(self, **kwargs))
+        return results
+
+    def check_lat_lon_bounds(self, ds):
+        rule = self._specific("variable_checks", "check_lat_lon_bounds")
+        return (
+            check_lat_lon_bounds(self, severity=self.get_severity(rule.get("severity")))
+            if rule
+            else []
+        )
+
+    def check_horizontal_axes_bounds(self, ds):
+        rule = self._specific("variable_checks", "check_horizontal_axes_bounds")
+        return (
+            check_horizontal_axes_bounds(
+                self, severity=self.get_severity(rule.get("severity"))
+            )
+            if rule
+            else []
+        )
+
+    def check_lon_value_range(self, ds):
+        rule = self._specific("variable_checks", "check_lon_value_range")
+        return (
+            check_lon_value_range(
+                self, severity=self.get_severity(rule.get("severity"))
+            )
+            if rule
+            else []
+        )

@@ -404,9 +404,14 @@ def check_time_range_vs_filename(
     severity=BaseCheck.MEDIUM,
     precision_by_frequency=None,
     climatology_suffix="",
+    expected_is_climatology=None,
+    report_climatology_mismatch=True,
 ):
     """
     [TIME003] Compare filename time range with actual data coverage.
+
+    Project plugins provide ``expected_is_climatology`` from coordinate
+    metadata. ``None`` retains file-based inference for direct/legacy callers.
     """
     check_id = "TIME003"
     ctx = TestCtx(severity, f"[{check_id}] Check Time Range vs Filename")
@@ -421,7 +426,30 @@ def check_time_range_vs_filename(
         ctx.add_pass()
         return [ctx.to_result()]
 
-    is_climatology = _infer_is_climatology(ds)
+    file_is_climatology = _infer_is_climatology(ds)
+    is_climatology = (
+        file_is_climatology
+        if expected_is_climatology is None
+        else bool(expected_is_climatology)
+    )
+    if (
+        expected_is_climatology is not None
+        and file_is_climatology != is_climatology
+    ):
+        if not report_climatology_mismatch:
+            return []
+        if is_climatology:
+            ctx.add_failure(
+                "The coordinate definition identifies climatological time, but "
+                "the file's time coordinate has no non-empty climatology attribute."
+            )
+        else:
+            climatology = getattr(ds.variables["time"], "climatology", "")
+            ctx.add_failure(
+                "The coordinate definition identifies regular time, but the "
+                f"file's time coordinate defines climatology={climatology!r}."
+            )
+        return [ctx.to_result()]
     expected_precision = _expected_precision_from_frequency(
         freq,
         is_climatology=is_climatology,
@@ -463,9 +491,12 @@ def check_time_range_vs_filename(
                 f"{expected_description}, found {found_description}."
             )
         else:
+            if expected_is_climatology is None:
+                reason = "the time coordinate does not define a climatology attribute"
+            else:
+                reason = "the coordinate definition identifies regular time"
             ctx.add_failure(
-                f"The filename time range ends in {actual_suffix!r}, but the time "
-                "coordinate does not define a climatology attribute."
+                f"The filename time range ends in {actual_suffix!r}, but {reason}."
             )
         return [ctx.to_result()]
 

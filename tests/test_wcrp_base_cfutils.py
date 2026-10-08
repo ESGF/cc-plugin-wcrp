@@ -5,18 +5,16 @@ import pytest
 from compliance_checker.base import BaseCheck
 from netCDF4 import Dataset
 
+from checks.format_checks.check_compression import check_compression
+from checks.time_checks.check_time_cordex_cmip6 import check_time_range
+from checks.time_checks.time_constants import FREQ_INC
+from checks.utils import infer_frequency
 from checks.variable_checks.check_coords_cordex_cmip6 import (
     check_horizontal_axes_bounds,
     check_lat_lon_bounds,
     check_lon_value_range,
 )
-from checks.variable_checks.check_data_types import (
-    check_coord_data_types,
-    check_var_data_type,
-)
-from checks.time_checks.check_time_cordex_cmip6 import check_time_range
-from checks.time_checks.time_constants import FREQ_INC
-from checks.utils import infer_frequency
+from checks.variable_checks.check_variable_type import check_variable_type
 from plugins import wcrp_base
 from plugins.cordex_cmip6 import cordex_cmip6 as cordex_cmip6_module
 from plugins.cordex_cmip6.cordex_cmip6 import CordexCmip6ProjectCheck
@@ -278,7 +276,7 @@ def test_cordex_table_retrieval_failure_is_recorded(
     cf_dataset,
     monkeypatch,
 ):
-    checker = CordexCmip6ProjectCheck()
+    checker = CordexCmip6ProjectCheck({"verification_against_tables": True})
 
     def fail_retrieval(*_args, **_kwargs):
         raise OSError("table service unavailable")
@@ -288,7 +286,7 @@ def test_cordex_table_retrieval_failure_is_recorded(
     checker.setup(cf_dataset)
 
     assert any(
-        "Could not retrieve the CORDEX-CMIP6 CMOR tables" in warning
+        "Could not load the CORDEX-CMIP6 CMOR tables" in warning
         for warning in checker.setup_warnings
     )
 
@@ -438,11 +436,33 @@ def test_setup_preserves_formula_term_coordinates(tmp_path):
         }
         assert set(checker.coords) >= {"lev", "a", "b", "ps"}
         assert checker.varname == ["tas"]
-        assert not check_coord_data_types(
-            checker,
-            ctype="double",
-            auxtype="real",
-        )[0].msgs
+
+
+@pytest.mark.parametrize(
+    ("dtype", "allowed_types", "passes"),
+    [
+        ("f4", ["real"], True),
+        ("f8", ["real"], False),
+        ("f4", ["real", "double"], True),
+        ("f8", ["real", "double"], True),
+        ("i4", ["real", "double"], False),
+        ("S1", ["str"], True),
+    ],
+)
+def test_variable_type_archive_precision(tmp_path, dtype, allowed_types, passes):
+    path = tmp_path / "data-type.nc"
+    with Dataset(path, "w") as dataset:
+        dataset.createDimension("time", 1)
+        dataset.createVariable("tas", dtype, ("time",))
+
+    with Dataset(path) as dataset:
+        result = check_variable_type(
+            dataset,
+            "tas",
+            allowed_types=allowed_types,
+        )[0]
+
+    assert bool(result.msgs) is not passes
 
 
 def test_derived_plugin_writes_consistency_output_with_existing_schema(
@@ -496,7 +516,12 @@ def test_cordex_does_not_repeat_cf_discovery_after_loading_tables(
     tmp_path,
     monkeypatch,
 ):
-    checker = CordexCmip6ProjectCheck({"tables_dir": str(tmp_path)})
+    checker = CordexCmip6ProjectCheck(
+        {
+            "tables_dir": str(tmp_path),
+            "verification_against_tables": True,
+        }
+    )
     calls = {"time": 0, "coordinates": 0}
 
     def initialize_time():
@@ -718,7 +743,6 @@ def test_cordex_consumers_use_netCDF_and_cfutils(cf_dataset):
     checker.drs_fn = {"time_range": "200001-200002"}
 
     results = [
-        check_var_data_type(checker, vartype="real")[0],
         check_lon_value_range(checker)[0],
         check_horizontal_axes_bounds(checker)[0],
         check_lat_lon_bounds(checker)[0],
@@ -726,3 +750,80 @@ def test_cordex_consumers_use_netCDF_and_cfutils(cf_dataset):
     ]
 
     assert all(not result.msgs for result in results)
+
+
+def test_horizontal_axes_bounds_ignore_auxiliary_lat_lon_vertices(tmp_path):
+    path = tmp_path / "rotated-grid.nc"
+    with Dataset(path, "w") as dataset:
+        dataset.createDimension("rlat", 2)
+        dataset.createDimension("rlon", 3)
+        dataset.createDimension("vertices", 4)
+        dataset.variable_id = "tas"
+
+        rlat = dataset.createVariable("rlat", "f8", ("rlat",))
+        rlat.axis = "Y"
+        rlat.standard_name = "grid_latitude"
+        rlat.units = "degrees"
+        rlat[:] = [-1.0, 1.0]
+
+        rlon = dataset.createVariable("rlon", "f8", ("rlon",))
+        rlon.axis = "X"
+        rlon.standard_name = "grid_longitude"
+        rlon.units = "degrees"
+        rlon[:] = [-2.0, 0.0, 2.0]
+
+        lat = dataset.createVariable("lat", "f8", ("rlat", "rlon"))
+        lat.standard_name = "latitude"
+        lat.units = "degrees_north"
+        lat.bounds = "vertices_lat"
+        lat[:] = [[49.0, 49.0, 49.0], [51.0, 51.0, 51.0]]
+
+        lon = dataset.createVariable("lon", "f8", ("rlat", "rlon"))
+        lon.standard_name = "longitude"
+        lon.units = "degrees_east"
+        lon.bounds = "vertices_lon"
+        lon[:] = [[8.0, 10.0, 12.0], [8.0, 10.0, 12.0]]
+
+        dataset.createVariable("vertices_lat", "f8", ("rlat", "rlon", "vertices"))[
+            :
+        ] = 0.0
+        dataset.createVariable("vertices_lon", "f8", ("rlat", "rlon", "vertices"))[
+            :
+        ] = 0.0
+
+        mapping = dataset.createVariable("rotated_pole", "i4")
+        mapping.grid_mapping_name = "rotated_latitude_longitude"
+
+        tas = dataset.createVariable("tas", "f4", ("rlat", "rlon"))
+        tas.standard_name = "air_temperature"
+        tas.coordinates = "lat lon"
+        tas.grid_mapping = "rotated_pole"
+        tas[:] = 280.0
+
+    with Dataset(path) as dataset:
+        checker = WCRPBaseCheck()
+        checker.setup(dataset)
+        result = check_horizontal_axes_bounds(checker)[0]
+
+    assert result.value == (0, 1)
+    assert result.msgs == [
+        "It is recommended for the variables 'rlat' and 'rlon' or 'x' and "
+        "'y' to have bounds defined."
+    ]
+
+
+def test_netcdf3_compression_is_reported_instead_of_raising(tmp_path):
+    path = tmp_path / "netcdf3.nc"
+    with Dataset(path, "w", format="NETCDF3_CLASSIC") as dataset:
+        dataset.createDimension("time", 1)
+        dataset.createVariable("tas", "f4", ("time",))[:] = [280.0]
+
+    with Dataset(path) as dataset:
+        result = check_compression(dataset, variable_name="tas")[0]
+
+    assert result.value == (0, 1)
+    assert result.msgs == [
+        "It is recommended that data variable be compressed with a 'deflate "
+        "level' of '1' and with the 'shuffle' option enabled. The data appears "
+        "uncompressed."
+    ]
