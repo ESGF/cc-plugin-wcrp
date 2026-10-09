@@ -33,6 +33,12 @@ check_formula_derived_profile = true
 [coordinates.registry.valid_range]
 severity = "H"
 
+[coordinates.registry.grid_latitude_valid_range]
+severity = "H"
+
+[coordinates.registry.grid_longitude_valid_range]
+severity = "H"
+
 [coordinates.registry.requested_values]
 severity = "H"
 

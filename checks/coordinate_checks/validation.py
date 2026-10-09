@@ -19,6 +19,9 @@ from checks.coordinate_checks.utils import (
 from checks.utils import severity_word as configured_severity_word
 
 
+_LONGITUDE_PERIOD = 360.0
+
+
 class Findings:
     """Collect atomic findings and emit one configured Result per family."""
 
@@ -60,6 +63,15 @@ class Findings:
             ),
             "direction": "[COORD005] Coordinate monotonicity and stored direction",
             "valid_range": "[COORD006] Coordinate valid range",
+            "grid_latitude_valid_range": (
+                "[COORD006] Grid-latitude valid range"
+            ),
+            "grid_longitude_valid_range": (
+                "[COORD006] Grid-longitude valid range"
+            ),
+            "grid_longitude_single_cycle": (
+                "[COORD006] Grid-longitude single cycle"
+            ),
             "requested_values": "[COORD007] Requested coordinate values",
             "bounds": "[COORD008] Coordinate bounds",
             "bounds_name": "[COORD009] Coordinate bounds naming",
@@ -224,31 +236,97 @@ def numeric_values(var) -> np.ndarray | None:
         return None
 
 
-def check_valid_range(findings: Findings, var, name: str, entry: dict):
+def valid_range_slack(lower=None, upper=None) -> float:
+    """Return symmetric numerical slack, including when one limit is zero."""
+    limits = [abs(float(value)) for value in (lower, upper) if value is not None]
+    return 1.0e-6 * max([1.0, *limits])
+
+
+def check_valid_range(
+    findings: Findings,
+    var,
+    name: str,
+    entry: dict,
+    *,
+    family: str = "valid_range",
+):
     lower = entry.get("valid_min")
     upper = entry.get("valid_max")
     if lower is None and upper is None:
         return
     array = numeric_values(var)
     if array is None or not array.size or not np.all(np.isfinite(array)):
-        findings.add("valid_range", f"'{name}' has no finite numeric values to check.")
+        findings.add(family, f"'{name}' has no finite numeric values to check.")
         return
+    slack = valid_range_slack(lower, upper)
     if lower is not None:
-        slack = 1.0e-6 * abs(float(lower))
         offending = array[array < float(lower) - slack]
         if offending.size:
             findings.add(
-                "valid_range",
-                f"'{name}' contains {offending.min()} below required valid_min={lower}.",
+                family,
+                f"'{name}' contains {offending.min()} below "
+                f"{findings.severity_word(family)} valid_min={lower}. "
+                f"The comparison permits numerical tolerance={slack}.",
             )
     if upper is not None:
-        slack = 1.0e-6 * abs(float(upper))
         offending = array[array > float(upper) + slack]
         if offending.size:
             findings.add(
-                "valid_range",
-                f"'{name}' contains {offending.max()} above required valid_max={upper}.",
+                family,
+                f"'{name}' contains {offending.max()} above "
+                f"{findings.severity_word(family)} valid_max={upper}. "
+                f"The comparison permits numerical tolerance={slack}.",
             )
+
+
+def check_single_longitude_cycle(
+    findings: Findings,
+    var,
+    name: str,
+    *,
+    family: str = "valid_range",
+):
+    """Require a grid-longitude variable to use no more than one cycle."""
+    array = numeric_values(var)
+    if array is None or not array.size or not np.all(np.isfinite(array)):
+        return
+    extent = float(np.max(array) - np.min(array))
+    slack = valid_range_slack(0.0, _LONGITUDE_PERIOD)
+    if extent > _LONGITUDE_PERIOD + slack:
+        findings.add(
+            family,
+            f"Grid-longitude coordinate '{name}' spans {extent} degrees; it is "
+            f"{findings.severity_word(family)} to span no more than one "
+            f"{_LONGITUDE_PERIOD:g}-degree "
+            f"cycle plus numerical slack={slack}.",
+        )
+
+
+def _is_longitude(var, entry: dict) -> bool:
+    standard_name = str(entry.get("cf_standard_name") or ncattr(var, "standard_name"))
+    return standard_name in {"longitude", "grid_longitude"}
+
+
+def _unwrap_longitude_pairs(
+    pairs: np.ndarray, coordinates: np.ndarray | None
+) -> np.ndarray:
+    """Place each longitude-bound pair on the branch around its parent value."""
+    if coordinates is not None and coordinates.size == pairs.shape[0]:
+        references = coordinates.reshape(-1, 1)
+    else:
+        references = pairs[:, :1]
+    offsets = (pairs - references + 0.5 * _LONGITUDE_PERIOD) % _LONGITUDE_PERIOD
+    offsets -= 0.5 * _LONGITUDE_PERIOD
+    return references + offsets
+
+
+def _cyclic_absolute_difference(actual, expected):
+    difference = (
+        np.asarray(actual, dtype="float64")
+        - np.asarray(expected, dtype="float64")
+        + 0.5 * _LONGITUDE_PERIOD
+    ) % _LONGITUDE_PERIOD - 0.5 * _LONGITUDE_PERIOD
+    return np.abs(difference)
 
 
 def _strict_direction(array: np.ndarray) -> str | None:
@@ -387,12 +465,19 @@ def check_bounds_direction(
     scalar: bool = False,
 ):
     """Require bounds to follow the prescribed or observed coordinate direction."""
+    coordinates = None
+    if not scalar and coord_var.ndim == 1:
+        coordinates = numeric_values(coord_var)
+    direction_pairs = (
+        _unwrap_longitude_pairs(pairs, coordinates)
+        if _is_longitude(coord_var, entry)
+        else pairs
+    )
     direction = str(entry.get("stored_direction") or "")
     source = "the prescribed stored_direction"
     if direction not in {"increasing", "decreasing"}:
         direction = ""
     if not direction and not scalar and coord_var.ndim == 1:
-        coordinates = numeric_values(coord_var)
         if (
             coordinates is not None
             and coordinates.size >= 2
@@ -403,7 +488,7 @@ def check_bounds_direction(
     if not direction:
         return
 
-    internal_differences = pairs[:, 1] - pairs[:, 0]
+    internal_differences = direction_pairs[:, 1] - direction_pairs[:, 0]
     internal_valid = (
         np.all(internal_differences > 0)
         if direction == "increasing"
@@ -417,7 +502,7 @@ def check_bounds_direction(
         )
 
     if not scalar and pairs.shape[0] > 1:
-        overall_differences = np.diff(pairs, axis=0)
+        overall_differences = np.diff(direction_pairs, axis=0)
         overall_valid = (
             np.all(overall_differences > 0)
             if direction == "increasing"
@@ -599,8 +684,13 @@ def check_bounds(
 
     if not scalar and pairs.shape[0] == coord_var.size:
         coordinates = numeric_values(coord_var)
-        lower = np.minimum(pairs[:, 0], pairs[:, 1])
-        upper = np.maximum(pairs[:, 0], pairs[:, 1])
+        comparison_pairs = (
+            _unwrap_longitude_pairs(pairs, coordinates)
+            if _is_longitude(coord_var, entry)
+            else pairs
+        )
+        lower = np.minimum(comparison_pairs[:, 0], comparison_pairs[:, 1])
+        upper = np.maximum(comparison_pairs[:, 0], comparison_pairs[:, 1])
         if (
             not time_coverage_owned_by_time002
             and coordinates is not None
@@ -629,7 +719,17 @@ def check_bounds(
     if expected_pairs:
         if scalar:
             expected_pair = np.asarray(expected_pairs[0])
-            if not np.all(direct_numeric_equal(pairs[0], expected_pair)):
+            actual_pair = (
+                expected_pair
+                + (
+                    (pairs[0] - expected_pair + 0.5 * _LONGITUDE_PERIOD)
+                    % _LONGITUDE_PERIOD
+                    - 0.5 * _LONGITUDE_PERIOD
+                )
+                if _is_longitude(coord_var, entry)
+                else pairs[0]
+            )
+            if not np.all(direct_numeric_equal(actual_pair, expected_pair)):
                 findings.add(
                     "requested_values",
                     f"Scalar bounds '{declared}'={pairs[0].tolist()}; the "
@@ -648,7 +748,14 @@ def check_bounds(
                     pair
                     for pair in pairs
                     if all(
-                        abs(float(pair[edge]) - expected_pair[edge]) <= tolerances[edge]
+                        (
+                            _cyclic_absolute_difference(
+                                float(pair[edge]), expected_pair[edge]
+                            )
+                            if _is_longitude(coord_var, entry)
+                            else abs(float(pair[edge]) - expected_pair[edge])
+                        )
+                        <= tolerances[edge]
                         for edge in (0, 1)
                     )
                 ]

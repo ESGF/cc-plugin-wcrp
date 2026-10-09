@@ -21,7 +21,11 @@ from checks.coordinate_checks.topology import (
     resolve_grid_topology,
 )
 from checks.coordinate_checks.utils import expected_formula_terms
-from checks.coordinate_checks.validation import Findings, check_direct_vertical_values
+from checks.coordinate_checks.validation import (
+    Findings,
+    check_direct_vertical_values,
+    check_single_longitude_cycle,
+)
 from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from plugins.cmip7.cmip7 import Cmip7ProjectCheck
 
@@ -33,6 +37,9 @@ FAMILIES = {
     "recommendations": BaseCheck.MEDIUM,
     "direction": BaseCheck.HIGH,
     "valid_range": BaseCheck.HIGH,
+    "grid_latitude_valid_range": BaseCheck.HIGH,
+    "grid_longitude_valid_range": BaseCheck.HIGH,
+    "grid_longitude_single_cycle": BaseCheck.HIGH,
     "requested_values": BaseCheck.HIGH,
     "bounds": BaseCheck.HIGH,
     "bounds_name": BaseCheck.MEDIUM,
@@ -471,6 +478,100 @@ def test_numeric_coordinate_follows_declared_bounds_and_uses_cmor_tolerance(nc):
     assert not any("does not exist" in msg for msg in found)
     assert not any("does not contain requested" in msg for msg in found)
     assert not any("overlapping" in msg for msg in found)
+
+
+def test_valid_range_slack_is_symmetric_at_zero_without_allowing_half_a_cell(nc):
+    nc.createDimension("lon", 2)
+    lon = nc.createVariable("lon", "f8", ("lon",))
+    lon[:] = [-0.0003, 360.0003]
+    lon.standard_name = "longitude"
+    lon.units = "degrees_east"
+    nc.createVariable("ta", "f4", ("lon",))
+    entry = coordinate(
+        "longitude",
+        "standard_1d",
+        "lon",
+        cf_standard_name="longitude",
+        units="degrees_east",
+        valid_min=0.0,
+        valid_max=360.0,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"longitude": entry}), severities=FAMILIES
+    )
+    valid_range = next(item for item in result if "COORD006" in item.name)
+    assert valid_range.weight == BaseCheck.HIGH
+    assert valid_range.value == (1, 1)
+
+    lon[:] = [-0.5, 360.5]
+    result = check_coordinate_catalog(
+        nc, catalog({"longitude": entry}), severities=FAMILIES
+    )
+    found = messages(result)
+    assert any("-0.5 below required valid_min=0.0" in msg for msg in found)
+    assert any("360.5 above required valid_max=360.0" in msg for msg in found)
+
+
+@pytest.mark.parametrize("wrapped_upper", [0.5, 360.5])
+def test_longitude_bounds_are_checked_on_the_parent_cyclic_branch(
+    nc, wrapped_upper
+):
+    nc.createDimension("lon", 2)
+    nc.createDimension("bnds", 2)
+    lon = nc.createVariable("lon", "f8", ("lon",))
+    lon[:] = [0.0, 1.0]
+    lon.standard_name = "longitude"
+    lon.units = "degrees_east"
+    lon.bounds = "lon_bnds"
+    bounds = nc.createVariable("lon_bnds", "f8", ("lon", "bnds"))
+    bounds[:] = [[359.5, wrapped_upper], [0.5, 1.5]]
+    nc.createVariable("ta", "f4", ("lon",))
+    entry = coordinate(
+        "longitude",
+        "standard_1d",
+        "lon",
+        cf_standard_name="longitude",
+        units="degrees_east",
+        stored_direction="increasing",
+        bounds_required=True,
+        coordinate_bounds=[359.5, 360.5, 361.5],
+        valid_min=0.0,
+        valid_max=360.0,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"longitude": entry}), severities=FAMILIES
+    )
+    assert next(item for item in result if "COORD008" in item.name).value == (1, 1)
+    assert next(item for item in result if "COORD007" in item.name).value == (1, 1)
+
+
+def test_decreasing_longitude_bounds_are_checked_on_the_parent_cyclic_branch(nc):
+    nc.createDimension("lon", 2)
+    nc.createDimension("bnds", 2)
+    lon = nc.createVariable("lon", "f8", ("lon",))
+    lon[:] = [1.0, 0.0]
+    lon.standard_name = "longitude"
+    lon.bounds = "lon_bnds"
+    nc.createVariable("lon_bnds", "f8", ("lon", "bnds"))[:] = [
+        [1.5, 0.5],
+        [0.5, 359.5],
+    ]
+    nc.createVariable("ta", "f4", ("lon",))
+    entry = coordinate(
+        "longitude",
+        "standard_1d",
+        "lon",
+        cf_standard_name="longitude",
+        stored_direction="decreasing",
+        bounds_required=True,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"longitude": entry}), severities=FAMILIES
+    )
+    assert next(item for item in result if "COORD008" in item.name).value == (1, 1)
 
 
 def test_numeric_coordinate_without_stored_direction_is_strictly_monotonic(nc):
@@ -1400,6 +1501,182 @@ def grid_catalog():
     )
 
 
+def test_grid_longitude_must_not_span_more_than_one_cycle(nc):
+    nc.createDimension("cell", 2)
+    longitude = nc.createVariable("longitude", "f8", ("cell",))
+    findings = Findings({"valid_range": BaseCheck.HIGH})
+
+    longitude[:] = [-180.0, 180.0003]
+    check_single_longitude_cycle(findings, longitude, "longitude")
+    assert findings.results()[0].value == (1, 1)
+
+    longitude[:] = [-180.0, 180.001]
+    findings = Findings({"valid_range": BaseCheck.HIGH})
+    check_single_longitude_cycle(findings, longitude, "longitude")
+    result = findings.results()[0]
+    assert result.weight == BaseCheck.HIGH
+    assert any("no more than one 360-degree cycle" in msg for msg in result.msgs)
+
+
+def test_longitude_vertices_use_explicit_range_with_local_cell_allowance(
+    nc, monkeypatch
+):
+    monkeypatch.setattr("checks.coordinate_checks.grid._VERTEX_CHUNK_VALUES", 2)
+    nc.createDimension("y", 1)
+    nc.createDimension("x", 4)
+    nc.createDimension("vertices", 4)
+    latitude = nc.createVariable("latitude", "f8", ("y", "x"))
+    latitude[:] = 0.0
+    latitude.standard_name = "latitude"
+    latitude.units = "degrees_north"
+    latitude.bounds = "vertices_latitude"
+    longitude = nc.createVariable("longitude", "f8", ("y", "x"))
+    longitude[:] = [[1.0, 4.0, 7.0, 10.0]]
+    longitude.standard_name = "longitude"
+    longitude.units = "degrees_east"
+    longitude.bounds = "vertices_longitude"
+    latitude_vertices = nc.createVariable(
+        "vertices_latitude", "f8", ("y", "x", "vertices")
+    )
+    latitude_vertices[:] = 0.0
+    vertices = nc.createVariable(
+        "vertices_longitude", "f8", ("y", "x", "vertices")
+    )
+    vertices[:] = [
+        [
+            [-0.5, -0.5, 2.5, 2.5],
+            [2.5, 2.5, 5.5, 5.5],
+            [5.5, 5.5, 8.5, 8.5],
+            [8.5, 8.5, 11.5, 11.5],
+        ]
+    ]
+    data = nc.createVariable("ta", "f4", ("y", "x"))
+    data.coordinates = "latitude longitude"
+    cv = grid_catalog()
+    cv.grid_variables["latitude"].update(valid_min=-90.0, valid_max=90.0)
+    cv.grid_variables["longitude"].update(valid_min=0.0, valid_max=10.0)
+    cv.grid_variables["vertices_latitude"].update(
+        valid_min=-90.0, valid_max=90.0
+    )
+    cv.grid_variables["vertices_longitude"].update(valid_min=0.0, valid_max=10.0)
+
+    result = check_coordinate_catalog(
+        nc, cv, severities=FAMILIES, grid_topology="curvilinear"
+    )
+    assert next(
+        item for item in result if "Grid-latitude valid range" in item.name
+    ).value == (1, 1)
+    assert next(
+        item for item in result if "Grid-longitude valid range" in item.name
+    ).value == (1, 1)
+    assert next(
+        item for item in result if "Grid-longitude single cycle" in item.name
+    ).value == (1, 1)
+
+    latitude[0, 1:3] = [91.0, 92.0]
+    severities = {**FAMILIES, "grid_latitude_valid_range": BaseCheck.MEDIUM}
+    result = check_coordinate_catalog(
+        nc, cv, severities=severities, grid_topology="curvilinear"
+    )
+    latitude_range = next(
+        item for item in result if "Grid-latitude valid range" in item.name
+    )
+    assert any(
+        "'latitude': 2 of 4 grid cells have values above the recommended "
+        "valid_max=90.0" in message
+        and "Highest value: 92.0 at index (0, 2)" in message
+        for message in latitude_range.msgs
+    )
+    latitude[0, 1:3] = 0.0
+
+    longitude[0, 1] = 13.0
+    longitude[0, 3] = 14.0
+    severities = {**FAMILIES, "grid_longitude_valid_range": BaseCheck.MEDIUM}
+    result = check_coordinate_catalog(
+        nc, cv, severities=severities, grid_topology="curvilinear"
+    )
+    longitude_range = next(
+        item for item in result if "Grid-longitude valid range" in item.name
+    )
+    assert any(
+        "'longitude': 2 of 4 grid cells have values above the recommended "
+        "valid_max=10.0" in message
+        and "Highest value: 14.0 at index (0, 3)" in message
+        for message in longitude_range.msgs
+    )
+    longitude[:] = [[1.0, 4.0, 7.0, 10.0]]
+
+    latitude_vertices[0, 0, 0] = 90.01
+    latitude_vertices[0, 2, 0] = 91.0
+    severities = {**FAMILIES, "grid_latitude_valid_range": BaseCheck.MEDIUM}
+    result = check_coordinate_catalog(
+        nc, cv, severities=severities, grid_topology="curvilinear"
+    )
+    latitude_range = next(
+        item for item in result if "Grid-latitude valid range" in item.name
+    )
+    assert latitude_range.weight == BaseCheck.MEDIUM
+    assert any(
+        "'vertices_latitude': 2 of 4 grid cells have at least one vertex above "
+        "the recommended valid_max=90.0" in message
+        and "Highest value 91.0 in cell vertices [91.0, 0.0, 0.0, 0.0] "
+        "at index (0, 2)" in message
+        for message in latitude_range.msgs
+    )
+    latitude_vertices[0, 0, 0] = 0.0
+    latitude_vertices[0, 2, 0] = 0.0
+
+    vertices[0, -1, :] = [8.5, 8.5, 100.0, 100.0]
+    result = check_coordinate_catalog(
+        nc, cv, severities=FAMILIES, grid_topology="curvilinear"
+    )
+    assert next(
+        item for item in result if "Grid-longitude valid range" in item.name
+    ).value == (1, 1)
+
+    vertices[0, -2, :] = 13.0
+    vertices[0, -1, :] = 14.0
+    severities = {**FAMILIES, "grid_longitude_valid_range": BaseCheck.MEDIUM}
+    result = check_coordinate_catalog(
+        nc, cv, severities=severities, grid_topology="curvilinear"
+    )
+    valid_range = next(
+        item for item in result if "Grid-longitude valid range" in item.name
+    )
+    assert valid_range.weight == BaseCheck.MEDIUM
+    assert any(
+        "'vertices_longitude': 2 of 4 grid cells have at least one vertex above "
+        "the recommended valid_max=10.0" in message
+        and "that cell's circular longitude width=0.0" in message
+        and "Highest value 14.0 in cell vertices [14.0, 14.0, 14.0, 14.0] "
+        "at index (0, 3)" in message
+        for message in valid_range.msgs
+    )
+
+    vertices[:] = [
+        [
+            [-0.5, -0.5, 2.5, 2.5],
+            [2.5, 2.5, 5.5, 5.5],
+            [5.5, 5.5, 8.5, 8.5],
+            [8.5, 8.5, 11.5, 11.5],
+        ]
+    ]
+    longitude[:] = [[-180.0, -60.0, 60.0, 180.001]]
+    cv.grid_variables["longitude"].update(valid_min=-180.0, valid_max=360.0)
+    severities = {**FAMILIES, "grid_longitude_single_cycle": BaseCheck.MEDIUM}
+    result = check_coordinate_catalog(
+        nc, cv, severities=severities, grid_topology="curvilinear"
+    )
+    single_cycle = next(
+        item for item in result if "Grid-longitude single cycle" in item.name
+    )
+    assert single_cycle.weight == BaseCheck.MEDIUM
+    assert any(
+        "recommended to span no more than one 360-degree cycle" in message
+        for message in single_cycle.msgs
+    )
+
+
 def test_curvilinear_grid_uses_esgvoc_grid_variables_axes_and_vertices(nc):
     nc.createDimension("y", 2)
     nc.createDimension("x", 3)
@@ -1571,16 +1848,166 @@ def test_unstructured_grid_requires_shared_cell_dimension_and_vertices(nc):
         ("longitude", "degrees_east"),
     ):
         variable = nc.createVariable(role, "f8", ("cell",))
+        variable[:] = [0.0, 1.0, 2.0]
         variable.standard_name = role
         variable.units = units
         variable.bounds = f"vertices_{role}"
-        nc.createVariable(f"vertices_{role}", "f8", ("cell", "vertices"))
+        vertices = nc.createVariable(
+            f"vertices_{role}", "f8", ("cell", "vertices")
+        )
+        vertices[:] = np.zeros((3, 4))
     ta = nc.createVariable("ta", "f4", ("cell",))
     ta.coordinates = "latitude longitude"
     result = check_coordinate_catalog(
         nc, grid_catalog(), severities=FAMILIES, grid_topology="unstructured"
     )
     assert messages(result) == []
+
+
+def test_unstructured_vertex_padding_is_ignored_but_finite_vertices_are_checked(nc):
+    nc.createDimension("cell", 4)
+    nc.createDimension("vertices", 5)
+    for role, units, values in (
+        ("latitude", "degrees_north", [0.0, 0.0, 0.0, 0.0]),
+        ("longitude", "degrees_east", [1.0, 9.0, 5.0, 5.0]),
+    ):
+        variable = nc.createVariable(role, "f8", ("cell",))
+        variable[:] = values
+        variable.standard_name = role
+        variable.units = units
+        variable.bounds = f"vertices_{role}"
+
+    latitude_vertices = nc.createVariable(
+        "vertices_latitude", "f8", ("cell", "vertices"), fill_value=1e20
+    )
+    latitude_vertices[:] = np.ma.masked_invalid(
+        [
+            [-1.0, 1.0, 1.0, -1.0, np.nan],
+            [-1.0, 1.0, 0.0, np.nan, np.nan],
+            [-1.0, 1.0, np.nan, np.nan, np.nan],
+            [np.nan, np.nan, np.nan, np.nan, np.nan],
+        ]
+    )
+    longitude_vertices = nc.createVariable(
+        "vertices_longitude", "f8", ("cell", "vertices"), fill_value=1e20
+    )
+    longitude_vertices[:] = np.ma.masked_invalid(
+        [
+            [-0.5, -0.5, 2.5, 2.5, np.nan],
+            [12.0, 12.0, 12.0, np.nan, np.nan],
+            [4.0, 6.0, np.nan, np.nan, np.nan],
+            [np.nan, np.nan, np.nan, np.nan, np.nan],
+        ]
+    )
+    data = nc.createVariable("ta", "f4", ("cell",))
+    data.coordinates = "latitude longitude"
+
+    cv = grid_catalog()
+    cv.grid_variables["latitude"].update(valid_min=-90.0, valid_max=90.0)
+    cv.grid_variables["longitude"].update(valid_min=0.0, valid_max=10.0)
+    cv.grid_variables["vertices_latitude"].update(
+        valid_min=-90.0, valid_max=90.0
+    )
+    cv.grid_variables["vertices_longitude"].update(valid_min=0.0, valid_max=10.0)
+
+    result = check_coordinate_catalog(
+        nc, cv, severities=FAMILIES, grid_topology="unstructured"
+    )
+    valid_range = next(
+        item for item in result if "Grid-longitude valid range" in item.name
+    )
+    assert not any(
+        "missing or non-finite vertex values" in message
+        for message in valid_range.msgs
+    )
+    assert any(
+        "'vertices_longitude': 1 of 4 grid cells have at least one vertex above "
+        "the required valid_max=10.0" in message
+        and "Highest value 12.0" in message
+        and "at index (1,)" in message
+        for message in valid_range.msgs
+    )
+    grid = next(item for item in result if "COORD011" in item.name)
+    assert any(
+        "'vertices_latitude': 1 of 4 grid cells have all vertex values missing. "
+        "First incident at index (3,)." in message
+        for message in grid.msgs
+    )
+    assert any(
+        "'vertices_longitude': 1 of 4 grid cells have all vertex values missing. "
+        "First incident at index (3,)." in message
+        for message in grid.msgs
+    )
+    assert sum(
+        "1 of 4 grid cells have fewer than 3 finite vertex values" in message
+        and "index (2,) has 2 finite vertex values" in message
+        for message in grid.msgs
+    ) == 2
+
+    for entry in cv.grid_variables.values():
+        entry.pop("valid_min", None)
+        entry.pop("valid_max", None)
+    result_without_ranges = check_coordinate_catalog(
+        nc, cv, severities=FAMILIES, grid_topology="unstructured"
+    )
+    grid_without_ranges = next(
+        item for item in result_without_ranges if "COORD011" in item.name
+    )
+    assert sum(
+        "1 of 4 grid cells have all vertex values missing" in message
+        for message in grid_without_ranges.msgs
+    ) == 2
+    assert sum(
+        "1 of 4 grid cells have fewer than 3 finite vertex values" in message
+        for message in grid_without_ranges.msgs
+    ) == 2
+
+
+def test_curvilinear_vertex_values_may_repeat_but_may_not_be_missing(nc):
+    nc.createDimension("y", 1)
+    nc.createDimension("x", 2)
+    nc.createDimension("vertices", 4)
+    for role, units, values in (
+        ("latitude", "degrees_north", [[0.0, 0.0]]),
+        ("longitude", "degrees_east", [[0.0, 1.0]]),
+    ):
+        variable = nc.createVariable(role, "f8", ("y", "x"))
+        variable[:] = np.asarray(values)
+        variable.standard_name = role
+        variable.units = units
+        variable.bounds = f"vertices_{role}"
+
+    latitude_vertices = nc.createVariable(
+        "vertices_latitude", "f8", ("y", "x", "vertices"), fill_value=1e20
+    )
+    latitude_vertices[:] = [[[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]]
+    longitude_vertices = nc.createVariable(
+        "vertices_longitude", "f8", ("y", "x", "vertices"), fill_value=1e20
+    )
+    longitude_vertices[:] = np.ma.masked_invalid(
+        [[[0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, np.nan]]]
+    )
+    data = nc.createVariable("ta", "f4", ("y", "x"))
+    data.coordinates = "latitude longitude"
+
+    cv = grid_catalog()
+    for name in ("latitude", "vertices_latitude"):
+        cv.grid_variables[name].update(valid_min=-90.0, valid_max=90.0)
+    for name in ("longitude", "vertices_longitude"):
+        cv.grid_variables[name].update(valid_min=0.0, valid_max=10.0)
+
+    result = check_coordinate_catalog(
+        nc, cv, severities=FAMILIES, grid_topology="curvilinear"
+    )
+    valid_range = next(
+        item for item in result if "Grid-longitude valid range" in item.name
+    )
+    assert valid_range.msgs == [
+        (
+            "'vertices_longitude' contains missing or non-finite vertex values, so "
+            "its explicit valid range could not be checked completely."
+        )
+    ]
 
 
 def test_vertex_dimension_name_is_a_configurable_recommendation(nc):

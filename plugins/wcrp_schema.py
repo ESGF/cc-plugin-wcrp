@@ -376,6 +376,9 @@ class CoordinateRegistrySection(BaseModel):
     recommendations: Optional[CoordinateGlobalRule] = None
     direction: Optional[CoordinateDirectionRule] = None
     valid_range: Optional[CoordinateGlobalRule] = None
+    grid_latitude_valid_range: Optional[CoordinateGlobalRule] = None
+    grid_longitude_valid_range: Optional[CoordinateGlobalRule] = None
+    grid_longitude_single_cycle: Optional[CoordinateGlobalRule] = None
     requested_values: Optional[CoordinateGlobalRule] = None
     bounds: Optional[CoordinateGlobalRule] = None
     bounds_name: Optional[CoordinateBoundsNameRule] = None

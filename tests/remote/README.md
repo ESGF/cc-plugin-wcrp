@@ -16,7 +16,7 @@ checker method is added or removed without updating every dataset baseline.
 
 Run the network-backed suite with:
 
-    pytest -m remote_data tests/test_remote_plugin_checks.py
+    pytest -m remote_data tests/test_remote_plugin_checks.py tests/test_remote_cmip7.py
 
 Files are cached by pooch below its platform-specific
 `pooch.os_cache("cc-plugin-wcrp")` directory. On Linux the default layout is:
@@ -34,12 +34,13 @@ For example, the default repository/revision roots are currently:
 that case each configured relative path is resolved directly below that
 directory. Files with a configured checksum are still verified.
 
-CORDEX-CMIP6 REMO files are hosted by euro-cordex/py-cordex-data. The CMIP6
-reference used by the historical atomic-check suite is configured in cmip6.py
-and hosted by roocs/mini-esgf-data.
+CORDEX-CMIP6 REMO files are hosted by euro-cordex/py-cordex-data. The CMIP7
+curvilinear-ocean file and the CMIP6 reference used by the historical
+atomic-check suite are hosted by roocs/mini-esgf-data.
 
 The project modules are the authoritative source for repository URLs,
 revisions, relative paths, and checksums:
 
 - `tests/remote/cordex_cmip6.py` for the REMO CORDEX-CMIP6 files;
+- `tests/remote/cmip7.py` for the CMIP7 curvilinear-ocean file;
 - `tests/remote/cmip6.py` for the CMIP6 reference file.

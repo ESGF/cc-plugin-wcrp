@@ -33,6 +33,18 @@ check_formula_derived_profile = true
 [coordinates.registry.valid_range]
 severity = "H"
 
+# Auxiliary grid coordinates and their vertices
+# CMIP7 recommends, but does not require, the auxiliary longitude range and
+# its confinement to a single cycle.
+[coordinates.registry.grid_latitude_valid_range]
+severity = "M"
+
+[coordinates.registry.grid_longitude_valid_range]
+severity = "M"
+
+[coordinates.registry.grid_longitude_single_cycle]
+severity = "M"
+
 [coordinates.registry.requested_values]
 severity = "H"
 

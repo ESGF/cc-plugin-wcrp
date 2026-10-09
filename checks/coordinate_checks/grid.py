@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from checks.coordinate_checks.model import reference_ids
 from checks.coordinate_checks.utils import ncattr, neutral_dtype
 from checks.coordinate_checks.validation import (
@@ -10,9 +12,16 @@ from checks.coordinate_checks.validation import (
     check_bounds,
     check_direction,
     check_dtype,
+    check_single_longitude_cycle,
     check_trailing_dimension,
     check_valid_range,
+    valid_range_slack,
 )
+
+
+# At float64 this is 2 MiB of source values. Temporary arrays keep the
+# per-process peak comfortably in the tens of MiB even for multi-million-cell grids.
+_VERTEX_CHUNK_VALUES = 262_144
 
 
 def _by_standard_name(ds, standard_name):
@@ -92,7 +101,354 @@ def _grid_dimensions(catalog, entry, dimensions, vertex_dimension=None):
     return expected
 
 
-def _validate_vertices(findings, ds, coordinate, role, entry, catalog):
+def _spatial_chunks(variable, *, vertices=False):
+    """Yield origins and bounded spatial blocks without loading the full grid."""
+    if not variable.size:
+        return
+    trailing_size = int(variable.shape[-1]) if vertices else 1
+    spatial_shape = variable.shape[:-1] if vertices else variable.shape
+    target_cells = max(1, _VERTEX_CHUNK_VALUES // trailing_size)
+    if not spatial_shape:
+        yield (), variable[...]
+        return
+    if len(spatial_shape) == 1:
+        for start in range(0, spatial_shape[0], target_cells):
+            selection = (slice(start, start + target_cells),)
+            if vertices:
+                selection += (slice(None),)
+            yield (start,), variable[selection]
+        return
+
+    if len(spatial_shape) > 2:
+        cells_per_slice = int(np.prod(spatial_shape[1:]))
+        leading_block = max(1, target_cells // max(1, cells_per_slice))
+        for start in range(0, spatial_shape[0], leading_block):
+            selection = (slice(start, start + leading_block),) + tuple(
+                slice(None) for _ in spatial_shape[1:]
+            )
+            if vertices:
+                selection += (slice(None),)
+            yield (start,) + (0,) * (len(spatial_shape) - 1), variable[selection]
+        return
+
+    row_length = int(spatial_shape[1])
+    column_block = min(row_length, target_cells)
+    row_block = max(1, target_cells // max(1, column_block))
+    for row in range(0, spatial_shape[0], row_block):
+        for column in range(0, row_length, column_block):
+            selection = (
+                slice(row, row + row_block),
+                slice(column, column + column_block),
+            )
+            if vertices:
+                selection += (slice(None),)
+            yield (row, column), variable[selection]
+
+
+def _global_cell_index(origin, local_shape, flat_index):
+    local = np.unravel_index(flat_index, local_shape)
+    return tuple(int(start + offset) for start, offset in zip(origin, local))
+
+
+def _cell_circular_widths(cells: np.ndarray) -> np.ndarray:
+    """Return the shortest circular longitude arc containing each cell."""
+    finite = np.isfinite(cells)
+    counts = np.count_nonzero(finite, axis=1)
+    normalized = np.where(finite, np.mod(cells, 360.0), np.inf)
+    normalized.sort(axis=1)
+    valid_internal = np.arange(max(0, cells.shape[1] - 1))[None, :] < (
+        counts[:, None] - 1
+    )
+    internal_gaps = np.full(valid_internal.shape, -np.inf, dtype="float64")
+    np.subtract(
+        normalized[:, 1:],
+        normalized[:, :-1],
+        out=internal_gaps,
+        where=valid_internal,
+    )
+    largest_internal = np.max(
+        np.where(valid_internal, internal_gaps, -np.inf), axis=1
+    )
+    last = np.take_along_axis(
+        normalized, np.maximum(counts - 1, 0)[:, None], axis=1
+    )[:, 0]
+    wrap_gaps = normalized[:, 0] + 360.0 - last
+    widths = 360.0 - np.maximum(largest_internal, wrap_gaps)
+    widths[counts == 0] = np.nan
+    return widths
+
+
+def _check_grid_variable_valid_range(findings, variable, name, entry, *, family):
+    """Count invalid grid-cell centres and retain one extreme indexed example."""
+    lower = entry.get("valid_min")
+    upper = entry.get("valid_max")
+    if lower is None and upper is None:
+        return
+
+    total = int(np.prod(variable.shape))
+    slack = valid_range_slack(lower, upper)
+    below_count = above_count = 0
+    lowest = highest = None
+    lowest_index = highest_index = None
+    saw_finite = False
+    saw_nonfinite = False
+    try:
+        for origin, chunk in _spatial_chunks(variable):
+            values = np.ma.asarray(chunk, dtype="float64").filled(np.nan)
+            values = np.asarray(values, dtype="float64")
+            finite = np.isfinite(values)
+            saw_finite = saw_finite or np.any(finite)
+            saw_nonfinite = saw_nonfinite or not np.all(finite)
+            if lower is not None:
+                below = finite & (values < float(lower) - slack)
+                below_count += int(np.count_nonzero(below))
+                if np.any(below):
+                    flat = int(np.argmin(np.where(below, values, np.inf)))
+                    value = float(values.flat[flat])
+                    if lowest is None or value < lowest:
+                        lowest = value
+                        lowest_index = _global_cell_index(
+                            origin, values.shape, flat
+                        )
+            if upper is not None:
+                above = finite & (values > float(upper) + slack)
+                above_count += int(np.count_nonzero(above))
+                if np.any(above):
+                    flat = int(np.argmax(np.where(above, values, -np.inf)))
+                    value = float(values.flat[flat])
+                    if highest is None or value > highest:
+                        highest = value
+                        highest_index = _global_cell_index(
+                            origin, values.shape, flat
+                        )
+    except (TypeError, ValueError, IndexError, OSError, RuntimeError) as exc:
+        findings.add(
+            family,
+            f"Could not check the explicit valid range of grid variable "
+            f"'{name}': {exc}.",
+        )
+        return
+
+    if not saw_finite:
+        findings.add(family, f"'{name}' has no finite numeric values to check.")
+        return
+    if saw_nonfinite:
+        findings.add(
+            family,
+            f"'{name}' contains missing or non-finite grid-cell values, so its "
+            "explicit valid range could not be checked completely.",
+        )
+
+    qualifier = findings.severity_word(family)
+    if below_count:
+        findings.add(
+            family,
+            f"'{name}': {below_count} of {total} grid cells have values below "
+            f"the {qualifier} valid_min={lower}. The comparison permits "
+            f"numerical tolerance={slack}. Lowest value: {lowest} at index "
+            f"{lowest_index}.",
+        )
+    if above_count:
+        findings.add(
+            family,
+            f"'{name}': {above_count} of {total} grid cells have values above "
+            f"the {qualifier} valid_max={upper}. The comparison permits "
+            f"numerical tolerance={slack}. Highest value: {highest} at index "
+            f"{highest_index}.",
+        )
+
+
+def _check_vertex_valid_range(
+    findings,
+    vertices,
+    name,
+    entry,
+    *,
+    longitude,
+    family,
+    allow_missing_padding=False,
+):
+    """Check explicit vertex limits in bounded chunks with local seam allowance."""
+    lower = entry.get("valid_min")
+    upper = entry.get("valid_max")
+    has_explicit_range = lower is not None or upper is not None
+    slack = valid_range_slack(lower, upper)
+    below_count = above_count = 0
+    fully_masked_count = 0
+    insufficient_count = 0
+    lowest = highest = None
+    lowest_width = highest_width = None
+    lowest_cell = highest_cell = None
+    lowest_index = highest_index = None
+    first_fully_masked_index = None
+    first_insufficient_index = None
+    first_insufficient_finite_count = None
+    saw_finite = False
+    saw_nonfinite = False
+    total = int(np.prod(vertices.shape[:-1]))
+    try:
+        for origin, chunk in _spatial_chunks(vertices, vertices=True):
+            masked_cells = np.ma.asarray(chunk, dtype="float64")
+            missing = np.ma.getmaskarray(masked_cells).reshape(
+                -1, vertices.shape[-1]
+            )
+            cells = masked_cells.filled(np.nan)
+            cells = np.asarray(cells, dtype="float64").reshape(
+                -1, vertices.shape[-1]
+            )
+            finite = np.isfinite(cells)
+            complete_cells = np.all(finite, axis=1)
+            if allow_missing_padding:
+                finite_counts = np.count_nonzero(finite, axis=1)
+                fully_masked = np.all(missing, axis=1)
+                fully_masked_count += int(np.count_nonzero(fully_masked))
+                if first_fully_masked_index is None and np.any(fully_masked):
+                    flat = int(np.flatnonzero(fully_masked)[0])
+                    first_fully_masked_index = _global_cell_index(
+                        origin, chunk.shape[:-1], flat
+                    )
+                insufficient = (finite_counts < 3) & ~fully_masked
+                insufficient_count += int(np.count_nonzero(insufficient))
+                if first_insufficient_index is None and np.any(insufficient):
+                    flat = int(np.flatnonzero(insufficient)[0])
+                    first_insufficient_index = _global_cell_index(
+                        origin, chunk.shape[:-1], flat
+                    )
+                    first_insufficient_finite_count = int(finite_counts[flat])
+            unexpected_nonfinite = ~finite & ~missing
+            saw_nonfinite = saw_nonfinite or np.any(unexpected_nonfinite) or (
+                not allow_missing_padding and np.any(missing)
+            )
+            usable_cells = (
+                finite_counts >= 3
+                if allow_missing_padding
+                else complete_cells
+            )
+            if not np.any(usable_cells):
+                continue
+            usable_rows = np.flatnonzero(usable_cells)
+            cells = cells[usable_cells]
+            finite = finite[usable_cells]
+            saw_finite = True
+            widths = (
+                _cell_circular_widths(cells)
+                if longitude
+                else np.zeros(cells.shape[0], dtype="float64")
+            )
+            if lower is not None:
+                below = finite & (
+                    cells < float(lower) - slack - widths[:, None]
+                )
+                below_cells = np.any(below, axis=1)
+                below_count += int(np.count_nonzero(below_cells))
+                if np.any(below):
+                    row, column = np.unravel_index(
+                        np.argmin(np.where(below, cells, np.inf)), cells.shape
+                    )
+                    value = float(cells[row, column])
+                    if lowest is None or value < lowest:
+                        lowest = value
+                        lowest_width = float(widths[row])
+                        lowest_cell = cells[row].tolist()
+                        lowest_index = _global_cell_index(
+                            origin, chunk.shape[:-1], int(usable_rows[row])
+                        )
+            if upper is not None:
+                above = finite & (
+                    cells > float(upper) + slack + widths[:, None]
+                )
+                above_cells = np.any(above, axis=1)
+                above_count += int(np.count_nonzero(above_cells))
+                if np.any(above):
+                    row, column = np.unravel_index(
+                        np.argmax(np.where(above, cells, -np.inf)), cells.shape
+                    )
+                    value = float(cells[row, column])
+                    if highest is None or value > highest:
+                        highest = value
+                        highest_width = float(widths[row])
+                        highest_cell = cells[row].tolist()
+                        highest_index = _global_cell_index(
+                            origin, chunk.shape[:-1], int(usable_rows[row])
+                        )
+    except (TypeError, ValueError, IndexError, OSError, RuntimeError) as exc:
+        findings.add(
+            family,
+            f"Could not check the explicit valid range of vertex variable "
+            f"'{name}': {exc}.",
+        )
+        return
+
+    if fully_masked_count:
+        findings.add(
+            "grid",
+            f"'{name}': {fully_masked_count} of {total} grid cells have all "
+            "vertex values missing. First incident at index "
+            f"{first_fully_masked_index}.",
+        )
+    if insufficient_count:
+        findings.add(
+            "grid",
+            f"'{name}': {insufficient_count} of {total} grid cells have fewer "
+            "than 3 finite vertex values after permitted masked padding. "
+            f"First incident at index {first_insufficient_index} has "
+            f"{first_insufficient_finite_count} finite vertex values.",
+        )
+    if not saw_finite:
+        if not has_explicit_range or (
+            allow_missing_padding
+            and fully_masked_count + insufficient_count == total
+        ):
+            return
+        findings.add(
+            family, f"'{name}' has no finite numeric values to check."
+        )
+        return
+    if has_explicit_range and saw_nonfinite and not allow_missing_padding:
+        findings.add(
+            family,
+            f"'{name}' contains missing or non-finite vertex values, so its "
+            "explicit valid range could not be checked completely.",
+        )
+
+    def allowance_text(width):
+        return (
+            f" and that cell's circular longitude width={width}"
+            if longitude
+            else ""
+        )
+
+    qualifier = findings.severity_word(family)
+    if lowest is not None:
+        findings.add(
+            family,
+            f"'{name}': {below_count} of {total} grid cells have at least one "
+            f"vertex below the {qualifier} valid_min={lower}. The "
+            f"comparison permits numerical tolerance={slack}"
+            f"{allowance_text(lowest_width)}. Lowest value {lowest} in cell "
+            f"vertices {lowest_cell} at index {lowest_index}.",
+        )
+    if highest is not None:
+        findings.add(
+            family,
+            f"'{name}': {above_count} of {total} grid cells have at least one "
+            f"vertex above the {qualifier} valid_max={upper}. The "
+            f"comparison permits numerical tolerance={slack}"
+            f"{allowance_text(highest_width)}. Highest value {highest} in cell "
+            f"vertices {highest_cell} at index {highest_index}.",
+        )
+
+
+def _validate_vertices(
+    findings,
+    ds,
+    coordinate,
+    role,
+    entry,
+    catalog,
+    *,
+    allow_missing_padding=False,
+):
     declared = ncattr(coordinate, "bounds")
     vertex_entry = catalog.grid_variables.get(f"vertices_{role}", {})
     recommended = str(vertex_entry.get("out_name") or f"vertices_{role}")
@@ -152,6 +508,16 @@ def _validate_vertices(findings, ds, coordinate, role, entry, catalog):
             f"{list(coordinate.dimensions)} followed by a vertex dimension of size "
             f"at least 3; found {list(vertices.dimensions)} with shape {vertices.shape}.",
         )
+    else:
+        _check_vertex_valid_range(
+            findings,
+            vertices,
+            declared,
+            vertex_entry,
+            longitude=role == "longitude",
+            family=f"grid_{role}_valid_range",
+            allow_missing_padding=allow_missing_padding,
+        )
     if coordinate.ndim in {1, 2} and vertices.ndim:
         expected = _grid_dimensions(
             catalog, vertex_entry, coordinate.dimensions, vertices.dimensions[-1]
@@ -171,6 +537,7 @@ def _validate_auxiliary(
     catalog,
     role,
     ndim,
+    topology,
     allow_standard_name_fallback,
 ):
     entry = _grid_entry(catalog, role)
@@ -206,7 +573,20 @@ def _validate_auxiliary(
         )
     check_dtype(findings, var, name, entry, family="grid")
     check_attributes(findings, var, name, entry)
-    check_valid_range(findings, var, name, entry)
+    _check_grid_variable_valid_range(
+        findings,
+        var,
+        name,
+        entry,
+        family=f"grid_{role}_valid_range",
+    )
+    if role == "longitude":
+        check_single_longitude_cycle(
+            findings,
+            var,
+            name,
+            family="grid_longitude_single_cycle",
+        )
     if var.ndim == ndim:
         expected = _grid_dimensions(catalog, entry, var.dimensions)
         if list(var.dimensions) != expected:
@@ -224,7 +604,15 @@ def _validate_auxiliary(
                 f"'{data_var.name}' coordinates attribute to include auxiliary "
                 f"{role} coordinate '{name}'.",
             )
-    _validate_vertices(findings, ds, var, role, entry, catalog)
+    _validate_vertices(
+        findings,
+        ds,
+        var,
+        role,
+        entry,
+        catalog,
+        allow_missing_padding=topology == "unstructured",
+    )
     return var
 
 
@@ -433,6 +821,7 @@ def validate_horizontal_grid(
             catalog,
             role,
             ndim,
+            topology,
             allow_standard_name_fallback,
         )
         for role in requested
