@@ -72,6 +72,18 @@ class Findings:
             "grid_longitude_single_cycle": (
                 "[COORD006] Grid-longitude single cycle"
             ),
+            "grid_mapping_consistency": (
+                "[COORD011] Registered grid mapping"
+            ),
+            "grid_label_recommendation": (
+                "[COORD011] Registered grid-label recommendation"
+            ),
+            "grid_cell_count_availability": (
+                "[COORD011] Registered grid cell-count metadata"
+            ),
+            "grid_cell_count_consistency": (
+                "[COORD011] Horizontal grid cell count"
+            ),
             "requested_values": "[COORD007] Requested coordinate values",
             "bounds": "[COORD008] Coordinate bounds",
             "bounds_name": "[COORD009] Coordinate bounds naming",

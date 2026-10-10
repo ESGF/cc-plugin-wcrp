@@ -87,6 +87,7 @@ from checks.coordinate_checks import (
     GridTopologyConfigError,
     check_coordinate_catalog,
     load_catalog,
+    load_grid_metadata,
     load_grid_topology_config,
     resolve_grid_topology,
 )
@@ -164,6 +165,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         self._grid_topology_config_error: Optional[str] = None
         self._coordinate_grid_topology: Optional[str] = None
         self._coordinate_grid_error: Optional[str] = None
+        self._coordinate_grid_metadata: Optional[dict] = None
         # Config directory
         if options and "project_config_dir" in options:
             self.project_config_dir = options["project_config_dir"]
@@ -293,6 +295,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         self._coordinate_setup_error = None
         self._coordinate_grid_topology = None
         self._coordinate_grid_error = None
+        self._coordinate_grid_metadata = None
         registry = (
             self.config.coordinates.registry
             if self.config and self.config.coordinates
@@ -304,11 +307,29 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 self._coordinate_catalog = load_catalog(
                     str(branded or ""), project_id=self.project_name
                 )
-                if any(
+                has_generic_horizontal = any(
                     coordinate_type(entry) == "generic_horizontal"
                     for entry in self._coordinate_catalog.data_coordinates.values()
                     if entry.get("id") in self._coordinate_catalog.coordinate_ids
-                ):
+                )
+                needs_grid_metadata = has_generic_horizontal or any(
+                    getattr(registry, family) is not None
+                    for family in (
+                        "grid_cell_count_availability",
+                        "grid_cell_count_consistency",
+                        "grid_mapping_consistency",
+                    )
+                )
+                grid_label = self._get_attr("grid_label", "")
+                if needs_grid_metadata:
+                    try:
+                        self._coordinate_grid_metadata = load_grid_metadata(grid_label)
+                    except CoordinateMetadataError as exc:
+                        self._coordinate_grid_error = (
+                            "The registered CMIP7 grid metadata could not be read. "
+                            f"Technical reason: {exc}"
+                        )
+                if has_generic_horizontal and self._coordinate_grid_error is None:
                     if self._grid_topology_config_error:
                         self._coordinate_grid_error = (
                             "The CMIP7 grid-topology mapping could not be loaded. "
@@ -320,11 +341,18 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                             "unknown reason."
                         )
                     else:
-                        self._coordinate_grid_topology, self._coordinate_grid_error = (
-                            resolve_grid_topology(
-                                self._grid_topology_config,
-                                grid_label=self._get_attr("grid_label", ""),
-                            )
+                        (
+                            self._coordinate_grid_topology,
+                            self._coordinate_grid_error,
+                        ) = resolve_grid_topology(
+                            self._grid_topology_config,
+                            grid_label=grid_label,
+                            grid_type=self._coordinate_grid_metadata.get(
+                                "grid_type", ""
+                            ),
+                            grid_mapping=self._coordinate_grid_metadata.get(
+                                "grid_mapping", ""
+                            ),
                         )
             except Exception as exc:
                 # Report separately from setup_warnings: coordinate metadata
@@ -825,6 +853,10 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 "grid_latitude_valid_range",
                 "grid_longitude_valid_range",
                 "grid_longitude_single_cycle",
+                "grid_mapping_consistency",
+                "grid_label_recommendation",
+                "grid_cell_count_availability",
+                "grid_cell_count_consistency",
                 "requested_values",
                 "bounds",
                 "bounds_name",
@@ -856,6 +888,8 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             severities=severities,
             grid_topology=self._coordinate_grid_topology,
             grid_resolution_error=self._coordinate_grid_error,
+            registered_grid_metadata=self._coordinate_grid_metadata,
+            grid_topology_config=self._grid_topology_config,
             allow_standard_name_fallback=(
                 self._grid_topology_config.allow_standard_name_fallback
                 if self._grid_topology_config is not None

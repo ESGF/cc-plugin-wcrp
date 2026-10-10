@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from checks.coordinate_checks.model import Catalog
 from checks.coordinate_checks.ordinary import validate_ordinary
-from checks.coordinate_checks.grid import validate_horizontal_grid
+from checks.coordinate_checks.grid import (
+    check_grid_cell_count,
+    check_grid_label_recommendation,
+    check_grid_mapping_consistency,
+    validate_horizontal_grid,
+)
 from checks.coordinate_checks.utils import coordinate_type
 from checks.coordinate_checks.validation import Findings
 from checks.coordinate_checks.vertical import validate_model_level
@@ -57,6 +62,8 @@ def check_coordinate_catalog(
     severities: dict[str, int],
     grid_topology=None,
     grid_resolution_error=None,
+    registered_grid_metadata=None,
+    grid_topology_config=None,
     allow_standard_name_fallback=True,
     require_explicit_grid_axes=False,
     bounds_dimension_name="bnds",
@@ -94,6 +101,29 @@ def check_coordinate_catalog(
         resolution_error=grid_resolution_error,
         allow_standard_name_fallback=allow_standard_name_fallback,
         require_explicit_grid_axes=require_explicit_grid_axes,
+    )
+    check_grid_mapping_consistency(
+        findings,
+        ds,
+        data_var,
+        registered_grid_metadata,
+    )
+    check_grid_label_recommendation(
+        findings,
+        ds,
+        catalog,
+        registered_grid_metadata,
+        grid_topology_config,
+    )
+    check_grid_cell_count(
+        findings,
+        ds,
+        catalog,
+        data_var,
+        topology=grid_topology,
+        registered_grid_metadata=registered_grid_metadata,
+        grid_topology_config=grid_topology_config,
+        allow_standard_name_fallback=allow_standard_name_fallback,
     )
     for identifier in catalog.coordinate_ids:
         entry = catalog.data_coordinates[identifier]

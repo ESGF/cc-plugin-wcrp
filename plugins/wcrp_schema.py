@@ -379,6 +379,10 @@ class CoordinateRegistrySection(BaseModel):
     grid_latitude_valid_range: Optional[CoordinateGlobalRule] = None
     grid_longitude_valid_range: Optional[CoordinateGlobalRule] = None
     grid_longitude_single_cycle: Optional[CoordinateGlobalRule] = None
+    grid_mapping_consistency: Optional[CoordinateGlobalRule] = None
+    grid_label_recommendation: Optional[CoordinateGlobalRule] = None
+    grid_cell_count_availability: Optional[CoordinateGlobalRule] = None
+    grid_cell_count_consistency: Optional[CoordinateGlobalRule] = None
     requested_values: Optional[CoordinateGlobalRule] = None
     bounds: Optional[CoordinateGlobalRule] = None
     bounds_name: Optional[CoordinateBoundsNameRule] = None

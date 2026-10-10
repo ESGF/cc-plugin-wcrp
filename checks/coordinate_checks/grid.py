@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from checks.coordinate_checks.model import reference_ids
+from checks.coordinate_checks.model import reference_id, reference_ids
 from checks.coordinate_checks.utils import ncattr, neutral_dtype
 from checks.coordinate_checks.validation import (
     Findings,
@@ -43,6 +43,220 @@ def _identify_coordinate(ds, expected_name, standard_name, allow_fallback):
     return None
 
 
+def _inferred_horizontal_label(catalog):
+    """Infer a horizontal label only for unambiguous reduced layouts."""
+    # See https://github.com/CMIP-Data-Request/CMIP7_DReq_Content/issues/36
+    coordinate_ids = set(catalog.coordinate_ids)
+    if coordinate_ids & {"oline", "siline"}:
+        return "ht"
+    if "site" in coordinate_ids:
+        return "hs"
+    if "basin" in coordinate_ids and coordinate_ids & {
+        "latitude",
+        "gridlatitude",
+    }:
+        return "hyb"
+    if coordinate_ids & {"latitude", "gridlatitude"} and not coordinate_ids & {
+        "longitude",
+        "gridlongitude",
+        "basin",
+    }:
+        return "hy"
+    return ""
+
+
+def _horizontal_label_for_grid_guidance(catalog, declared_label):
+    """Correct known label inconsistencies from the required coordinate layout."""
+    return _inferred_horizontal_label(catalog) or declared_label
+
+
+def _configured_grid_label(config, horizontal_label, region):
+    if config is None:
+        return ""
+    return (
+        config.recommended_grid_labels_by_horizontal_label_and_region.get(
+            (horizontal_label, region), ""
+        )
+        or config.recommended_grid_labels_by_horizontal_label.get(
+            horizontal_label, ""
+        )
+    )
+
+
+def check_grid_label_recommendation(
+    findings,
+    ds,
+    catalog,
+    registered_grid_metadata,
+    grid_topology_config,
+):
+    """Recommend a special registered grid independently of cell counting."""
+    if registered_grid_metadata is None or grid_topology_config is None:
+        return
+    declared_label = str(ncattr(ds, "horizontal_label") or "").strip()
+    horizontal_label = _horizontal_label_for_grid_guidance(
+        catalog, declared_label
+    )
+    region = str(ncattr(ds, "region") or "").strip()
+    recommended_label = _configured_grid_label(
+        grid_topology_config, horizontal_label, region
+    )
+    current_label = str(registered_grid_metadata.get("id") or "").strip()
+    if not recommended_label or recommended_label == current_label:
+        return
+    selectors = f"horizontal_label={horizontal_label!r}"
+    if (horizontal_label, region) in (
+        grid_topology_config.recommended_grid_labels_by_horizontal_label_and_region
+    ):
+        selectors += f" and region={region!r}"
+    findings.add(
+        "grid_label_recommendation",
+        f"The file uses grid_label='{current_label}', but for {selectors} it is "
+        f"{findings.severity_word('grid_label_recommendation')} to use the "
+        f"registered grid_label='{recommended_label}'.",
+    )
+
+
+def _observed_grid_cell_count(
+    ds,
+    catalog,
+    data_var,
+    *,
+    topology,
+    allow_standard_name_fallback,
+):
+    """Return a reliable horizontal cell count, or ``None`` after bad structure."""
+    requested = [
+        identifier
+        for identifier in catalog.coordinate_ids
+        if identifier in {"latitude", "longitude"}
+    ]
+    if not requested:
+        return None
+
+    effective_topology = (
+        "rectilinear"
+        if requested == ["latitude"] or requested == ["longitude"]
+        else topology
+    )
+    if effective_topology not in {"rectilinear", "curvilinear", "unstructured"}:
+        return None
+
+    discovered = {}
+    for role in requested:
+        entry = (
+            catalog.data_coordinates[role]
+            if effective_topology == "rectilinear"
+            else _grid_entry(catalog, role)
+        )
+        expected_name = str(entry.get("out_name") or role)
+        variable = _identify_coordinate(
+            ds,
+            expected_name,
+            role,
+            allow_standard_name_fallback,
+        )
+        if variable is None:
+            return None
+        discovered[role] = variable
+
+    variables = list(discovered.values())
+    if data_var is not None and any(
+        dimension not in data_var.dimensions
+        for variable in variables
+        for dimension in variable.dimensions
+    ):
+        return None
+    if len(variables) == 1:
+        variable = variables[0]
+        return int(variable.size) if variable.ndim == 1 else None
+    if len(variables) != 2:
+        return None
+
+    # Count the coordinate layout actually present in the file. This remains
+    # reliable when an incorrect grid_label selects the wrong registered
+    # topology and makes the count mismatch useful independent evidence.
+    if all(variable.ndim == 1 for variable in variables):
+        if variables[0].dimensions == variables[1].dimensions:
+            return int(variables[0].size)
+        if all(variable.dimensions == (variable.name,) for variable in variables):
+            return int(np.prod([variable.size for variable in variables]))
+        return None
+    if (
+        all(variable.ndim == 2 for variable in variables)
+        and variables[0].dimensions == variables[1].dimensions
+        and variables[0].shape == variables[1].shape
+    ):
+        return int(variables[0].size)
+    return None
+
+
+def check_grid_cell_count(
+    findings,
+    ds,
+    catalog,
+    data_var,
+    *,
+    topology,
+    registered_grid_metadata,
+    grid_topology_config,
+    allow_standard_name_fallback,
+):
+    """Compare a registered cell count when the file structure is reliable."""
+    if not set(catalog.coordinate_ids) & {"latitude", "longitude"}:
+        return
+    if registered_grid_metadata is None:
+        return
+    label = str(registered_grid_metadata.get("id") or "").strip() or "unknown"
+    expected = registered_grid_metadata.get("n_cells")
+    if expected is None:
+        findings.add(
+            "grid_cell_count_availability",
+            f"Registered grid '{label}' does not define n_cells, so horizontal "
+            "cell-count consistency could not be checked.",
+        )
+        return
+    observed = _observed_grid_cell_count(
+        ds,
+        catalog,
+        data_var,
+        topology=topology,
+        allow_standard_name_fallback=allow_standard_name_fallback,
+    )
+    if observed is None:
+        # Structural COORD011 findings already explain why no reliable count
+        # can be obtained; avoid adding a derivative failure.
+        return
+    if observed != int(expected):
+        cell_word = "cell" if observed == 1 else "cells"
+        declared_horizontal_label = str(
+            ncattr(ds, "horizontal_label") or ""
+        ).strip()
+        horizontal_label = _horizontal_label_for_grid_guidance(
+            catalog, declared_horizontal_label
+        )
+        reduced_labels = frozenset()
+        if grid_topology_config is not None:
+            reduced_labels = grid_topology_config.reduced_horizontal_labels
+        guidance = (
+            "Please verify the horizontal dimensions and use or register an "
+            "appropriate grid_label for this grid."
+        )
+        if horizontal_label in reduced_labels:
+            guidance += (
+                " For reduced spatial output such as hemispheric, global, or "
+                "zonal means, it is "
+                f"{findings.severity_word('grid_cell_count_consistency')} to "
+                "register or select a separate grid_label."
+            )
+        findings.add(
+            "grid_cell_count_consistency",
+            f"Registered grid '{label}' defines n_cells={int(expected)}, but "
+            f"the file's horizontal coordinate dimensions contain {observed} "
+            f"{cell_word}. {guidance}",
+        )
+
+
 def _grid_entry(catalog, role):
     return catalog.grid_variables.get(role, {})
 
@@ -59,6 +273,31 @@ def _grid_mapping_name(ds, data_var):
     if mapping_variable in ds.variables:
         return ncattr(ds.variables[mapping_variable], "grid_mapping_name")
     return ""
+
+
+def check_grid_mapping_consistency(
+    findings,
+    ds,
+    data_var,
+    registered_grid_metadata,
+):
+    """Compare a supplied file mapping with the registered EMD mapping."""
+    if data_var is None or not registered_grid_metadata:
+        return
+    expected = reference_id(registered_grid_metadata.get("grid_mapping"))
+    if not expected:
+        return
+    actual = _grid_mapping_name(ds, data_var)
+    if not actual or actual == expected:
+        return
+    label = reference_id(registered_grid_metadata.get("id"))
+    grid = f" for registered grid {label!r}" if label else ""
+    findings.add(
+        "grid_mapping_consistency",
+        f"File grid_mapping_name={actual!r} does not match the registered "
+        f"grid_mapping={expected!r}{grid}; {expected!r} is the "
+        f"{findings.severity_word('grid_mapping_consistency')} value.",
+    )
 
 
 def _grid_dimensions(catalog, entry, dimensions, vertex_dimension=None):
@@ -475,6 +714,22 @@ def _validate_vertices(
         )
         return
     vertices = ds.variables[declared]
+    valid = (
+        vertices.ndim == coordinate.ndim + 1
+        and vertices.dimensions[:-1] == coordinate.dimensions
+        and vertices.shape[:-1] == coordinate.shape
+        and vertices.shape[-1] >= 3
+    )
+    if not valid:
+        findings.add(
+            "grid",
+            f"It is {findings.severity_word('grid')} for vertex variable "
+            f"'{declared}' to have the coordinate dimensions "
+            f"{list(coordinate.dimensions)} followed by a vertex dimension of size "
+            f"at least 3; found {list(vertices.dimensions)} with shape {vertices.shape}.",
+        )
+        return
+
     check_dtype(findings, vertices, declared, vertex_entry, family="grid")
     check_trailing_dimension(
         findings,
@@ -494,40 +749,24 @@ def _validate_vertices(
             fallback_long_name=False,
             missing_ok=True,
         )
-    valid = (
-        vertices.ndim == coordinate.ndim + 1
-        and vertices.dimensions[:-1] == coordinate.dimensions
-        and vertices.shape[:-1] == coordinate.shape
-        and vertices.shape[-1] >= 3
+    _check_vertex_valid_range(
+        findings,
+        vertices,
+        declared,
+        vertex_entry,
+        longitude=role == "longitude",
+        family=f"grid_{role}_valid_range",
+        allow_missing_padding=allow_missing_padding,
     )
-    if not valid:
+    expected = _grid_dimensions(
+        catalog, vertex_entry, coordinate.dimensions, vertices.dimensions[-1]
+    )
+    if list(vertices.dimensions) != expected:
         findings.add(
             "grid",
-            f"It is {findings.severity_word('grid')} for vertex variable "
-            f"'{declared}' to have the coordinate dimensions "
-            f"{list(coordinate.dimensions)} followed by a vertex dimension of size "
-            f"at least 3; found {list(vertices.dimensions)} with shape {vertices.shape}.",
+            f"Vertex variable '{declared}' has dimensions {list(vertices.dimensions)}; "
+            f"the {findings.severity_word('grid')} dimension order is {expected}.",
         )
-    else:
-        _check_vertex_valid_range(
-            findings,
-            vertices,
-            declared,
-            vertex_entry,
-            longitude=role == "longitude",
-            family=f"grid_{role}_valid_range",
-            allow_missing_padding=allow_missing_padding,
-        )
-    if coordinate.ndim in {1, 2} and vertices.ndim:
-        expected = _grid_dimensions(
-            catalog, vertex_entry, coordinate.dimensions, vertices.dimensions[-1]
-        )
-        if list(vertices.dimensions) != expected:
-            findings.add(
-                "grid",
-                f"Vertex variable '{declared}' has dimensions {list(vertices.dimensions)}; "
-                f"the {findings.severity_word('grid')} dimension order is {expected}.",
-            )
 
 
 def _validate_auxiliary(
@@ -571,6 +810,9 @@ def _validate_auxiliary(
             f"for this grid topology; found dimensions "
             f"{list(var.dimensions)}.",
         )
+        # The selected variable belongs to a different topology. Do not
+        # compare it with this topology's coordinate or vertex records.
+        return var
     check_dtype(findings, var, name, entry, family="grid")
     check_attributes(findings, var, name, entry)
     _check_grid_variable_valid_range(
@@ -625,15 +867,25 @@ def _validate_grid_axes(findings, ds, dimensions, catalog, data_var):
     if not explicit:
         return  # implicit integer indices are explicitly permitted
 
-    matched = {}
-    for dimension in explicit:
-        var = ds.variables[dimension]
-        if var.dimensions != (dimension,):
+    malformed = [
+        dimension
+        for dimension in explicit
+        if ds.variables[dimension].dimensions != (dimension,)
+    ]
+    if malformed:
+        for dimension in malformed:
+            var = ds.variables[dimension]
             findings.add(
                 "grid",
                 f"It is {findings.severity_word('grid')} for grid axis '{dimension}' "
                 f"to be '{dimension}({dimension})'; found dimensions {list(var.dimensions)}.",
             )
+        # Axis-pair and metadata checks assume valid coordinate variables.
+        return
+
+    matched = {}
+    for dimension in explicit:
+        var = ds.variables[dimension]
         candidates = []
         for identifier, entry in catalog.grid_axes.items():
             out_name = str(entry.get("out_name") or identifier)
@@ -766,9 +1018,10 @@ def validate_horizontal_grid(
             f"The {findings.severity_word('grid')} horizontal coordinate(s) are "
             f"absent: {missing}.",
         )
-        return []
+        return None
 
     if topology == "rectilinear":
+        valid_structure = True
         for role, var in discovered.items():
             entry = catalog.data_coordinates[role]
             expected_name = str(entry.get("out_name") or role)
@@ -792,6 +1045,14 @@ def validate_horizontal_grid(
                     f"variable; found '{var.name}' with "
                     f"dimensions {list(var.dimensions)}.",
                 )
+                valid_structure = False
+        if not valid_structure:
+            # The variables found by standard_name are not the prescribed 1-D
+            # coordinate variables. Do not compare them with unrelated 1-D CV
+            # metadata or derive a data-variable dimension order from it.
+            return None
+        for role, var in discovered.items():
+            entry = catalog.data_coordinates[role]
             check_dtype(findings, var, var.name, entry, family="grid")
             check_attributes(findings, var, var.name, entry)
             check_direction(findings, var, var.name, entry)
@@ -813,6 +1074,32 @@ def validate_horizontal_grid(
         ]
 
     ndim = 1 if topology == "unstructured" else 2
+    valid_structure = True
+    for role, var in discovered.items():
+        if var.ndim != ndim:
+            findings.add(
+                "grid",
+                f"It is {findings.severity_word('grid')} for '{var.name}' to be "
+                f"{ndim}-D for this grid topology; found dimensions "
+                f"{list(var.dimensions)}.",
+            )
+            valid_structure = False
+    if valid_structure:
+        dimension_sets = {var.dimensions for var in discovered.values()}
+        if len(dimension_sets) != 1:
+            findings.add(
+                "grid",
+                f"It is {findings.severity_word('grid')} for latitude and longitude "
+                "auxiliary coordinates to share identical "
+                f"dimensions; found { {role: list(var.dimensions) for role, var in discovered.items()} }.",
+            )
+            valid_structure = False
+    if not valid_structure:
+        # Rank and shared dimensions determine which grid-variable records are
+        # applicable. Stop the complete pair before metadata, range, vertex,
+        # association, or data-variable dimension-order checks are attempted.
+        return None
+
     validated = {
         role: _validate_auxiliary(
             findings,
@@ -828,17 +1115,6 @@ def validate_horizontal_grid(
     }
     available = [var for var in validated.values() if var is not None]
     if len(available) == len(requested):
-        if any(var.ndim != ndim for var in available):
-            return None  # Rank errors were reported; no usable grid dimensions.
-        dimension_sets = {var.dimensions for var in available}
-        if len(dimension_sets) != 1:
-            findings.add(
-                "grid",
-                f"It is {findings.severity_word('grid')} for latitude and longitude "
-                "auxiliary coordinates to share identical "
-                f"dimensions; found { {role: list(var.dimensions) for role, var in validated.items()} }.",
-            )
-            return []
         dimensions = list(available[0].dimensions)
         if topology in {"curvilinear", "unstructured"}:
             mapping_name = _grid_mapping_name(ds, data_var)
@@ -864,4 +1140,4 @@ def validate_horizontal_grid(
             else:
                 _validate_grid_axes(findings, ds, dimensions, catalog, data_var)
         return _grid_dimensions(catalog, _grid_entry(catalog, requested[0]), dimensions)
-    return []
+    return None

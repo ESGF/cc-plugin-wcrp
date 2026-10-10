@@ -1,6 +1,10 @@
 """Reusable ESGVoc-backed coordinate checks."""
 
-from checks.coordinate_checks.esgvoc import CoordinateMetadataError, load_catalog
+from checks.coordinate_checks.esgvoc import (
+    CoordinateMetadataError,
+    load_catalog,
+    load_grid_metadata,
+)
 from checks.coordinate_checks.suite import check_coordinate_catalog
 from checks.coordinate_checks.topology import (
     GridTopologyConfigError,
@@ -13,6 +17,7 @@ __all__ = [
     "GridTopologyConfigError",
     "check_coordinate_catalog",
     "load_catalog",
+    "load_grid_metadata",
     "load_grid_topology_config",
     "resolve_grid_topology",
 ]

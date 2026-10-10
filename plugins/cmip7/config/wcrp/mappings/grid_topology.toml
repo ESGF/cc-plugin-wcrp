@@ -1,22 +1,81 @@
 # Reduce CMIP7 grid metadata to the three coordinate layouts checked here.
 #
-# Once ESGVoc exposes a branded variable's EMD grid relationship, add the
-# authoritative identifiers to [grid_type] and, only where grid_type alone is
-# ambiguous, to [grid_type_and_mapping].  Combination keys use "type|mapping".
-# These metadata mappings take precedence over the temporary grid-label bridge.
+# Explicit grid-label entries override the general ESGVoc metadata rules below.
+# Unlisted and newly registered labels use grid_type plus optional grid_mapping.
+# Combination keys use "type|mapping" and override the coarser type mapping.
 
 [coordinate_identification]
 # The ESGVoc out_name is always tried first. If enabled, an exact standard_name
 # match may identify a differently named horizontal coordinate as a fallback.
 allow_standard_name_fallback = true
 
+[grid_label_recommendation]
+reduced_horizontal_labels = ["hm", "hy", "hyb", "hys"]
+
+[grid_label_recommendation.horizontal_label]
+hs = "g013"
+ht = "g014"
+
+[grid_label_recommendation.horizontal_label_and_region]
+"hm|glb" = "g010"
+"hm|nh" = "g011"
+"hm|sh" = "g012"
+
 [grid_type]
+regular_latitude_longitude = "rectilinear"
+regular_gaussian = "rectilinear"
+linear_spectral_gaussian = "rectilinear"
+quadratic_spectral_gaussian = "rectilinear"
+spectral_gaussian = "rectilinear"
+
+displaced_pole = "curvilinear"
+plane_projection = "curvilinear"
+rotated_pole = "curvilinear"
+tripolar = "curvilinear"
+
+cubed_sphere = "unstructured"
+cubic_octahedral_spectral_reduced_gaussian = "unstructured"
+hierarchical_discrete_global_grid = "unstructured"
+icosahedral_geodesic = "unstructured"
+icosahedral_geodesic_dual = "unstructured"
+reduced_gaussian = "unstructured"
+spectral_reduced_gaussian = "unstructured"
+unstructured_polygonal = "unstructured"
+unstructured_quadrilateral = "unstructured"
+unstructured_triangular = "unstructured"
+yin_yang = "unstructured"
+
+[grid_mapping]
+albers_conical_equal_area = "curvilinear"
+azimuthal_equidistant = "curvilinear"
+geostationary = "curvilinear"
+lambert_azimuthal_equal_area = "curvilinear"
+lambert_conformal_conic = "curvilinear"
+lambert_cylindrical_equal_area = "curvilinear"
+orthographic = "curvilinear"
+polar_stereographic = "curvilinear"
+rotated_latitude_longitude = "curvilinear"
+sinusoidal = "curvilinear"
+stereographic = "curvilinear"
+transverse_mercator = "curvilinear"
+vertical_perspective = "curvilinear"
+healpix = "unstructured"
 
 [grid_type_and_mapping]
+# All stretched grids registered so far use latitude_longitude and are treated
+# as rectilinear. A future stretched grid could instead be unstructured; this
+# first guess will then produce HIGH structural topology findings until an
+# explicit grid_label override is added.
+"stretched|latitude_longitude" = "rectilinear"
 
-# Temporary bridge based on the globally registered CMIP7 grid_label.  An
-# individual label may also be overridden explicitly under [grid_label].
+# Explicitly registered labels have highest precedence. An individual label
+# may also be entered under [grid_label] to override these groups.
 [grid_label]
+# g229 is currently registered with grid_type=regular_latitude_longitude and
+# grid_mapping=polar_stereographic. That combination is under discussion in
+# the EMD repository; retain the expected curvilinear interpretation here
+# until this discussion is resolved.
+g229 = "curvilinear"
 
 [grid_label_groups]
 rectilinear = [
@@ -25,9 +84,8 @@ rectilinear = [
   "g134", "g137", "g138", "g139", "g140", "g150", "g151", "g152",
   "g158", "g159", "g163", "g167", "g179", "g180", "g183", "g189",
   "g190", "g198", "g200", "g201", "g207", "g208", "g209", "g210",
-  "g214", "g215", "g222", "g223", "g224", "g225", "g229", "g230",
-  "g232", "g239", "g242", "g244", "g245", "g251", "g252", "g253",
-  "g257",
+  "g214", "g215", "g222", "g223", "g224", "g225", "g230", "g232",
+  "g239", "g242", "g244", "g245", "g251", "g252", "g253", "g257",
 ]
 unstructured = [
   "g117", "g122", "g130", "g132", "g133", "g136", "g141", "g142",
@@ -42,8 +100,8 @@ curvilinear = [
   "g148", "g149", "g153", "g154", "g155", "g156", "g157", "g160",
   "g161", "g162", "g164", "g165", "g166", "g168", "g169", "g170",
   "g171", "g172", "g181", "g182", "g185", "g186", "g191", "g192",
-  "g193", "g194", "g195", "g199", "g202", "g203", "g204", "g205",
+  "g193", "g194", "g195", "g202", "g203", "g204", "g205",
   "g206", "g211", "g212", "g213", "g216", "g217", "g218", "g219",
-  "g220", "g221", "g226", "g227", "g228", "g233", "g237", "g240",
-  "g241", "g247", "g248", "g250", "g256",
+  "g220", "g221", "g226", "g233", "g237", "g240", "g241",
+  "g247", "g248", "g250", "g256",
 ]

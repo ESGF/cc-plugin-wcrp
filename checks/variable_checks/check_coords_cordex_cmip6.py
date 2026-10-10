@@ -37,7 +37,15 @@ def infer_horizontal_topology(dataset):
     longitude = dataset.variables[longitudes[0]]
     if latitude.ndim == longitude.ndim == 1:
         if latitude.dimensions == longitude.dimensions:
-            return "unstructured", None
+            return None, (
+                "The plugin does not currently support unstructured horizontal "
+                "grids for CORDEX-CMIP6. "
+                f"CF coordinate discovery found latitude {latitudes[0]!r} and "
+                f"longitude {longitudes[0]!r} on their shared dimension "
+                f"{list(latitude.dimensions)}. Please open a GitHub issue and "
+                "provide test data so that support can be discussed and, if "
+                "appropriate, implemented."
+            )
         return "rectilinear", None
     if (
         latitude.ndim == longitude.ndim == 2

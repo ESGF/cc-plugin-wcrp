@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+import pytest
 import toml
 from compliance_checker.base import BaseCheck
 from netCDF4 import Dataset
@@ -332,6 +334,9 @@ def test_cordex_non_latitude_longitude_topology_uses_grid_mapping():
         "curvilinear",
         None,
     )
+    topology, error = resolve_grid_topology(config, grid_mapping="healpix")
+    assert topology is None
+    assert "No horizontal topology is configured" in error
 
 
 def test_cordex_coordinate_loading_failure_is_reported_once(tmp_path, monkeypatch):
@@ -397,6 +402,157 @@ def _horizontal_catalog():
         data_coordinates=coordinates,
         file_variable_name="tas",
     )
+
+
+def _complete_horizontal_catalog():
+    coordinates = {
+        role: {
+            "id": role,
+            "coordinate_type": "generic_horizontal",
+            "axis": axis,
+            "out_name": name,
+            "data_type": "double",
+            "cf_standard_name": role,
+            "units": units,
+        }
+        for role, axis, name, units in (
+            ("longitude", "X", "lon", "degrees_east"),
+            ("latitude", "Y", "lat", "degrees_north"),
+        )
+    }
+    grid_variables = {}
+    for role, name, units in (
+        ("longitude", "lon", "degrees_east"),
+        ("latitude", "lat", "degrees_north"),
+    ):
+        grid_variables[role] = {
+            "id": role,
+            "out_name": name,
+            "data_type": "double",
+            "cf_standard_name": role,
+            "units": units,
+            "dimensions": ["longitude", "latitude"],
+        }
+        grid_variables[f"vertices_{role}"] = {
+            "id": f"vertices_{role}",
+            "out_name": f"vertices_{name}",
+            "data_type": "double",
+            "units": units,
+            "dimensions": ["vertices", "longitude", "latitude"],
+        }
+    grid_axes = {
+        identifier: {
+            "id": identifier,
+            "out_name": name,
+            "axis": axis,
+            "data_type": "double",
+            "cf_standard_name": standard_name,
+            "units": units,
+        }
+        for identifier, name, axis, standard_name, units in (
+            ("grid_longitude", "rlon", "X", "grid_longitude", "degrees"),
+            ("grid_latitude", "rlat", "Y", "grid_latitude", "degrees"),
+            ("x", "x", "X", "projection_x_coordinate", "m"),
+            ("y", "y", "Y", "projection_y_coordinate", "m"),
+        )
+    }
+    return Catalog(
+        project_id="cordex-cmip6",
+        branded_variable_id="tas_tavg-h2m-hxy-u",
+        branded_variable={
+            "id": "tas_tavg-h2m-hxy-u",
+            "dimensions": ["longitude", "latitude"],
+        },
+        coordinate_ids=("longitude", "latitude"),
+        data_coordinates=coordinates,
+        grid_variables=grid_variables,
+        grid_axes=grid_axes,
+        file_variable_name="tas",
+    )
+
+
+def _cordex_coordinate_checker(monkeypatch, catalog=None):
+    checker = CordexCmip6ProjectCheck()
+    checker._load_split_config()
+    checker._load_mappings()
+    checker.variable_mapping = {"mon.tas": "tas_tavg-h2m-hxy-u"}
+    monkeypatch.setattr(
+        "plugins.cordex_cmip6.cordex_cmip6.load_catalog",
+        lambda *args, **kwargs: catalog or _complete_horizontal_catalog(),
+    )
+    return checker
+
+
+def _add_supported_horizontal_grid(dataset, layout):
+    if layout == "rectilinear":
+        dimensions = ("lat", "lon")
+        coordinate_dimensions = {"lat": ("lat",), "lon": ("lon",)}
+        mapping_name = ""
+    elif layout in {"curvilinear", "latitude_longitude"}:
+        dimensions = ("y", "x")
+        coordinate_dimensions = {"lat": dimensions, "lon": dimensions}
+        mapping_name = "latitude_longitude" if layout == "latitude_longitude" else ""
+    elif layout == "rotated":
+        dimensions = ("rlat", "rlon")
+        coordinate_dimensions = {"lat": dimensions, "lon": dimensions}
+        mapping_name = "rotated_latitude_longitude"
+    elif layout == "projected":
+        dimensions = ("y", "x")
+        coordinate_dimensions = {"lat": dimensions, "lon": dimensions}
+        mapping_name = "lambert_conformal_conic"
+    else:  # pragma: no cover - test helper guard
+        raise AssertionError(f"Unsupported test layout {layout!r}")
+
+    for dimension, size in zip(dimensions, (2, 3)):
+        dataset.createDimension(dimension, size)
+    if layout != "rectilinear":
+        dataset.createDimension("vertices", 4)
+
+    if layout == "rotated":
+        axes = (
+            ("rlat", "Y", "grid_latitude", "degrees"),
+            ("rlon", "X", "grid_longitude", "degrees"),
+        )
+    elif layout == "projected":
+        axes = (
+            ("y", "Y", "projection_y_coordinate", "m"),
+            ("x", "X", "projection_x_coordinate", "m"),
+        )
+    else:
+        axes = ()
+    for name, axis, standard_name, units in axes:
+        variable = dataset.createVariable(name, "f8", (name,))
+        variable.axis = axis
+        variable.standard_name = standard_name
+        variable.units = units
+        variable[:] = np.arange(len(dataset.dimensions[name]), dtype="float64")
+
+    for name, standard_name, units in (
+        ("lat", "latitude", "degrees_north"),
+        ("lon", "longitude", "degrees_east"),
+    ):
+        variable = dataset.createVariable(
+            name, "f8", coordinate_dimensions[name]
+        )
+        variable.standard_name = standard_name
+        variable.units = units
+        if layout == "rectilinear":
+            variable.axis = "Y" if name == "lat" else "X"
+            variable[:] = np.arange(variable.size, dtype="float64")
+        else:
+            variable.bounds = f"vertices_{name}"
+            dataset.createVariable(
+                f"vertices_{name}", "f8", dimensions + ("vertices",)
+            )
+
+    data = dataset.createVariable("tas", "f4", dimensions)
+    data.coordinates = "lat lon"
+    if mapping_name:
+        mapping = dataset.createVariable("crs", "i4")
+        mapping.grid_mapping_name = mapping_name
+        mapping.earth_radius = 6371229.0
+        data.grid_mapping = "crs"
+    return data
 
 
 def test_cordex_time003_uses_coordinate_catalogue_climatology(tmp_path, monkeypatch):
@@ -682,7 +838,8 @@ def test_cordex_allows_rectilinear_grid_without_mapping_but_recommends_one(tmp_p
     assert results[1].msgs == [
         "No grid_mapping variable was found. It is recommended to define one "
         "with information about the shape and size of the Earth used for the "
-        "model grid, even for latitude-longitude and ocean grids."
+        "model grid, even for latitude-longitude grids (e.g., regular grids "
+        "and curvilinear ocean grids)."
     ]
 
 
@@ -734,7 +891,6 @@ def test_cordex_infers_topology_from_cf_coordinates_without_name_assumptions(tmp
     cases = {
         "rectilinear": (("j",), ("i",)),
         "curvilinear": (("row", "column"), ("row", "column")),
-        "unstructured": (("cell",), ("cell",)),
     }
     for topology, (lat_dimensions, lon_dimensions) in cases.items():
         with Dataset(tmp_path / f"{topology}.nc", "w") as dataset:
@@ -748,6 +904,23 @@ def test_cordex_infers_topology_from_cf_coordinates_without_name_assumptions(tmp
             longitude.units = "degrees_east"
 
             assert infer_horizontal_topology(dataset) == (topology, None)
+
+
+def test_cordex_rejects_unstructured_cf_coordinates(tmp_path):
+    with Dataset(tmp_path / "unstructured.nc", "w") as dataset:
+        dataset.createDimension("cell", 3)
+        latitude = dataset.createVariable("geographic_y", "f8", ("cell",))
+        latitude.standard_name = "latitude"
+        latitude.units = "degrees_north"
+        longitude = dataset.createVariable("geographic_x", "f8", ("cell",))
+        longitude.standard_name = "longitude"
+        longitude.units = "degrees_east"
+
+        topology, error = infer_horizontal_topology(dataset)
+
+    assert topology is None
+    assert "does not currently support unstructured horizontal grids" in error
+    assert "['cell']" in error
 
 
 def test_cordex_grid_mapping_check_does_not_validate_coordinates(tmp_path):
@@ -840,6 +1013,208 @@ def test_cordex_enabled_topology_infers_rectilinear_without_grid_mapping(
     assert checker._coordinate_grid_error is None
 
 
+@pytest.mark.parametrize(
+    ("layout", "expected_topology"),
+    [
+        ("rectilinear", "rectilinear"),
+        ("curvilinear", "curvilinear"),
+        ("latitude_longitude", "curvilinear"),
+        ("rotated", "curvilinear"),
+        ("projected", "curvilinear"),
+    ],
+)
+def test_cordex_supported_topologies_run_through_project_coordinate_check(
+    tmp_path, monkeypatch, layout, expected_topology
+):
+    checker = _cordex_coordinate_checker(monkeypatch)
+    with Dataset(tmp_path / f"{layout}.nc", "w") as dataset:
+        dataset.frequency = "mon"
+        dataset.variable_id = "tas"
+        _add_supported_horizontal_grid(dataset, layout)
+        checker.dataset = checker.ds = dataset
+        checker.varname = ["tas"]
+
+        checker._initialize_coordinate_catalog(dataset)
+        results = checker.check_Coordinate_Standard(dataset)
+
+    assert checker._coordinate_grid_topology == expected_topology
+    assert checker._coordinate_grid_error is None
+    assert _messages(results) == []
+
+
+@pytest.mark.parametrize("malformation", ["wrong_rank", "different_dimensions"])
+def test_cordex_malformed_projected_grid_stops_derivative_coordinate_checks(
+    tmp_path, monkeypatch, malformation
+):
+    checker = _cordex_coordinate_checker(monkeypatch)
+    with Dataset(tmp_path / f"{malformation}.nc", "w") as dataset:
+        dataset.frequency = "mon"
+        dataset.variable_id = "tas"
+        dataset.createDimension("y", 2)
+        dataset.createDimension("x", 3)
+        dataset.createDimension("other_y", 2)
+        latitude_dimensions = (
+            ("y",)
+            if malformation == "wrong_rank"
+            else ("other_y", "x")
+        )
+        latitude = dataset.createVariable("lat", "f8", latitude_dimensions)
+        latitude.standard_name = "latitude"
+        latitude.units = "degrees_north"
+        longitude = dataset.createVariable("lon", "f8", ("y", "x"))
+        longitude.standard_name = "longitude"
+        longitude.units = "degrees_east"
+        mapping = dataset.createVariable("crs", "i4")
+        mapping.grid_mapping_name = "lambert_conformal_conic"
+        data = dataset.createVariable("tas", "f4", ("y", "x"))
+        data.coordinates = "lat lon"
+        data.grid_mapping = "crs"
+        checker.dataset = checker.ds = dataset
+        checker.varname = ["tas"]
+
+        checker._initialize_coordinate_catalog(dataset)
+        results = checker.check_Coordinate_Standard(dataset)
+
+    grid = next(result for result in results if "COORD011" in result.name)
+    assert grid.weight == BaseCheck.HIGH
+    assert len(grid.msgs) == 1
+    assert all(
+        result.msgs == []
+        for result in results
+        if not result.name.startswith("[COORD011]")
+    )
+
+
+def test_cordex_project_rejects_unstructured_grid_once(tmp_path, monkeypatch):
+    checker = _cordex_coordinate_checker(monkeypatch)
+    with Dataset(tmp_path / "unstructured-project.nc", "w") as dataset:
+        dataset.frequency = "mon"
+        dataset.variable_id = "tas"
+        dataset.createDimension("cell", 3)
+        for name, standard_name, units in (
+            ("lat", "latitude", "degrees_north"),
+            ("lon", "longitude", "degrees_east"),
+        ):
+            variable = dataset.createVariable(name, "f8", ("cell",))
+            variable.standard_name = standard_name
+            variable.units = units
+        data = dataset.createVariable("tas", "f4", ("cell",))
+        data.coordinates = "lat lon"
+        checker.dataset = checker.ds = dataset
+        checker.varname = ["tas"]
+
+        checker._initialize_coordinate_catalog(dataset)
+        coordinate_results = checker.check_Coordinate_Standard(dataset)
+        attribute_results = checker.check_attributes_cordex(dataset)
+
+    assert checker._coordinate_grid_topology is None
+    assert "does not currently support unstructured horizontal grids" in (
+        checker._coordinate_grid_error or ""
+    )
+    grid = next(result for result in coordinate_results if "COORD011" in result.name)
+    assert len(grid.msgs) == 1
+    assert "does not currently support unstructured horizontal grids" in grid.msgs[0]
+    assert all(
+        result.msgs == []
+        for result in coordinate_results
+        if not result.name.startswith("[COORD011]")
+    )
+    mapping_results = [
+        result for result in attribute_results if "grid_mapping" in result.name
+    ]
+    assert _messages(mapping_results) == [
+        (
+            "No grid_mapping variable was found. It is recommended to define one "
+            "with information about the shape and size of the Earth used for the "
+            "model grid, even for latitude-longitude grids (e.g., regular grids "
+            "and curvilinear ocean grids)."
+        )
+    ]
+
+
+def test_cordex_rejects_unstructured_topology_from_future_mapping(
+    tmp_path, monkeypatch
+):
+    checker = _cordex_coordinate_checker(monkeypatch)
+    monkeypatch.setattr(
+        "plugins.cordex_cmip6.cordex_cmip6.resolve_grid_topology",
+        lambda *args, **kwargs: ("unstructured", None),
+    )
+    with Dataset(tmp_path / "future-unstructured-mapping.nc", "w") as dataset:
+        dataset.frequency = "mon"
+        dataset.variable_id = "tas"
+        mapping = dataset.createVariable("crs", "i4")
+        mapping.grid_mapping_name = "future_unstructured_mapping"
+        data = dataset.createVariable("tas", "f4")
+        data.grid_mapping = "crs"
+        checker.dataset = checker.ds = dataset
+        checker.varname = ["tas"]
+
+        checker._initialize_coordinate_catalog(dataset)
+        results = checker.check_Coordinate_Standard(dataset)
+
+    assert checker._coordinate_grid_topology is None
+    assert checker._coordinate_grid_error == (
+        "The plugin does not currently support unstructured horizontal grids "
+        "for CORDEX-CMIP6. Please open a GitHub issue and provide test data so "
+        "that support can be discussed and, if appropriate, implemented."
+    )
+    grid = next(result for result in results if "COORD011" in result.name)
+    assert grid.msgs == [
+        (
+            "The horizontal grid could not be verified. The plugin does not "
+            "currently support unstructured horizontal grids for CORDEX-CMIP6. "
+            "Please open a GitHub issue and provide test data so that support "
+            "can be discussed and, if appropriate, implemented."
+        )
+    ]
+
+
+def test_cordex_coordinate_failures_match_for_esgvoc_and_cmor_routes(
+    tmp_path, monkeypatch
+):
+    catalog = _complete_horizontal_catalog()
+    checker_esgvoc = _cordex_coordinate_checker(monkeypatch, catalog)
+    checker_cmor = _cordex_coordinate_checker(monkeypatch, catalog)
+    checker_cmor.verification_against_tables = True
+    checker_cmor.CTcoords = {}
+    checker_cmor.CTgrids = {}
+    checker_cmor.CTformulas = {}
+    checker_cmor._cmor_variable_entry = lambda ds: ("tas", {})
+    monkeypatch.setattr(
+        "plugins.cordex_cmip6.cordex_cmip6.catalog_from_cmor",
+        lambda *args, **kwargs: catalog,
+    )
+
+    with Dataset(tmp_path / "route-parity.nc", "w") as dataset:
+        dataset.frequency = "mon"
+        dataset.variable_id = "tas"
+        dataset.createDimension("y", 2)
+        dataset.createDimension("x", 3)
+        latitude = dataset.createVariable("lat", "f8", ("y",))
+        latitude.standard_name = "latitude"
+        latitude.units = "degrees_north"
+        longitude = dataset.createVariable("lon", "f8", ("y", "x"))
+        longitude.standard_name = "longitude"
+        longitude.units = "degrees_east"
+        mapping = dataset.createVariable("crs", "i4")
+        mapping.grid_mapping_name = "rotated_latitude_longitude"
+        data = dataset.createVariable("tas", "f4", ("y", "x"))
+        data.coordinates = "lat lon"
+        data.grid_mapping = "crs"
+
+        route_messages = []
+        for checker in (checker_esgvoc, checker_cmor):
+            checker.dataset = checker.ds = dataset
+            checker.varname = ["tas"]
+            checker._initialize_coordinate_catalog(dataset)
+            route_messages.append(_messages(checker.check_Coordinate_Standard(dataset)))
+
+    assert route_messages[0] == route_messages[1]
+    assert len(route_messages[0]) == 1
+    assert "2-D for this grid topology" in route_messages[0][0]
+
+
 def test_cordex_ambiguous_cf_coordinates_report_once_and_stop_topology(
     tmp_path, monkeypatch
 ):
@@ -867,10 +1242,17 @@ def test_cordex_ambiguous_cf_coordinates_report_once_and_stop_topology(
         longitude = dataset.createVariable("geographic_x", "f8", ("y", "x"))
         longitude.standard_name = "longitude"
         dataset.createVariable("tas", "f4", ("y", "x"))
-        checker.dataset = dataset
+        checker.dataset = checker.ds = dataset
+        checker.varname = ["tas"]
 
         checker._initialize_coordinate_catalog(dataset)
         results = checker.check_Coordinate_Standard(dataset)
+        attribute_results = checker.check_attributes_cordex(dataset)
+        project_specific_results = (
+            checker.check_lat_lon_bounds(dataset)
+            + checker.check_horizontal_axes_bounds(dataset)
+            + checker.check_lon_value_range(dataset)
+        )
 
     assert checker._coordinate_grid_topology is None
     assert "exactly one of each is required" in checker._coordinate_grid_error
@@ -880,3 +1262,15 @@ def test_cordex_ambiguous_cf_coordinates_report_once_and_stop_topology(
     assert any(
         "horizontal grid could not be verified" in message for message in grid.msgs
     )
+    mapping_results = [
+        result for result in attribute_results if "grid_mapping" in result.name
+    ]
+    assert _messages(mapping_results) == [
+        (
+            "No grid_mapping variable was found. It is recommended to define one "
+            "with information about the shape and size of the Earth used for the "
+            "model grid, even for latitude-longitude grids (e.g., regular grids "
+            "and curvilinear ocean grids)."
+        )
+    ]
+    assert len(project_specific_results) == 3

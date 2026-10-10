@@ -83,10 +83,45 @@ GRID_AXIS_FIELDS = [
     "out_name",
     "units",
 ]
+GRID_METADATA_FIELDS = ["id", "grid_type", "grid_mapping", "n_cells"]
 
 
 class CoordinateMetadataError(RuntimeError):
     """The coordinate standard could not be initialized reliably."""
+
+
+def load_grid_metadata(
+    grid_label: str,
+    *,
+    api=None,
+    installed_version: str | None = None,
+) -> dict:
+    """Read one registered grid and its EMD topology metadata."""
+    lookup_id = str(grid_label or "").strip()
+    if not lookup_id:
+        raise CoordinateMetadataError(
+            "The file has no non-empty global 'grid_label' attribute, so its "
+            "registered grid metadata cannot be obtained from ESGVoc."
+        )
+    if api is None:
+        api = _get_api()
+    else:
+        require_supported_version(installed_version)
+    try:
+        record = api.get_term_in_data_descriptor(
+            "grid", lookup_id, GRID_METADATA_FIELDS
+        )
+    except Exception as exc:
+        raise CoordinateMetadataError(
+            f"ESGVoc failed while reading registered grid {lookup_id!r}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if record is None:
+        raise CoordinateMetadataError(
+            f"Registered grid {lookup_id!r} was not found in the ESGVoc "
+            "Universe 'grid' data descriptor."
+        )
+    return as_dict(record)
 
 
 def require_supported_version(installed_version: str | None = None) -> str:

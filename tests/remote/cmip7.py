@@ -83,7 +83,7 @@ CURVILINEAR_OCEAN = RemoteDataset(
         "check_Coordinate_Metadata_Setup": ExpectedCheck(1),
         # The current development vocabulary permits -180..360 for grid
         # longitude and its vertices, so the real curvilinear grid passes.
-        "check_Coordinate_Standard": ExpectedCheck(17),
+        "check_Coordinate_Standard": ExpectedCheck(21),
         "check_Coordinates": ExpectedCheck(
             5, (_TIME_SQUARENESS_FAILURE, _TIME_RANGE_FAILURE)
         ),

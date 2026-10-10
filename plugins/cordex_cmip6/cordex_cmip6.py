@@ -396,6 +396,14 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             self._grid_topology_config,
             grid_mapping=grid_mapping,
         )
+        if self._coordinate_grid_topology == "unstructured":
+            self._coordinate_grid_topology = None
+            self._coordinate_grid_error = (
+                "The plugin does not currently support unstructured horizontal "
+                "grids for CORDEX-CMIP6. Please open a GitHub issue and provide "
+                "test data so that support can be discussed and, if appropriate, "
+                "implemented."
+            )
 
     def setup(self, ds):
         super().setup(ds)
@@ -804,6 +812,8 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             "grid_latitude_valid_range",
             "grid_longitude_valid_range",
             "grid_longitude_single_cycle",
+            "grid_cell_count_availability",
+            "grid_cell_count_consistency",
             "requested_values",
             "bounds",
             "bounds_name",

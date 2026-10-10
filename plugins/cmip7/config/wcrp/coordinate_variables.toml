@@ -45,6 +45,20 @@ severity = "M"
 [coordinates.registry.grid_longitude_single_cycle]
 severity = "M"
 
+# EMD driven checks
+[coordinates.registry.grid_mapping_consistency]
+severity = "M"
+
+[coordinates.registry.grid_label_recommendation]
+severity = "M"
+
+[coordinates.registry.grid_cell_count_availability]
+severity = "L"
+
+[coordinates.registry.grid_cell_count_consistency]
+severity = "M"
+
+# Further coordinate CV driven checks
 [coordinates.registry.requested_values]
 severity = "H"
 

@@ -119,7 +119,8 @@ def check_grid_mapping(
                 "No grid_mapping variable was found. It is "
                 f"{severity_word(missing_severity)} to define one with information "
                 "about the shape and size of the Earth used for the model grid, "
-                "even for latitude-longitude and ocean grids."
+                "even for latitude-longitude grids (e.g., regular grids and "
+                "curvilinear ocean grids)."
             )
             if horizontal_topology == "rectilinear" or ocean_omission:
                 testctx.add_pass()
