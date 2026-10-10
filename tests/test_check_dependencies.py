@@ -4,6 +4,8 @@ from compliance_checker.base import BaseCheck
 from netCDF4 import Dataset
 
 import checks.consistency_checks.check_experiment_consistency as experiment_checks
+import checks.consistency_checks.check_variant_label_consistency as variant_checks
+from checks.consistency_checks.check_drs_filename_cv import check_drs_directory
 from checks.coordinate_checks.grid import check_grid_cell_count
 from checks.coordinate_checks.model import Catalog
 from checks.coordinate_checks.suite import (
@@ -162,6 +164,32 @@ def test_disabled_setup_still_reports_failure_needed_by_enabled_check():
     assert "database is unavailable" in results[0].msgs[0]
 
 
+def test_setup_failure_uses_highest_enabled_dependent_severity():
+    config = WCRPConfig.model_validate(
+        {
+            "project_name": "cmip7",
+            "project_version": "1.0",
+            "coordinates": {
+                "registry": {
+                    "setup": {"severity": "L"},
+                    "attributes": {"severity": "H"},
+                },
+            },
+        }
+    )
+    checker = Cmip7ProjectCheck()
+    results = coordinate_metadata_setup_result(
+        config=config,
+        catalog=None,
+        error="database is unavailable",
+        project_label="CMIP7",
+        get_severity=checker.get_severity,
+    )
+
+    assert len(results) == 1
+    assert results[0].weight == BaseCheck.HIGH
+
+
 def test_disabled_setup_omits_success_result():
     config = WCRPConfig.model_validate(
         {
@@ -183,7 +211,7 @@ def test_disabled_setup_omits_success_result():
     ) == []
 
 
-def test_missing_configured_time_uses_first_enabled_consumer():
+def test_missing_configured_time_uses_highest_severity_consumer():
     rule = CoordinateVariableConfig.model_validate(
         {
             "monotonicity": {"severity": "M", "direction": "increasing"},
@@ -196,9 +224,164 @@ def test_missing_configured_time_uses_first_enabled_consumer():
     )
 
     assert len(results) == 1
-    assert "[VAR005]" in results[0].name
-    assert results[0].weight == BaseCheck.MEDIUM
+    assert "[TIME001]" in results[0].name
+    assert results[0].weight == BaseCheck.HIGH
     assert "could not be evaluated" in results[0].msgs[0]
+
+
+def test_missing_configured_time_uses_stable_hierarchy_for_equal_severities():
+    rule = CoordinateVariableConfig.model_validate(
+        {
+            "monotonicity": {"severity": "H", "direction": "increasing"},
+            "squareness": {"severity": "H"},
+        }
+    )
+    checker = Cmip7ProjectCheck()
+    results = missing_configured_coordinate_result(
+        "time", rule, checker.get_severity
+    )
+
+    assert len(results) == 1
+    assert "[VAR005]" in results[0].name
+    assert results[0].weight == BaseCheck.HIGH
+
+
+def test_coordinate_prerequisite_uses_highest_severity_fallback():
+    findings = Findings(
+        {
+            "identity": BaseCheck.MEDIUM,
+            "attributes": BaseCheck.HIGH,
+        }
+    )
+    owner = findings.add_prerequisite(
+        "identity",
+        lambda family: f"reported by {family}",
+        issue="missing-coordinate",
+    )
+
+    assert owner == "attributes"
+    results = findings.results()
+    failure = next(result for result in results if result.msgs)
+    assert failure.weight == BaseCheck.HIGH
+    assert failure.msgs == ["reported by attributes"]
+
+
+def test_coordinate_prerequisite_tie_uses_hard_coded_hierarchy():
+    # Reverse dictionary insertion order to ensure it cannot decide ownership.
+    findings = Findings(
+        {
+            "attributes": BaseCheck.HIGH,
+            "identity": BaseCheck.HIGH,
+        }
+    )
+    owner = findings.add_prerequisite(
+        "identity",
+        "missing coordinate",
+        issue="missing-coordinate",
+    )
+
+    assert owner == "identity"
+
+
+def test_blocked_prerequisite_uses_severity_then_argument_order():
+    findings = Findings(
+        {
+            "dimension_order": BaseCheck.MEDIUM,
+            "associations": BaseCheck.HIGH,
+            "grid_mapping_consistency": BaseCheck.HIGH,
+        }
+    )
+    owner = findings.add_blocked(
+        ("dimension_order", "associations", "grid_mapping_consistency"),
+        "missing data variable",
+        issue="missing-data-variable",
+    )
+
+    assert owner == "associations"
+
+
+def test_variant_selector_owner_uses_severity_then_fixed_priority(tmp_path):
+    with Dataset(tmp_path / "variant.nc", "w") as dataset:
+        dataset.variant_label = "invalid"
+        results = variant_checks.check_variant_label_consistency_group(
+            dataset,
+            [
+                (
+                    variant_checks.check_variant_vs_realization_index,
+                    BaseCheck.MEDIUM,
+                ),
+                (
+                    variant_checks.check_variant_vs_forcing_index,
+                    BaseCheck.HIGH,
+                ),
+            ],
+        )
+        tied_results = variant_checks.check_variant_label_consistency_group(
+            dataset,
+            [
+                (
+                    variant_checks.check_variant_vs_forcing_index,
+                    BaseCheck.HIGH,
+                ),
+                (
+                    variant_checks.check_variant_vs_physics_index,
+                    BaseCheck.HIGH,
+                ),
+            ],
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[ATTR006d]")
+    assert tied_results[0].name.startswith("[ATTR006c]")
+
+
+def test_experiment_selector_owner_uses_severity_then_fixed_priority(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(experiment_checks, "ESG_VOCAB_AVAILABLE", True)
+    monkeypatch.setattr(
+        experiment_checks, "resolve_experiment_term", lambda *_args, **_kwargs: None
+    )
+    with Dataset(tmp_path / "experiment.nc", "w") as dataset:
+        dataset.experiment_id = "invalid"
+        dataset.activity_id = "CMIP"
+        dataset.experiment = "invalid"
+        results = experiment_checks.check_experiment_consistency_group(
+            dataset,
+            "cmip6",
+            [
+                (
+                    experiment_checks.check_experiment_id_vs_activity_id,
+                    BaseCheck.MEDIUM,
+                    {"report_missing": True},
+                ),
+                (
+                    experiment_checks.check_experiment_id_vs_experiment,
+                    BaseCheck.HIGH,
+                    {"report_missing": True},
+                ),
+            ],
+        )
+        tied_results = experiment_checks.check_experiment_consistency_group(
+            dataset,
+            "cmip6",
+            [
+                (
+                    experiment_checks.check_experiment_id_vs_experiment,
+                    BaseCheck.HIGH,
+                    {"report_missing": True},
+                ),
+                (
+                    experiment_checks.check_experiment_id_vs_activity_id,
+                    BaseCheck.HIGH,
+                    {"report_missing": True},
+                ),
+            ],
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[ATTR007b]")
+    assert tied_results[0].name.startswith("[ATTR007a]")
 
 
 def test_time001_can_report_invalid_shape_when_identity_owner_is_disabled(tmp_path):
@@ -280,3 +463,70 @@ def test_missing_referenced_bounds_result_is_not_discarded(tmp_path):
 
     assert len(results) == 1
     assert "not found" in results[0].msgs[0]
+
+
+def test_cmip7_directory_check_uses_mip_drs7_without_legacy_fallback(tmp_path):
+    with Dataset(tmp_path / "ta.nc", "w") as dataset:
+        dataset.drs_specs = "MIP-DRS7"
+        results = check_drs_directory(
+            dataset,
+            BaseCheck.HIGH,
+            project_id="cmip7",
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[PATH003]")
+    assert "'MIP-DRS7' not found" in results[0].msgs[0]
+    assert "root 'cmip7'" not in results[0].msgs[0]
+
+
+def test_path003_owns_cmip7_directory_structure_failure(tmp_path, monkeypatch):
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    monkeypatch.setattr(
+        "plugins.cmip7.cmip7.check_drs_filename",
+        lambda *_args, **_kwargs: [],
+    )
+
+    with Dataset(tmp_path / "ta.nc", "w") as dataset:
+        dataset.drs_specs = "MIP-DRS7"
+        results = checker.check_DRS(dataset)
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[PATH003]")
+    assert "'MIP-DRS7' not found" in results[0].msgs[0]
+
+
+def test_highest_severity_path_consumer_owns_structure_when_path003_is_disabled(
+    tmp_path, monkeypatch
+):
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    drs = checker.config.drs
+    drs.directory = None
+    drs.attributes_vs_directory.severity = "M"
+    drs.filename_vs_directory.severity = "H"
+    monkeypatch.setattr(
+        "plugins.cmip7.cmip7.check_drs_filename",
+        lambda *_args, **_kwargs: [],
+    )
+
+    with Dataset(tmp_path / "ta.nc", "w") as dataset:
+        dataset.drs_specs = "MIP-DRS7"
+        results = checker.check_DRS(dataset)
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[PATH002]")
+    assert results[0].weight == BaseCheck.HIGH
+    assert "MIP-DRS7" in results[0].msgs[0]
+
+
+def test_equal_severity_path_consumers_use_fixed_priority():
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    drs = checker.config.drs
+    drs.directory = None
+    drs.attributes_vs_directory.severity = "H"
+    drs.filename_vs_directory.severity = "H"
+
+    assert checker._drs_directory_structure_owner(drs) == "attributes_vs_directory"

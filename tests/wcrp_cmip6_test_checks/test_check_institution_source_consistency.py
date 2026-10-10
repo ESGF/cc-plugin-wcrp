@@ -53,3 +53,35 @@ def test_institution_and_source_consistency(tmp_path, monkeypatch):
     assert all(result_passed(result) for result in results)
     assert results[0].name.startswith("[ATTR009]")
     assert results[1].name.startswith("[ATTR010]")
+
+
+def test_missing_attributes_are_left_to_attr001_when_delegated(tmp_path):
+    with Dataset(tmp_path / "source.nc", "w") as dataset:
+        assert (
+            checker.check_institution_consistency(
+                dataset,
+                severity=BaseCheck.HIGH,
+                missing_attributes_delegated={"institution_id", "institution"},
+            )
+            == []
+        )
+        assert (
+            checker.check_source_consistency(
+                dataset,
+                severity=BaseCheck.HIGH,
+                missing_attributes_delegated={"source_id", "institution_id"},
+            )
+            == []
+        )
+
+
+def test_consistency_check_reports_only_unowned_missing_attribute(tmp_path):
+    with Dataset(tmp_path / "source.nc", "w") as dataset:
+        result = checker.check_institution_consistency(
+            dataset,
+            severity=BaseCheck.HIGH,
+            missing_attributes_delegated={"institution_id"},
+        )[0]
+
+    assert "'institution'" in result.msgs[0]
+    assert "'institution_id'" not in result.msgs[0]

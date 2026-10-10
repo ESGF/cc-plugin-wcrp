@@ -39,6 +39,7 @@ from checks.consistency_checks.check_experiment_consistency import (
     check_experiment_id_vs_experiment,
     check_experiment_id_vs_parent_experiment_id,
     check_experiment_id_vs_sub_experiment_id,
+    check_experiment_consistency_group,
 )
 from checks.consistency_checks.check_institution_source_consistency import (
     check_institution_consistency,
@@ -49,6 +50,7 @@ from checks.consistency_checks.check_variant_label_consistency import (
     check_variant_vs_initialization_index,
     check_variant_vs_physics_index,
     check_variant_vs_forcing_index,
+    check_variant_label_consistency_group,
 )
 
 try:
@@ -68,7 +70,6 @@ from checks.dimension_checks.check_dimension_existence import check_dimension_ex
 from checks.dimension_checks.check_dimension_positive import check_dimension_positive
 
 from checks.time_checks.check_time_squareness import check_time_squareness
-import checks.time_checks.check_time_squareness as time_squareness_mod
 from checks.time_checks.check_time_bounds import check_time_bounds
 from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from checks.variable_checks.check_coordinate_monotonicity import (
@@ -234,9 +235,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
 
     def _install_time_increment_mapping(self, ds: Dataset) -> None:
         """
-        Inject TOML mapping into check_time_squareness.FREQ_INC.
-
-
+        Store the configured time increments on this checker instance.
         """
         mapping: Dict[tuple, tuple] = {}
 
@@ -278,8 +277,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 if none_key in mapping:
                     mapping[key] = mapping[none_key]
 
-        if mapping:
-            time_squareness_mod.FREQ_INC = mapping
+        self._time_increment_mapping = mapping
 
     def setup(self, ds):
         super().setup(ds)
@@ -571,9 +569,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return check_internal_packing(
                 ds,
                 severity=self.get_severity(rule.data.severity),
-                min_chunk_size_bytes=(
-                    rule.data.min_chunk_size_bytes or 4 * (2**20)
-                ),
+                min_chunk_size_bytes=(rule.data.min_chunk_size_bytes or 4 * (2**20)),
                 frequency=self.frequency,
                 frequency_min_timesteps=rule.data.frequency_min_timesteps,
                 run_metadata=False,
@@ -600,19 +596,34 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return res
 
         drs = self.config.drs
+        directory_structure_owner = self._drs_directory_structure_owner(drs)
         if drs.filename:
             sev = self.get_severity(drs.filename.severity)
             res.extend(check_drs_filename(ds, sev, project_id=self.project_name))
 
         if drs.directory:
             sev = self.get_severity(drs.directory.severity)
-            res.extend(check_drs_directory(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_drs_directory(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "directory"
+                    ),
+                )
+            )
 
         if drs.attributes_vs_directory:
             sev = self.get_severity(drs.attributes_vs_directory.severity)
             res.extend(
                 check_attributes_match_directory_structure(
-                    ds, sev, project_id=self.project_name
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "attributes_vs_directory"
+                    ),
                 )
             )
 
@@ -620,7 +631,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             sev = self.get_severity(drs.filename_vs_directory.severity)
             res.extend(
                 check_filename_matches_directory_structure(
-                    ds, sev, project_id=self.project_name
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "filename_vs_directory"
+                    ),
                 )
             )
 
@@ -736,81 +752,121 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         if c.filename_vs_attributes:
             sev = self.get_severity(c.filename_vs_attributes.severity)
             res.extend(
-                check_filename_vs_global_attrs(ds, sev, project_id=self.project_name)
+                check_filename_vs_global_attrs(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    filename_structure_delegated=bool(
+                        self.config.drs and self.config.drs.filename
+                    ),
+                )
             )
 
         # --- Experiment consistency (atomic ATTR007a-c ; no sub in CMIP7) ---
-        if c.experiment_id_vs_activity_id:
-            sev = self.get_severity(c.experiment_id_vs_activity_id.severity)
-            res.extend(
-                check_experiment_id_vs_activity_id(
-                    ds, sev, project_id=self.project_name
-                )
+        experiment_checks = [
+            (rule, check, attribute)
+            for rule, check, attribute in (
+                (
+                    c.experiment_id_vs_activity_id,
+                    check_experiment_id_vs_activity_id,
+                    "activity_id",
+                ),
+                (
+                    c.experiment_id_vs_experiment,
+                    check_experiment_id_vs_experiment,
+                    "experiment",
+                ),
+                (
+                    c.experiment_id_vs_parent_experiment_id,
+                    check_experiment_id_vs_parent_experiment_id,
+                    "parent_experiment_id",
+                ),
+                (
+                    c.experiment_id_vs_sub_experiment_id,
+                    check_experiment_id_vs_sub_experiment_id,
+                    "sub_experiment_id",
+                ),
             )
-
-        if c.experiment_id_vs_experiment:
-            sev = self.get_severity(c.experiment_id_vs_experiment.severity)
-            res.extend(
-                check_experiment_id_vs_experiment(ds, sev, project_id=self.project_name)
+            if rule
+        ]
+        res.extend(
+            check_experiment_consistency_group(
+                ds,
+                self.project_name,
+                [
+                    (
+                        check,
+                        self.get_severity(rule.severity),
+                        {
+                            "report_missing": not self._global_attribute_rule_enabled(
+                                attribute
+                            )
+                        },
+                    )
+                    for rule, check, attribute in experiment_checks
+                ],
             )
-
-        if c.experiment_id_vs_parent_experiment_id:
-            sev = self.get_severity(c.experiment_id_vs_parent_experiment_id.severity)
-            res.extend(
-                check_experiment_id_vs_parent_experiment_id(
-                    ds,
-                    sev,
-                    project_id=self.project_name,
-                    report_missing=not self._global_attribute_rule_enabled(
-                        "parent_experiment_id"
-                    ),
-                )
-            )
-
-        # sub_experiment_id has no meaning in CMIP7; the key is absent from its
-        # TOML, so this simply never runs. Kept for symmetry / robustness.
-        if c.experiment_id_vs_sub_experiment_id:
-            sev = self.get_severity(c.experiment_id_vs_sub_experiment_id.severity)
-            res.extend(
-                check_experiment_id_vs_sub_experiment_id(
-                    ds,
-                    sev,
-                    project_id=self.project_name,
-                    report_missing=not self._global_attribute_rule_enabled(
-                        "sub_experiment_id"
-                    ),
-                )
-            )
+        )
 
         # --- Institution / source ---
         if c.institution_id_vs_institution:
             sev = self.get_severity(c.institution_id_vs_institution.severity)
             res.extend(
-                check_institution_consistency(ds, sev, project_id=self.project_name)
+                check_institution_consistency(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    missing_attributes_delegated={
+                        name
+                        for name in ("institution_id", "institution")
+                        if self._global_attribute_rule_enabled(name)
+                    },
+                )
             )
 
         if c.source_id_vs_institution_id:
             sev = self.get_severity(c.source_id_vs_institution_id.severity)
-            res.extend(check_source_consistency(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_source_consistency(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    missing_attributes_delegated={
+                        name
+                        for name in ("source_id", "institution_id")
+                        if self._global_attribute_rule_enabled(name)
+                    },
+                )
+            )
 
         # --- Frequency vs table: not part of CMIP7 (no such key in its TOML) ---
 
         # --- Variant label consistency (atomic ATTR006a-d) ---
-        if c.variant_label_vs_realization_index:
-            sev = self.get_severity(c.variant_label_vs_realization_index.severity)
-            res.extend(check_variant_vs_realization_index(ds, sev))
-
-        if c.variant_label_vs_initialization_index:
-            sev = self.get_severity(c.variant_label_vs_initialization_index.severity)
-            res.extend(check_variant_vs_initialization_index(ds, sev))
-
-        if c.variant_label_vs_physics_index:
-            sev = self.get_severity(c.variant_label_vs_physics_index.severity)
-            res.extend(check_variant_vs_physics_index(ds, sev))
-
-        if c.variant_label_vs_forcing_index:
-            sev = self.get_severity(c.variant_label_vs_forcing_index.severity)
-            res.extend(check_variant_vs_forcing_index(ds, sev))
+        variant_checks = [
+            (rule, check)
+            for rule, check in (
+                (
+                    c.variant_label_vs_realization_index,
+                    check_variant_vs_realization_index,
+                ),
+                (
+                    c.variant_label_vs_initialization_index,
+                    check_variant_vs_initialization_index,
+                ),
+                (c.variant_label_vs_physics_index, check_variant_vs_physics_index),
+                (c.variant_label_vs_forcing_index, check_variant_vs_forcing_index),
+            )
+            if rule
+        ]
+        res.extend(
+            check_variant_label_consistency_group(
+                ds,
+                [
+                    (check, self.get_severity(rule.severity))
+                    for rule, check in variant_checks
+                ],
+            )
+        )
 
         return res
 
@@ -958,6 +1014,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         coordinate_identity_enabled = bool(
             coords_cfg.registry and coords_cfg.registry.identity
         )
+        coordinate_attributes_enabled = bool(
+            coords_cfg.registry and coords_cfg.registry.attributes
+        )
+        time_squareness_enabled = any(
+            rule.squareness for rule in (coords_cfg.variables or {}).values()
+        )
         time_coordinate_names = {
             str(entry.get("out_name") or identifier)
             for identifier, entry in self._coordinate_entries_for_axis("T")
@@ -1015,6 +1077,14 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                             report_structural_prerequisites=(
                                 not coordinate_identity_enabled
                             ),
+                            report_units_prerequisite=(
+                                not coordinate_attributes_enabled
+                            ),
+                            report_bounds_prerequisites=(not coordinate_bounds_enabled),
+                            increment_mapping=self._time_increment_mapping,
+                            filename_structure_delegated=bool(
+                                self.config.drs and self.config.drs.filename
+                            ),
                         )
                     )
 
@@ -1068,6 +1138,20 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                         else False
                     ),
                     report_climatology_mismatch=not coordinate_bounds_enabled,
+                    report_time_structure_prerequisite=(
+                        not coordinate_identity_enabled
+                    ),
+                    report_time_units_prerequisite=not (
+                        coordinate_attributes_enabled or time_squareness_enabled
+                    ),
+                    report_time_values_prerequisite=(not time_squareness_enabled),
+                    report_climatology_bounds_prerequisite=not (
+                        coordinate_bounds_enabled or time_squareness_enabled
+                    ),
+                    report_frequency_prerequisite=(not time_squareness_enabled),
+                    filename_structure_delegated=bool(
+                        self.config.drs and self.config.drs.filename
+                    ),
                 )
             )
 

@@ -20,7 +20,7 @@ from checks.attribute_checks.check_global_attributes_esgvoc import (
     get_global_attribute_names,
     get_global_attribute_validator,
 )
-from checks.utils import infer_frequency, sanitize
+from checks.utils import infer_frequency, sanitize, severity_ordered
 
 # Compliance Checker 6 moved these helpers from compliance_checker.cfutil.
 if not hasattr(cfutil, "get_geophysical_variables"):
@@ -76,15 +76,17 @@ class WCRPBaseCheck(BaseCheck):
         self.config = None
         self.project_config_path = None  # To be set by the specific WCRP plugin class
         self._esgvoc_project_setup_error = None
+        # Time increments are project configuration, not process-global state.
+        # Keeping them on the checker prevents one plugin setup changing the
+        # behaviour of another plugin in the same compliance-checker process.
+        self._time_increment_mapping = {}
 
     def _initialize_esgvoc_project_specs(self):
         """Verify once per process that ESGVoc can read the active project DB."""
         project_id = getattr(self, "project_name", None)
         cache_key = (project_id, ev)
         if cache_key in _ESGVOC_PROJECT_SETUP_ERRORS:
-            self._esgvoc_project_setup_error = _ESGVOC_PROJECT_SETUP_ERRORS[
-                cache_key
-            ]
+            self._esgvoc_project_setup_error = _ESGVOC_PROJECT_SETUP_ERRORS[cache_key]
             return
 
         if not ESG_VOCAB_AVAILABLE or ev is None:
@@ -326,6 +328,30 @@ class WCRPBaseCheck(BaseCheck):
             if configured_name == attribute_name:
                 return True
         return False
+
+    def _drs_directory_structure_owner(self, drs):
+        """Select one enabled owner for an unusable DRS directory structure."""
+        candidates = [
+            (name, rule)
+            for name, rule in (
+                ("directory", getattr(drs, "directory", None)),
+                (
+                    "attributes_vs_directory",
+                    getattr(drs, "attributes_vs_directory", None),
+                ),
+                (
+                    "filename_vs_directory",
+                    getattr(drs, "filename_vs_directory", None),
+                ),
+            )
+            if rule is not None
+        ]
+        if not candidates:
+            return None
+        return severity_ordered(
+            candidates,
+            severity=lambda candidate: self.get_severity(candidate[1].severity),
+        )[0][0]
 
     def _check_global_attributes(self, dataset):
         """Run ESGVoc validation, then TOML rules absent from ESGVoc."""
@@ -662,8 +688,7 @@ class WCRPBaseCheck(BaseCheck):
             output_path.write_text(serialized, encoding="utf-8")
         except Exception as exc:
             self._record_consistency_output_error(
-                f"Could not write the requested consistency summary to "
-                f"'{output_path}'",
+                f"Could not write the requested consistency summary to '{output_path}'",
                 exc,
             )
             return False

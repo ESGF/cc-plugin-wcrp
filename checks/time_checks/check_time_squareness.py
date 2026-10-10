@@ -122,7 +122,9 @@ def _is_instantaneous(ds, target_var: str | None, freq_id: str) -> bool:
     return True
 
 
-def _expected_time_sampling(cell_methods, freq_id: str) -> tuple[bool | None, str | None]:
+def _expected_time_sampling(
+    cell_methods, freq_id: str
+) -> tuple[bool | None, str | None]:
     """Derive one point/interval interpretation from all permitted values."""
     if isinstance(cell_methods, str):
         allowed = [cell_methods]
@@ -325,13 +327,24 @@ def _parse_freq_token(token: str):
     return None
 
 
-def _resolve_increment(table_id: str, freq_id: str, fallback_freq: dict | None):
+def _resolve_increment(
+    table_id: str,
+    freq_id: str,
+    fallback_freq: dict | None,
+    increment_mapping: dict | None = None,
+):
     """
     Resolution order:
-      1) local nctime mapping: (table_id, freq_id)
-      2) local nctime mapping: ('None', freq_id)
-      3) TOML fallback: frequency[freq_id] -> token -> (val, unit)
+      1) project-local mapping supplied by the checker instance
+      2) built-in nctime mapping: (table_id, freq_id)
+      3) built-in nctime mapping: ('None', freq_id)
+      4) TOML fallback: frequency[freq_id] -> token -> (val, unit)
     """
+    if increment_mapping:
+        if (table_id, freq_id) in increment_mapping:
+            return increment_mapping[(table_id, freq_id)]
+        if ("None", freq_id) in increment_mapping:
+            return increment_mapping[("None", freq_id)]
     if (table_id, freq_id) in FREQ_INC:
         return FREQ_INC[(table_id, freq_id)]
     if ("None", freq_id) in FREQ_INC:
@@ -349,6 +362,10 @@ def check_time_squareness(
     frequency=None,
     expected_cell_methods=_USE_FILE_CELL_METHODS,
     report_structural_prerequisites=False,
+    report_units_prerequisite=True,
+    report_bounds_prerequisites=True,
+    increment_mapping=None,
+    filename_structure_delegated=False,
 ):
     """
     TIME001: Time axis check for a single file.
@@ -392,7 +409,23 @@ def check_time_squareness(
         )
 
     if not units:
+        if not report_units_prerequisite:
+            return []
         ctx.add_failure("Missing time.units; cannot rebuild theoretical axis.")
+        return [ctx.to_result()]
+
+    try:
+        # Validate the encoding independently of the file's potentially very
+        # large numerical dates.  Value zero is sufficient to validate units
+        # syntax and the calendar without imposing a datetime range limit.
+        cftime.num2date(0.0, units=units, calendar=cal)
+    except Exception as exc:
+        if not report_units_prerequisite:
+            return []
+        ctx.add_failure(
+            f"Invalid time units or calendar; TIME001 cannot rebuild the axis. "
+            f"Technical reason: {type(exc).__name__}: {exc}"
+        )
         return [ctx.to_result()]
 
     raw_time = np.ma.asarray(time_var[:])
@@ -408,6 +441,33 @@ def check_time_squareness(
         return [ctx.to_result()]
 
     is_climatology = bool(getattr(time_var, "climatology", "") or "")
+    declared_name = str(
+        getattr(time_var, "climatology", "") or getattr(time_var, "bounds", "") or ""
+    )
+    if declared_name:
+        bounds_var = ds.variables.get(declared_name)
+        bounds_error = None
+        if bounds_var is None:
+            bounds_error = f"referenced variable {declared_name!r} is absent"
+        elif (
+            bounds_var.ndim != 2
+            or bounds_var.shape != (time_var.shape[0], 2)
+            or bounds_var.dimensions[0] != time_var.dimensions[0]
+        ):
+            bounds_error = (
+                f"{declared_name!r} must have dimensions "
+                f"({time_var.dimensions[0]!r}, <size-2>); found "
+                f"{list(bounds_var.dimensions)} with shape {bounds_var.shape}"
+            )
+        if bounds_error:
+            if not report_bounds_prerequisites:
+                return []
+            ctx.add_failure(
+                f"The declared time bounds are structurally invalid: {bounds_error}. "
+                "TIME001 could not evaluate their spacing or midpoint placement."
+            )
+            return [ctx.to_result()]
+
     midpoint_checked, declared_bounds = _check_declared_bounds_midpoints(
         ctx,
         ds,
@@ -430,7 +490,12 @@ def check_time_squareness(
         return [ctx.to_result()]
 
     table_id = _resolve_table_id(ds)
-    inc = _resolve_increment(table_id, freq_id, frequency or {})
+    inc = _resolve_increment(
+        table_id,
+        freq_id,
+        frequency or {},
+        increment_mapping=increment_mapping,
+    )
     if not inc:
         ctx.add_failure(
             f"Cannot resolve increment for (table_id={table_id}, frequency={freq_id})."
@@ -448,6 +513,10 @@ def check_time_squareness(
     # Start boundary from filename
     start_tuple = _parse_filename_start(_get_ds_path(ds))
     if not start_tuple:
+        if filename_structure_delegated:
+            # Midpoint validation above is independent of the filename. Keep
+            # any such finding while leaving only the parsing failure to FILE001.
+            return [ctx.to_result()] if ctx.messages else []
         ctx.add_failure("Cannot parse filename time range start (_YYYY..-YYYY..nc).")
         return [ctx.to_result()]
 
@@ -466,9 +535,7 @@ def check_time_squareness(
     if expected_cell_methods is _USE_FILE_CELL_METHODS:
         instantaneous = _is_instantaneous(ds, target, freq_id)
     else:
-        instantaneous, reason = _expected_time_sampling(
-            expected_cell_methods, freq_id
-        )
+        instantaneous, reason = _expected_time_sampling(expected_cell_methods, freq_id)
         if instantaneous is None:
             ctx.add_failure(
                 "TIME001 cannot determine the required time sampling because "
@@ -534,11 +601,7 @@ def check_time_squareness(
                 nxt = add_time_increment(cur, inc_val, inc_unit, cal)
                 cur_num = float(cftime.date2num(cur, units=units, calendar=cal))
                 nxt_num = float(cftime.date2num(nxt, units=units, calendar=cal))
-                theo[i] = (
-                    0.5 * (cur_num + nxt_num)
-                    if use_midpoint
-                    else cur_num
-                )
+                theo[i] = 0.5 * (cur_num + nxt_num) if use_midpoint else cur_num
                 if bounds_available:
                     theo_bounds[i] = (cur_num, nxt_num)
                 cur = nxt

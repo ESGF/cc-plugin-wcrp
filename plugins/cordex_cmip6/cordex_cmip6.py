@@ -70,7 +70,6 @@ from checks.time_checks.check_time_range_vs_filename import (
     check_time_range_vs_filename,
 )
 from checks.time_checks.check_time_squareness import check_time_squareness
-import checks.time_checks.check_time_squareness as time_squareness_mod
 from checks.utils import retrieve
 from checks.variable_checks.check_coordinate_monotonicity import (
     check_coordinate_monotonicity,
@@ -248,13 +247,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 self._record_setup_warning(
                     f"Could not interpret time-increment mapping for {key!r}", exc
                 )
-        if mapping:
-            # Preserve shared defaults for frequencies CORDEX does not override.
-            # Replacing the process-global table would affect other project
-            # checkers and later files in the same compliance-checker process.
-            combined = dict(time_squareness_mod.FREQ_INC)
-            combined.update(mapping)
-            time_squareness_mod.FREQ_INC = combined
+        self._time_increment_mapping = mapping
 
     def _load_cmor_tables(self):
         if getattr(self, "CT", None):
@@ -581,9 +574,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             return check_internal_packing(
                 ds,
                 severity=self.get_severity(rule.data.severity),
-                min_chunk_size_bytes=(
-                    rule.data.min_chunk_size_bytes or 4 * (2**20)
-                ),
+                min_chunk_size_bytes=(rule.data.min_chunk_size_bytes or 4 * (2**20)),
                 frequency=self.frequency,
                 frequency_min_timesteps=rule.data.frequency_min_timesteps,
                 run_metadata=False,
@@ -603,6 +594,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         if not self.config or not self.config.drs:
             return results
         drs = self.config.drs
+        directory_structure_owner = self._drs_directory_structure_owner(drs)
         if drs.filename:
             results.extend(
                 check_drs_filename(
@@ -617,6 +609,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     ds,
                     self.get_severity(drs.directory.severity),
                     project_id=self.project_name,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "directory"
+                    ),
                 )
             )
         if drs.attributes_vs_directory:
@@ -627,6 +622,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     project_id=self.project_name,
                     dir_template_keys=drs.directory_template_keys or None,
                     filename_template_keys=drs.filename_template_keys or None,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "attributes_vs_directory"
+                    ),
                 )
             )
         if drs.filename_vs_directory:
@@ -637,6 +635,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     project_id=self.project_name,
                     dir_template_keys=drs.directory_template_keys or None,
                     filename_template_keys=drs.filename_template_keys or None,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "filename_vs_directory"
+                    ),
                 )
             )
         return results
@@ -728,6 +729,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     ds,
                     self.get_severity(rule.severity),
                     project_id=self.project_name,
+                    filename_structure_delegated=bool(
+                        self.config.drs and self.config.drs.filename
+                    ),
                 )
             )
 
@@ -876,12 +880,18 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         if not self.config or not self.config.coordinates:
             return results
         coordinate_bounds_enabled = bool(
-            self.config.coordinates.registry
-            and self.config.coordinates.registry.bounds
+            self.config.coordinates.registry and self.config.coordinates.registry.bounds
         )
         coordinate_identity_enabled = bool(
             self.config.coordinates.registry
             and self.config.coordinates.registry.identity
+        )
+        coordinate_attributes_enabled = bool(
+            self.config.coordinates.registry
+            and self.config.coordinates.registry.attributes
+        )
+        time_squareness_enabled = any(
+            rule.squareness for rule in self.config.coordinates.variables.values()
         )
         for key, rule in self.config.coordinates.variables.items():
             name = str(rule.name.variable_name if rule.name else key)
@@ -917,6 +927,14 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                             report_structural_prerequisites=(
                                 not coordinate_identity_enabled
                             ),
+                            increment_mapping=self._time_increment_mapping,
+                            report_units_prerequisite=(
+                                not coordinate_attributes_enabled
+                            ),
+                            report_bounds_prerequisites=(not coordinate_bounds_enabled),
+                            filename_structure_delegated=bool(
+                                self.config.drs and self.config.drs.filename
+                            ),
                         )
                     )
             if rule.calendar_recommendation:
@@ -948,9 +966,8 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 )
         time_entries = self._coordinate_entries_for_axis("T")
         is_fixed = str(getattr(ds, "frequency", "")).strip() == "fx"
-        if (
-            self._coordinate_catalog is not None
-            and (is_fixed or ("time" in ds.variables and len(time_entries) == 1))
+        if self._coordinate_catalog is not None and (
+            is_fixed or ("time" in ds.variables and len(time_entries) == 1)
         ):
             time_range = self.config.drs.time_range if self.config.drs else None
             results.extend(
@@ -971,6 +988,20 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                         else False
                     ),
                     report_climatology_mismatch=not coordinate_bounds_enabled,
+                    report_time_structure_prerequisite=(
+                        not coordinate_identity_enabled
+                    ),
+                    report_time_units_prerequisite=not (
+                        coordinate_attributes_enabled or time_squareness_enabled
+                    ),
+                    report_time_values_prerequisite=(not time_squareness_enabled),
+                    report_climatology_bounds_prerequisite=not (
+                        coordinate_bounds_enabled or time_squareness_enabled
+                    ),
+                    report_frequency_prerequisite=(not time_squareness_enabled),
+                    filename_structure_delegated=bool(
+                        self.config.drs and self.config.drs.filename
+                    ),
                 )
             )
         return results

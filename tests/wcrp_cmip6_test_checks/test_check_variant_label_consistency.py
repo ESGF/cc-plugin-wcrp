@@ -33,3 +33,40 @@ def test_atomic_variant_label_consistency_checks(cmip6_reference_dataset):
         "[ATTR006c]",
         "[ATTR006d]",
     ]
+
+
+def test_variant_group_reports_malformed_selector_once(tmp_path):
+    from netCDF4 import Dataset
+
+    with Dataset(tmp_path / "variant.nc", "w") as dataset:
+        dataset.variant_label = "not-a-variant"
+        results = checker.check_variant_label_consistency_group(
+            dataset,
+            [
+                (checker.check_variant_vs_realization_index, BaseCheck.HIGH),
+                (checker.check_variant_vs_initialization_index, BaseCheck.HIGH),
+                (checker.check_variant_vs_physics_index, BaseCheck.HIGH),
+                (checker.check_variant_vs_forcing_index, BaseCheck.HIGH),
+            ],
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[ATTR006a]")
+    assert "format of 'variant_label'" in results[0].msgs[0]
+
+
+def test_variant_group_uses_fixed_priority_between_enabled_checks(tmp_path):
+    from netCDF4 import Dataset
+
+    with Dataset(tmp_path / "variant.nc", "w") as dataset:
+        results = checker.check_variant_label_consistency_group(
+            dataset,
+            [
+                (checker.check_variant_vs_physics_index, BaseCheck.HIGH),
+                (checker.check_variant_vs_forcing_index, BaseCheck.HIGH),
+            ],
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[ATTR006c]")
+    assert "variant_label" in results[0].msgs[0]

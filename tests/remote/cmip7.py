@@ -13,18 +13,6 @@ from tests.remote.model import (
 _BASE_URL = "https://raw.githubusercontent.com/roocs/mini-esgf-data"
 _REVISION = "master"
 
-_TIME_SQUARENESS_FAILURE = ExpectedFailure(
-    name="[TIME001] Check Time Squareness ",
-    severity=3,
-    messages=("Cannot parse filename time range start",),
-)
-
-_TIME_RANGE_FAILURE = ExpectedFailure(
-    name="[TIME003] Check Time Range vs Filename",
-    severity=3,
-    messages=("No time range token found at the end of the filename",),
-)
-
 _FILENAME_FAILURE = ExpectedFailure(
     name="[FILE001] DRS Filename Vocabulary Check",
     severity=3,
@@ -84,9 +72,9 @@ CURVILINEAR_OCEAN = RemoteDataset(
         # The current development vocabulary permits -180..360 for grid
         # longitude and its vertices, so the real curvilinear grid passes.
         "check_Coordinate_Standard": ExpectedCheck(21),
-        "check_Coordinates": ExpectedCheck(
-            5, (_TIME_SQUARENESS_FAILURE, _TIME_RANGE_FAILURE)
-        ),
+        # FILE001 owns the malformed/missing filename time-range structure;
+        # TIME001 and TIME003 therefore do not repeat that failure here.
+        "check_Coordinates": ExpectedCheck(3),
         "check_DRS": ExpectedCheck(
             4,
             (

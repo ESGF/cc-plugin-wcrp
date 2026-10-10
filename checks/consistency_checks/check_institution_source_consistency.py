@@ -4,6 +4,7 @@ from compliance_checker.base import TestCtx
 
 try:
     import esgvoc.api as voc
+
     ESG_VOCAB_AVAILABLE = True
 except ImportError:
     ESG_VOCAB_AVAILABLE = False
@@ -25,7 +26,7 @@ CV_COLLECTION_MAP = {
     "cmip6plus": {
         "institution_id": "institution_id",
         "source_id": "source_id",
-    },  
+    },
 }
 
 
@@ -132,14 +133,34 @@ def check_id_attribute_consistency(
     return [ctx.to_result()]
 
 
-def check_institution_consistency(ds, severity, project_id="cmip6"):
+def check_institution_consistency(
+    ds, severity, project_id="cmip6", *, missing_attributes_delegated=()
+):
     """
     [ATTR009] Checks if the global attribute 'institution' is consistent with the
     'description' from the ESGF CV for the given 'institution_id'.
     """
     fixed_check_id = "ATTR009"
-    description = f"[{fixed_check_id}] Consistency: institution_id vs institution attribute"
+    description = (
+        f"[{fixed_check_id}] Consistency: institution_id vs institution attribute"
+    )
     ctx = TestCtx(severity, description)
+
+    missing = [
+        name for name in ("institution_id", "institution") if name not in ds.ncattrs()
+    ]
+    if missing:
+        unowned = [
+            name for name in missing if name not in set(missing_attributes_delegated)
+        ]
+        if not unowned:
+            return []
+        ctx.add_failure(
+            "Missing required global attribute(s) for this consistency check: "
+            + ", ".join(repr(name) for name in unowned)
+            + "."
+        )
+        return [ctx.to_result()]
 
     if not ESG_VOCAB_AVAILABLE:
         ctx.add_failure("The 'esgvoc' library is required but not installed.")
@@ -177,7 +198,10 @@ def check_institution_consistency(ds, severity, project_id="cmip6"):
         # Compare the file's 'institution' attribute with the CV description
         expected_description = getattr(reference_term, "description", None)
 
-        if expected_description and actual_institution == str(expected_description).strip():
+        if (
+            expected_description
+            and actual_institution == str(expected_description).strip()
+        ):
             ctx.add_pass()
         else:
             msg = (
@@ -197,7 +221,9 @@ def check_institution_consistency(ds, severity, project_id="cmip6"):
     return [ctx.to_result()]
 
 
-def check_source_consistency(ds, severity, project_id="cmip6"):
+def check_source_consistency(
+    ds, severity, project_id="cmip6", *, missing_attributes_delegated=()
+):
     """
     [ATTR010] Checks if the global attribute 'institution_id' is consistent with the
     'organisation_id' from the ESGF CV for the given 'source_id'.
@@ -205,6 +231,22 @@ def check_source_consistency(ds, severity, project_id="cmip6"):
     fixed_check_id = "ATTR010"
     description = f"[{fixed_check_id}] Consistency: source_id vs institution_id"
     ctx = TestCtx(severity, description)
+
+    missing = [
+        name for name in ("source_id", "institution_id") if name not in ds.ncattrs()
+    ]
+    if missing:
+        unowned = [
+            name for name in missing if name not in set(missing_attributes_delegated)
+        ]
+        if not unowned:
+            return []
+        ctx.add_failure(
+            "Missing required global attribute(s) for this consistency check: "
+            + ", ".join(repr(name) for name in unowned)
+            + "."
+        )
+        return [ctx.to_result()]
 
     if not ESG_VOCAB_AVAILABLE:
         ctx.add_failure("The 'esgvoc' library is required but not installed.")

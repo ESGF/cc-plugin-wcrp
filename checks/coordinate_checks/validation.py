@@ -16,8 +16,10 @@ from checks.coordinate_checks.utils import (
     requested_tolerance,
     values,
 )
-from checks.utils import severity_word as configured_severity_word
-
+from checks.utils import (
+    severity_ordered,
+    severity_word as configured_severity_word,
+)
 
 _LONGITUDE_PERIOD = 360.0
 
@@ -89,14 +91,21 @@ class Findings:
         issue: object | None = None,
         fallbacks=(),
     ) -> str | None:
-        """Report one unusable prerequisite through the first enabled owner.
+        """Report one unusable prerequisite through the best enabled owner.
 
-        ``owner`` remains preferred.  If it is disabled, an enabled dependent
-        family reports why it could not be evaluated.  ``issue`` deduplicates a
-        shared root cause when several dependent validators encounter it.
+        The highest configured severity wins.  The hard-coded hierarchy is a
+        stable tie-breaker.  ``issue`` deduplicates a shared root cause when
+        several dependent validators encounter it.
         """
         candidates = (owner, *fallbacks, *PREREQUISITE_FALLBACKS.get(owner, ()))
-        family = next((name for name in candidates if name in self.messages), None)
+        enabled = list(
+            dict.fromkeys(name for name in candidates if name in self.messages)
+        )
+        ordered = severity_ordered(
+            enabled,
+            severity=lambda name: self.severities[name],
+        )
+        family = ordered[0] if ordered else None
         if family is None:
             return None
         rendered = message(family) if callable(message) else message
@@ -109,7 +118,14 @@ class Findings:
 
     def add_blocked(self, families, message: str, *, issue: object) -> str | None:
         """Report a shared prerequisite failure through an enabled consumer."""
-        family = next((name for name in families if name in self.messages), None)
+        enabled = list(
+            dict.fromkeys(name for name in families if name in self.messages)
+        )
+        ordered = severity_ordered(
+            enabled,
+            severity=lambda name: self.severities[name],
+        )
+        family = ordered[0] if ordered else None
         if family is None or issue in self._reported_prerequisites:
             return family
         self._reported_prerequisites.add(issue)

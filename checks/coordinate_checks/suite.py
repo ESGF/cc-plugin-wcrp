@@ -4,16 +4,17 @@ from __future__ import annotations
 
 from compliance_checker.base import BaseCheck, TestCtx
 
-from checks.coordinate_checks.model import Catalog
-from checks.coordinate_checks.ordinary import validate_ordinary
 from checks.coordinate_checks.grid import (
     check_grid_cell_count,
     check_grid_label_recommendation,
     check_grid_mapping_consistency,
     validate_horizontal_grid,
 )
+from checks.coordinate_checks.model import Catalog
+from checks.coordinate_checks.ordinary import validate_ordinary
 from checks.coordinate_checks.utils import coordinate_type
 from checks.coordinate_checks.validation import Findings
+from checks.utils import severity_ordered
 
 
 _REGISTRY_FAMILIES = (
@@ -89,14 +90,29 @@ def coordinate_metadata_setup_result(
     if getattr(config, "drs", None) is not None:
         dependent_rules.append(config.drs.time_range)
 
-    if setup_rule is not None:
-        severity = get_severity(setup_rule.severity, "HIGH")
+    dependent_severities = [
+        get_severity(getattr(rule, "severity", None), "HIGH")
+        for rule in dependent_rules
+    ]
+    setup_severity = (
+        get_severity(setup_rule.severity, "HIGH")
+        if setup_rule is not None
+        else None
+    )
+
+    if error is not None or catalog is None:
+        # A setup failure represents every enabled metadata consumer which can
+        # no longer run; do not downgrade that root cause to COORD000's own
+        # configured reporting severity.
+        severity = max(
+            dependent_severities
+            + ([setup_severity] if setup_severity is not None else []),
+            default=BaseCheck.HIGH,
+        )
     else:
-        severities = [
-            get_severity(getattr(rule, "severity", None), "HIGH")
-            for rule in dependent_rules
-        ]
-        severity = max(severities, default=BaseCheck.HIGH)
+        severity = setup_severity or max(
+            dependent_severities, default=BaseCheck.HIGH
+        )
 
     if setup_rule is None and error is None and catalog is not None:
         # Disabling COORD000 suppresses its successful status result, not a
@@ -125,7 +141,7 @@ def coordinate_metadata_setup_result(
 
 
 def missing_configured_coordinate_result(name, rule, get_severity):
-    """Route a missing configured coordinate to its first enabled consumer."""
+    """Route a missing coordinate to its highest-severity enabled consumer."""
     candidates = []
     if rule.monotonicity is not None:
         candidates.append(
@@ -150,11 +166,14 @@ def missing_configured_coordinate_result(name, rule, get_severity):
                 f"'{attribute_rule.attribute_name or key}'"
             ),
         )
-        for key, attribute_rule in rule.attributes.items()
+        for key, attribute_rule in sorted(rule.attributes.items())
     )
     if not candidates:
         return []
-    selected, label = candidates[0]
+    selected, label = severity_ordered(
+        candidates,
+        severity=lambda candidate: get_severity(candidate[0].severity, "HIGH"),
+    )[0]
     ctx = TestCtx(get_severity(selected.severity, "HIGH"), label)
     ctx.add_failure(
         f"Coordinate variable '{name}' is missing, so this configured check "

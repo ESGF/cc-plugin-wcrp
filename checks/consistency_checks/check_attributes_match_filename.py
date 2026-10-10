@@ -120,7 +120,12 @@ def _parse_cordex_cmip6_filename(filename: str):
 
 
 def check_filename_vs_global_attrs(
-    ds, severity, project_id="cmip6", filename_template_keys=None
+    ds,
+    severity,
+    project_id="cmip6",
+    filename_template_keys=None,
+    *,
+    filename_structure_delegated=False,
 ):
     """
     [ATTR005] Consistency: Filename vs Global Attributes
@@ -144,6 +149,8 @@ def check_filename_vs_global_attrs(
     if project_id == "cmip7":
         facets = _parse_cmip7_filename(filename)
         if facets is None:
+            if filename_structure_delegated:
+                return []
             ctx.add_failure(
                 f"Could not perform check. Reason: Filename '{filename}' does not match expected CMIP7 token count (8 or 9 with time_range)."
             )
@@ -153,6 +160,8 @@ def check_filename_vs_global_attrs(
     elif project_id == "cordex-cmip6":
         facets = _parse_cordex_cmip6_filename(filename)
         if facets is None:
+            if filename_structure_delegated:
+                return []
             ctx.add_failure(
                 f"Could not perform check. Reason: Filename '{filename}' does not match expected CORDEX-CMIP6 token count (9 or 10 with time_range)."
             )
@@ -164,9 +173,9 @@ def check_filename_vs_global_attrs(
         facets, parse_error = _parse_filename_components(filename, parse_keys)
 
         if facets is None:
-            ctx.add_failure(
-                f"Could not perform check. Reason: {parse_error}"
-            )
+            if filename_structure_delegated:
+                return []
+            ctx.add_failure(f"Could not perform check. Reason: {parse_error}")
             return [ctx.to_result()]
         compare_keys = _FILENAME_KEYS_CMIP6_COMPARE
     else:

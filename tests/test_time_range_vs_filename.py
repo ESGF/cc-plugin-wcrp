@@ -9,6 +9,7 @@ from checks.time_checks.check_time_range_vs_filename import (
     _nearest_month_ending_label,
     check_time_range_vs_filename,
 )
+from checks.time_checks.check_time_squareness import check_time_squareness
 
 
 def _messages(result):
@@ -214,3 +215,122 @@ def test_time003_reports_both_numeric_and_decoded_endpoints(tmp_path):
     assert "first endpoint is" in found[0]
     assert "last endpoint is" in found[0]
     assert found[0].count("(decoded:") == 2
+
+
+def test_two_dimensional_time_has_one_structural_owner(tmp_path):
+    path = tmp_path / "tas_Amon_200001-200002.nc"
+    with Dataset(path, "w") as ds:
+        ds.frequency = "mon"
+        ds.createDimension("time", 2)
+        ds.createDimension("extra", 1)
+        time = ds.createVariable("time", "f8", ("time", "extra"))
+        time.units = "days since 2000-01-01"
+        time[:] = [[15.0], [45.0]]
+
+    with Dataset(path) as ds:
+        primary = check_time_squareness(ds, report_structural_prerequisites=True)
+        dependent = check_time_range_vs_filename(
+            ds, report_time_structure_prerequisite=False
+        )
+
+    assert len(primary) == 1
+    assert "not one-dimensional" in _messages(primary[0])[0]
+    assert dependent == []
+
+
+def test_invalid_time_units_do_not_cascade_into_time003(tmp_path):
+    path = tmp_path / "tas_Amon_200001-200002.nc"
+    with Dataset(path, "w") as ds:
+        ds.frequency = "mon"
+        ds.createDimension("time", 2)
+        time = ds.createVariable("time", "f8", ("time",))
+        time.units = "not a CF time unit"
+        time[:] = [0.0, 1.0]
+
+    with Dataset(path) as ds:
+        primary = check_time_squareness(ds)
+        dependent = check_time_range_vs_filename(
+            ds, report_time_units_prerequisite=False
+        )
+
+    assert len(primary) == 1
+    assert "Invalid time units or calendar" in _messages(primary[0])[0]
+    assert dependent == []
+
+
+def test_masked_coverage_endpoint_is_not_replaced_by_an_interior_value(tmp_path):
+    path = tmp_path / "tas_Amon_200001-200003.nc"
+    with Dataset(path, "w") as ds:
+        ds.frequency = "mon"
+        ds.createDimension("time", 3)
+        time = ds.createVariable("time", "f8", ("time",), fill_value=-999.0)
+        time.units = "days since 2000-01-01"
+        time[:] = [-999.0, 45.0, 75.0]
+
+    with Dataset(path) as ds:
+        result = check_time_range_vs_filename(ds)[0]
+
+    assert result.value[0] < result.value[1]
+    assert "first or last time value is missing" in _messages(result)[0]
+
+
+def test_malformed_climatology_bounds_can_be_owned_by_structural_check(tmp_path):
+    path = tmp_path / "tas_Amon_200001-201012.nc"
+    with Dataset(path, "w") as ds:
+        ds.frequency = "mon"
+        ds.createDimension("time", 2)
+        ds.createDimension("three", 3)
+        time = ds.createVariable("time", "f8", ("time",))
+        time.units = "days since 2000-01-01"
+        time.climatology = "climatology_bnds"
+        time[:] = [180.0, 3830.0]
+        ds.createVariable("climatology_bnds", "f8", ("time", "three"))[:] = 0.0
+
+    with Dataset(path) as ds:
+        assert (
+            check_time_range_vs_filename(
+                ds, report_climatology_bounds_prerequisite=False
+            )
+            == []
+        )
+        result = check_time_range_vs_filename(
+            ds, report_climatology_bounds_prerequisite=True
+        )[0]
+
+    assert "must have dimensions" in _messages(result)[0]
+
+
+def test_filename_precision_error_is_left_to_file001_when_configured(tmp_path):
+    path = tmp_path / "tas_Amon_2000-2000.nc"
+    _make_climatology_file(path, climatology_attribute=None)
+
+    with Dataset(path) as ds:
+        assert check_time_range_vs_filename(ds, filename_structure_delegated=True) == []
+
+
+def test_missing_filename_time_range_is_not_repeated_by_time001(tmp_path):
+    path = tmp_path / "tas_Amon.nc"
+    _make_climatology_file(path, climatology_attribute=None)
+
+    with Dataset(path) as ds:
+        assert check_time_squareness(ds, filename_structure_delegated=True) == []
+
+
+def test_unsupported_frequency_has_one_time_check_owner(tmp_path):
+    path = tmp_path / "tas_unknown_2000-2000.nc"
+    with Dataset(path, "w") as ds:
+        ds.frequency = "unknown"
+        ds.createDimension("time", 1)
+        time = ds.createVariable("time", "f8", ("time",))
+        time.units = "days since 2000-01-01"
+        time[:] = [0.0]
+
+    with Dataset(path) as ds:
+        primary = check_time_squareness(ds)
+        dependent = check_time_range_vs_filename(
+            ds, report_frequency_prerequisite=False
+        )
+
+    assert len(primary) == 1
+    assert "Cannot resolve increment" in _messages(primary[0])[0]
+    assert dependent == []

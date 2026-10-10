@@ -62,3 +62,50 @@ def test_experiment_consistency_reports_mismatch(tmp_path, monkeypatch):
     assert len(results) == 1
     assert not result_passed(results[0])
     assert "CV expects" in results[0].msgs[0]
+
+
+def test_experiment_group_reports_unresolved_selector_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(checker, "ESG_VOCAB_AVAILABLE", True)
+    monkeypatch.setattr(checker, "resolve_experiment_term", lambda *_args: None)
+    with Dataset(tmp_path / "experiment.nc", "w") as dataset:
+        dataset.experiment_id = "invalid"
+        dataset.activity_id = "CMIP"
+        dataset.experiment = "invalid"
+        dataset.parent_experiment_id = "none"
+        results = checker.check_experiment_consistency_group(
+            dataset,
+            "cmip6",
+            [
+                (
+                    checker.check_experiment_id_vs_activity_id,
+                    BaseCheck.HIGH,
+                    {"report_missing": True},
+                ),
+                (
+                    checker.check_experiment_id_vs_experiment,
+                    BaseCheck.HIGH,
+                    {"report_missing": True},
+                ),
+                (
+                    checker.check_experiment_id_vs_parent_experiment_id,
+                    BaseCheck.HIGH,
+                    {"report_missing": True},
+                ),
+            ],
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[ATTR007a]")
+    assert "Could not resolve experiment_id" in results[0].msgs[0]
+
+
+def test_missing_dependent_attribute_is_left_to_attribute_owner(tmp_path, monkeypatch):
+    _mock_experiment(monkeypatch)
+    with Dataset(tmp_path / "experiment.nc", "w") as dataset:
+        dataset.experiment_id = "historical"
+        assert (
+            checker.check_experiment_id_vs_activity_id(
+                dataset, BaseCheck.HIGH, report_missing=False
+            )
+            == []
+        )

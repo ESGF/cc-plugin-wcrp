@@ -18,6 +18,7 @@ import os
 import re
 from datetime import timedelta
 
+import numpy as np
 from compliance_checker.base import BaseCheck, TestCtx
 from netCDF4 import num2date
 
@@ -192,7 +193,9 @@ def _build_precision_map(precision_by_frequency=None):
     return mapping
 
 
-def _expected_precision_from_frequency(freq, is_climatology=False, precision_by_frequency=None):
+def _expected_precision_from_frequency(
+    freq, is_climatology=False, precision_by_frequency=None
+):
     """
     Return (label_format, token_length, tuple_length) expected for frequency.
 
@@ -303,13 +306,42 @@ def _coverage_from_climatology_bounds(ds):
     tvar = ds.variables["time"]
     bname = getattr(tvar, "climatology", None)
     if not bname or bname not in ds.variables:
-        return None, None, "Missing climatology bounds variable referenced by 'time:climatology'."
+        return (
+            None,
+            None,
+            "Missing climatology bounds variable referenced by 'time:climatology'.",
+        )
 
     try:
         bvar = ds.variables[bname]
+        if (
+            tvar.ndim != 1
+            or bvar.ndim != 2
+            or bvar.shape != (tvar.shape[0], 2)
+            or bvar.dimensions[0] != tvar.dimensions[0]
+        ):
+            return (
+                None,
+                None,
+                (
+                    f"Climatology bounds {bname!r} must have dimensions "
+                    f"({tvar.dimensions[0]!r}, <size-2>); found "
+                    f"{list(bvar.dimensions)} with shape {bvar.shape}."
+                ),
+            )
         units = tvar.units
         calendar = getattr(tvar, "calendar", "standard")
-        bvals = bvar[:]
+        bvals = np.ma.asarray(bvar[:])
+        endpoint_mask = np.ma.getmaskarray(bvals)
+        if endpoint_mask[0, 0] or endpoint_mask[-1, -1]:
+            return (
+                None,
+                None,
+                (
+                    f"The first or last coverage endpoint in climatology bounds "
+                    f"{bname!r} is missing."
+                ),
+            )
         start_dt = num2date(bvals[0, 0], units=units, calendar=calendar)
         end_dt = num2date(bvals[-1, -1], units=units, calendar=calendar)
         start_year, start_month = _nearest_month_beginning_label(start_dt)
@@ -329,11 +361,28 @@ def _coverage_from_time_coordinate(ds):
     tvar = ds.variables["time"]
 
     try:
-        tvals = tvar[:]
-        if hasattr(tvals, "compressed"):
-            tvals = tvals.compressed()
+        if tvar.ndim != 1:
+            return (
+                None,
+                None,
+                (
+                    f"The 'time' variable must be one-dimensional; found dimensions "
+                    f"{list(tvar.dimensions)}."
+                ),
+            )
+        tvals = np.ma.asarray(tvar[:])
         if tvals.size == 0:
             return None, None, "The 'time' variable is empty."
+        endpoint_mask = np.ma.getmaskarray(tvals)
+        if endpoint_mask[0] or endpoint_mask[-1]:
+            return (
+                None,
+                None,
+                (
+                    "The first or last time value is missing; filename coverage "
+                    "cannot be determined from an interior value."
+                ),
+            )
 
         units = tvar.units
         calendar = getattr(tvar, "calendar", "standard")
@@ -359,12 +408,12 @@ def _coverage_at_precision(ds, tuple_length, freq, is_climatology=False):
     if not is_climatology and freq in {"1hr", "3hr", "6hr", "subhr"}:
         try:
             tvar = ds.variables["time"]
-            tvals = tvar[:]
-            if hasattr(tvals, "compressed"):
-                tvals = tvals.compressed()
+            tvals = np.ma.asarray(tvar[:])
             units = tvar.units
             calendar = getattr(tvar, "calendar", "standard")
-            start_dt, end_dt = num2date([tvals[0], tvals[-1]], units=units, calendar=calendar)
+            start_dt, end_dt = num2date(
+                [tvals[0], tvals[-1]], units=units, calendar=calendar
+            )
             if freq in {"1hr", "3hr", "6hr"}:
                 start_dt = _round_datetime(start_dt, "minute")
                 end_dt = _round_datetime(end_dt, "minute")
@@ -387,9 +436,7 @@ def _coverage_endpoint_values(ds, is_climatology=False):
         bvals = ds.variables[bname][:]
         return bvals[0, 0], bvals[-1, -1]
 
-    tvals = tvar[:]
-    if hasattr(tvals, "compressed"):
-        tvals = tvals.compressed()
+    tvals = np.ma.asarray(tvar[:])
     return tvals[0], tvals[-1]
 
 
@@ -406,6 +453,12 @@ def check_time_range_vs_filename(
     climatology_suffix="",
     expected_is_climatology=None,
     report_climatology_mismatch=True,
+    report_time_structure_prerequisite=True,
+    report_time_units_prerequisite=True,
+    report_time_values_prerequisite=True,
+    report_climatology_bounds_prerequisite=True,
+    report_frequency_prerequisite=True,
+    filename_structure_delegated=False,
 ):
     """
     [TIME003] Compare filename time range with actual data coverage.
@@ -422,8 +475,42 @@ def check_time_range_vs_filename(
     except AttributeError:
         freq = ""
 
-    if freq == "fx" or "time" not in ds.variables:
+    if freq == "fx":
         ctx.add_pass()
+        return [ctx.to_result()]
+    if "time" not in ds.variables:
+        if not report_time_structure_prerequisite:
+            return []
+        ctx.add_failure(
+            "Coordinate variable 'time' is missing, so TIME003 could not be evaluated."
+        )
+        return [ctx.to_result()]
+
+    time_var = ds.variables["time"]
+    if time_var.ndim != 1:
+        if not report_time_structure_prerequisite:
+            return []
+        ctx.add_failure(
+            "Coordinate variable 'time' is not one-dimensional, so TIME003 "
+            f"could not be evaluated; found dimensions {list(time_var.dimensions)}."
+        )
+        return [ctx.to_result()]
+    units = str(getattr(time_var, "units", "") or "").strip()
+    calendar = str(getattr(time_var, "calendar", "standard") or "standard")
+    if not units:
+        if not report_time_units_prerequisite:
+            return []
+        ctx.add_failure("Missing time.units; TIME003 cannot decode coverage endpoints.")
+        return [ctx.to_result()]
+    try:
+        num2date(0.0, units=units, calendar=calendar)
+    except Exception as exc:
+        if not report_time_units_prerequisite:
+            return []
+        ctx.add_failure(
+            "Invalid time units or calendar; TIME003 cannot decode coverage "
+            f"endpoints. Technical reason: {type(exc).__name__}: {exc}"
+        )
         return [ctx.to_result()]
 
     file_is_climatology = _infer_is_climatology(ds)
@@ -432,10 +519,7 @@ def check_time_range_vs_filename(
         if expected_is_climatology is None
         else bool(expected_is_climatology)
     )
-    if (
-        expected_is_climatology is not None
-        and file_is_climatology != is_climatology
-    ):
+    if expected_is_climatology is not None and file_is_climatology != is_climatology:
         if not report_climatology_mismatch:
             return []
         if is_climatology:
@@ -456,6 +540,8 @@ def check_time_range_vs_filename(
         precision_by_frequency=precision_by_frequency,
     )
     if expected_precision is None:
+        if not report_frequency_prerequisite:
+            return []
         ctx.add_failure(f"Unsupported frequency for time range precision: '{freq}'.")
         return [ctx.to_result()]
 
@@ -474,6 +560,8 @@ def check_time_range_vs_filename(
         if esgvoc_ok is True:
             ctx.add_pass()
             return [ctx.to_result()]
+        if filename_structure_delegated:
+            return []
         ctx.add_failure(
             "No time range token found at the end of the filename "
             "(expected a trailing '_<start>-<end>' segment)."
@@ -484,7 +572,9 @@ def check_time_range_vs_filename(
     expected_suffix = str(climatology_suffix or "") if is_climatology else ""
     if actual_suffix != expected_suffix:
         if is_climatology:
-            expected_description = repr(expected_suffix) if expected_suffix else "no suffix"
+            expected_description = (
+                repr(expected_suffix) if expected_suffix else "no suffix"
+            )
             found_description = repr(actual_suffix) if actual_suffix else "no suffix"
             ctx.add_failure(
                 "Climatology filename time-range suffix mismatch: expected "
@@ -501,6 +591,8 @@ def check_time_range_vs_filename(
         return [ctx.to_result()]
 
     if len(start_str) != expected_len or len(end_str) != expected_len:
+        if filename_structure_delegated:
+            return []
         ctx.add_failure(
             f"Time range precision mismatch for frequency '{freq}': "
             f"expected {expected_len}-digit labels but got '{start_str}-{end_str}'."
@@ -511,6 +603,8 @@ def check_time_range_vs_filename(
         expected_start = _fields_from_datestr(start_str)
         expected_end = _fields_from_datestr(end_str)
     except Exception as e:
+        if filename_structure_delegated:
+            return []
         ctx.add_failure(f"Error parsing time range from filename: {e}")
         return [ctx.to_result()]
 
@@ -521,6 +615,14 @@ def check_time_range_vs_filename(
         is_climatology=is_climatology,
     )
     if err:
+        if "one-dimensional" in err and not report_time_structure_prerequisite:
+            return []
+        if "first or last time value" in err and not report_time_values_prerequisite:
+            return []
+        if (
+            "Climatology bounds" in err or "climatology bounds" in err
+        ) and not report_climatology_bounds_prerequisite:
+            return []
         ctx.add_failure(err)
         return [ctx.to_result()]
 

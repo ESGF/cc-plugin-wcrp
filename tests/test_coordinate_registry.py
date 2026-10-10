@@ -1246,7 +1246,7 @@ def test_bounds_dimension_name_is_a_configurable_recommendation(nc):
 
 def test_identity_message_wording_follows_configured_severity(nc):
     entry = coordinate("depth", "standard_1d", "depth")
-    severities = {**FAMILIES, "identity": BaseCheck.MEDIUM}
+    severities = {"identity": BaseCheck.MEDIUM}
 
     result = check_coordinate_catalog(
         nc,
@@ -1833,7 +1833,7 @@ def _cell_count_results(
     )
 
 
-def test_missing_registered_grid_cell_count_is_informational(nc):
+def test_missing_registered_grid_cell_count_uses_consistency_severity(nc):
     _rectilinear_cell_count_file(nc)
 
     results = _cell_count_results(nc, {"id": "g100", "n_cells": None})
@@ -1845,9 +1845,10 @@ def test_missing_registered_grid_cell_count_is_informational(nc):
         result for result in results if result.name.endswith("grid cell count")
     )
     assert availability.weight == BaseCheck.LOW
-    assert availability.value == (0, 1)
-    assert "does not define n_cells" in availability.msgs[0]
-    assert consistency.value == (1, 1)
+    assert availability.value == (1, 1)
+    assert consistency.weight == BaseCheck.MEDIUM
+    assert consistency.value == (0, 1)
+    assert "does not define n_cells" in consistency.msgs[0]
 
 
 @pytest.mark.parametrize(("registered", "passes"), [(6, True), (12, False)])

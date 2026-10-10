@@ -16,7 +16,17 @@ CMIP6 stores indices as numeric ("1"/1). CMIP7 stores them prefixed
 """
 
 import re
+
 from compliance_checker.base import TestCtx
+
+from checks.utils import severity_ordered
+
+_SELECTOR_OWNER_PRIORITY = {
+    "check_variant_vs_realization_index": 0,
+    "check_variant_vs_initialization_index": 1,
+    "check_variant_vs_physics_index": 2,
+    "check_variant_vs_forcing_index": 3,
+}
 
 
 def _is_cmip7(ds) -> bool:
@@ -42,7 +52,7 @@ def _to_int_index(attr_value, prefix: str, is_cmip7: bool):
     if not s:
         return None
     if is_cmip7 and s.lower().startswith(prefix.lower()):
-        s = s[len(prefix):].strip()
+        s = s[len(prefix) :].strip()
     try:
         return int(s)
     except Exception:
@@ -71,12 +81,16 @@ def _parsed_variant_indices(ds):
     }, None
 
 
-def _check_one_index(ds, severity, check_id, index_name, prefix):
+def _check_one_index(
+    ds, severity, check_id, index_name, prefix, *, report_selector_error=True
+):
     label = f"Consistency: variant_label vs {index_name}"
     ctx = TestCtx(severity, f"[{check_id}] {label}")
 
     parsed, err = _parsed_variant_indices(ds)
     if err:
+        if not report_selector_error:
+            return []
         ctx.add_failure(err)
         return [ctx.to_result()]
 
@@ -105,17 +119,68 @@ def _check_one_index(ds, severity, check_id, index_name, prefix):
     return [ctx.to_result()]
 
 
-def check_variant_vs_realization_index(ds, severity):
-    return _check_one_index(ds, severity, "ATTR006a", "realization_index", "r")
+def check_variant_vs_realization_index(ds, severity, *, report_selector_error=True):
+    return _check_one_index(
+        ds,
+        severity,
+        "ATTR006a",
+        "realization_index",
+        "r",
+        report_selector_error=report_selector_error,
+    )
 
 
-def check_variant_vs_initialization_index(ds, severity):
-    return _check_one_index(ds, severity, "ATTR006b", "initialization_index", "i")
+def check_variant_vs_initialization_index(ds, severity, *, report_selector_error=True):
+    return _check_one_index(
+        ds,
+        severity,
+        "ATTR006b",
+        "initialization_index",
+        "i",
+        report_selector_error=report_selector_error,
+    )
 
 
-def check_variant_vs_physics_index(ds, severity):
-    return _check_one_index(ds, severity, "ATTR006c", "physics_index", "p")
+def check_variant_vs_physics_index(ds, severity, *, report_selector_error=True):
+    return _check_one_index(
+        ds,
+        severity,
+        "ATTR006c",
+        "physics_index",
+        "p",
+        report_selector_error=report_selector_error,
+    )
 
 
-def check_variant_vs_forcing_index(ds, severity):
-    return _check_one_index(ds, severity, "ATTR006d", "forcing_index", "f")
+def check_variant_vs_forcing_index(ds, severity, *, report_selector_error=True):
+    return _check_one_index(
+        ds,
+        severity,
+        "ATTR006d",
+        "forcing_index",
+        "f",
+        report_selector_error=report_selector_error,
+    )
+
+
+def check_variant_label_consistency_group(ds, configured_checks):
+    """Run index comparisons with one severity-aware selector-error owner."""
+    if not configured_checks:
+        return []
+    results = []
+    hierarchy = sorted(
+        configured_checks,
+        key=lambda configured: _SELECTOR_OWNER_PRIORITY.get(
+            configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
+        ),
+    )
+    owner = severity_ordered(
+        configured_checks,
+        severity=lambda configured: configured[1],
+        priority=lambda configured: _SELECTOR_OWNER_PRIORITY.get(
+            configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
+        ),
+    )[0][0]
+    for check, severity in hierarchy:
+        results.extend(check(ds, severity, report_selector_error=(check is owner)))
+    return results

@@ -50,4 +50,5 @@ def test_check_drs_directory(cmip6_reference_dataset, monkeypatch):
 
     assert len(results) == 1
     assert result_passed(results[0])
+    assert results[0].name.startswith("[PATH003]")
     assert "Directory Vocabulary" in results[0].name

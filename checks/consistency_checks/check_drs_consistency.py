@@ -92,7 +92,13 @@ def _parse_cmip7_filename(filename: str):
 
 
 def check_attributes_match_directory_structure(
-    ds, severity, project_id="cmip6", dir_template_keys=None, filename_template_keys=None
+    ds,
+    severity,
+    project_id="cmip6",
+    dir_template_keys=None,
+    filename_template_keys=None,
+    *,
+    report_directory_structure_error=True,
 ):
     fixed_check_id = "PATH001"
     description = f"[{fixed_check_id}] Consistency: Directory Structure vs Global Attributes"
@@ -113,6 +119,8 @@ def check_attributes_match_directory_structure(
 
         dir_facets, error = _parse_directory_from_drs_specs(filepath, drs_specs, _dir_template_keys_cmip7)
         if error:
+            if not report_directory_structure_error:
+                return []
             ctx.add_failure(f"Could not perform check. Reason: {error}")
             return [ctx.to_result()]
 
@@ -126,6 +134,8 @@ def check_attributes_match_directory_structure(
         dir_facets, _, error = _get_drs_facets(filepath, project_id, dir_template_keys, filename_template_keys)
         dir_facets = _unwrap_facets(dir_facets)
         if error:
+            if not report_directory_structure_error:
+                return []
             ctx.add_failure(f"Could not perform check. Reason: {error}")
             return [ctx.to_result()]
 
@@ -171,7 +181,13 @@ def check_attributes_match_directory_structure(
 
 
 def check_filename_matches_directory_structure(
-    ds, severity, project_id="cmip6", dir_template_keys=None, filename_template_keys=None
+    ds,
+    severity,
+    project_id="cmip6",
+    dir_template_keys=None,
+    filename_template_keys=None,
+    *,
+    report_directory_structure_error=True,
 ):
     fixed_check_id = "PATH002"
     description = f"[{fixed_check_id}] Consistency: Directory Structure vs Filename"
@@ -191,6 +207,8 @@ def check_filename_matches_directory_structure(
 
         dir_facets, error = _parse_directory_from_drs_specs(filepath, drs_specs, _dir_template_keys_cmip7)
         if error:
+            if not report_directory_structure_error:
+                return []
             ctx.add_failure(f"Could not perform check. Reason: {error}")
             return [ctx.to_result()]
 
@@ -224,6 +242,8 @@ def check_filename_matches_directory_structure(
     dir_facets = _unwrap_facets(dir_facets)
     filename_facets = _unwrap_facets(filename_facets)
     if error:
+        if not report_directory_structure_error:
+            return []
         ctx.add_failure(f"Could not perform check. Reason: {error}")
         return [ctx.to_result()]
 

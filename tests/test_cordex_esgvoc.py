@@ -808,11 +808,13 @@ def test_cordex_drs_uses_project_templates(tmp_path, monkeypatch):
             "project_id": "cordex-cmip6",
             "dir_template_keys": drs.directory_template_keys,
             "filename_template_keys": drs.filename_template_keys,
+            "report_directory_structure_error": True,
         },
         {
             "project_id": "cordex-cmip6",
             "dir_template_keys": drs.directory_template_keys,
             "filename_template_keys": drs.filename_template_keys,
+            "report_directory_structure_error": False,
         },
     ]
 

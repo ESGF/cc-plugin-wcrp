@@ -21,12 +21,20 @@ Precedence rule for parent/sub:
 from compliance_checker.base import TestCtx
 
 from checks.utils import (
-    resolve_experiment_term,
+    _ESG_VOCAB_PROJECT_API as ESG_VOCAB_AVAILABLE,
+    NO_VALUE_TOKENS as _NO_VALUE_TOKENS,
     _as_list,
     _lower_str_list,
-    NO_VALUE_TOKENS as _NO_VALUE_TOKENS,
-    _ESG_VOCAB_PROJECT_API as ESG_VOCAB_AVAILABLE,
+    resolve_experiment_term,
+    severity_ordered,
 )
+
+_SELECTOR_OWNER_PRIORITY = {
+    "check_experiment_id_vs_activity_id": 0,
+    "check_experiment_id_vs_experiment": 1,
+    "check_experiment_id_vs_parent_experiment_id": 2,
+    "check_experiment_id_vs_sub_experiment_id": 3,
+}
 
 
 def _get_attr(ds, name):
@@ -44,7 +52,14 @@ def _no_vocab_result(check_id, label, severity):
 # ---------------------------------------------------------------------------
 # ATTR007a  experiment_id vs activity_id
 # ---------------------------------------------------------------------------
-def check_experiment_id_vs_activity_id(ds, severity, project_id="cmip6"):
+def check_experiment_id_vs_activity_id(
+    ds,
+    severity,
+    project_id="cmip6",
+    *,
+    report_missing=True,
+    report_selector_error=True,
+):
     check_id, label = "ATTR007a", "Consistency: experiment_id vs activity_id"
     if not ESG_VOCAB_AVAILABLE:
         return _no_vocab_result(check_id, label, severity)
@@ -52,11 +67,15 @@ def check_experiment_id_vs_activity_id(ds, severity, project_id="cmip6"):
 
     actual = _get_attr(ds, "activity_id")
     if actual is None:
+        if not report_missing:
+            return []
         ctx.add_failure("Missing required global attribute: 'activity_id'.")
         return [ctx.to_result()]
 
     term = resolve_experiment_term(ds, project_id)
     if term is None:
+        if not report_selector_error:
+            return []
         ctx.add_failure("Could not resolve experiment_id in the ESGF vocabulary.")
         return [ctx.to_result()]
 
@@ -78,7 +97,14 @@ def check_experiment_id_vs_activity_id(ds, severity, project_id="cmip6"):
 # ---------------------------------------------------------------------------
 # ATTR007b  experiment_id vs experiment
 # ---------------------------------------------------------------------------
-def check_experiment_id_vs_experiment(ds, severity, project_id="cmip6"):
+def check_experiment_id_vs_experiment(
+    ds,
+    severity,
+    project_id="cmip6",
+    *,
+    report_missing=True,
+    report_selector_error=True,
+):
     check_id, label = "ATTR007b", "Consistency: experiment_id vs experiment"
     if not ESG_VOCAB_AVAILABLE:
         return _no_vocab_result(check_id, label, severity)
@@ -86,11 +112,15 @@ def check_experiment_id_vs_experiment(ds, severity, project_id="cmip6"):
 
     actual = _get_attr(ds, "experiment")
     if actual is None:
+        if not report_missing:
+            return []
         ctx.add_failure("Missing required global attribute: 'experiment'.")
         return [ctx.to_result()]
 
     term = resolve_experiment_term(ds, project_id)
     if term is None:
+        if not report_selector_error:
+            return []
         ctx.add_failure("Could not resolve experiment_id in the ESGF vocabulary.")
         return [ctx.to_result()]
 
@@ -118,6 +148,7 @@ def check_experiment_id_vs_parent_experiment_id(
     project_id="cmip6",
     *,
     report_missing=False,
+    report_selector_error=True,
 ):
     check_id, label = "ATTR007c", "Consistency: experiment_id vs parent_experiment_id"
     if not ESG_VOCAB_AVAILABLE:
@@ -134,6 +165,8 @@ def check_experiment_id_vs_parent_experiment_id(
 
     term = resolve_experiment_term(ds, project_id)
     if term is None:
+        if not report_selector_error:
+            return []
         ctx.add_failure("Could not resolve experiment_id in the ESGF vocabulary.")
         return [ctx.to_result()]
 
@@ -142,8 +175,9 @@ def check_experiment_id_vs_parent_experiment_id(
     if not expected:
         parent_obj = getattr(term, "parent_experiment", None)
         if parent_obj is not None:
-            expected = [getattr(parent_obj, "drs_name", None)
-                        or getattr(parent_obj, "id", None)]
+            expected = [
+                getattr(parent_obj, "drs_name", None) or getattr(parent_obj, "id", None)
+            ]
 
     expected_norm = [
         value for value in _lower_str_list(expected) if value not in _NO_VALUE_TOKENS
@@ -186,6 +220,7 @@ def check_experiment_id_vs_sub_experiment_id(
     project_id="cmip6",
     *,
     report_missing=False,
+    report_selector_error=True,
 ):
     check_id, label = "ATTR007d", "Consistency: experiment_id vs sub_experiment_id"
     if not ESG_VOCAB_AVAILABLE:
@@ -200,6 +235,8 @@ def check_experiment_id_vs_sub_experiment_id(
 
     term = resolve_experiment_term(ds, project_id)
     if term is None:
+        if not report_selector_error:
+            return []
         ctx.add_failure("Could not resolve experiment_id in the ESGF vocabulary.")
         return [ctx.to_result()]
 
@@ -232,3 +269,34 @@ def check_experiment_id_vs_sub_experiment_id(
             f"{list(_as_list(expected))}, file has '{actual}'."
         )
     return [ctx.to_result()]
+
+
+def check_experiment_consistency_group(ds, project_id, configured_checks):
+    """Run comparisons with one severity-aware selector-error owner."""
+    if not configured_checks:
+        return []
+    results = []
+    hierarchy = sorted(
+        configured_checks,
+        key=lambda configured: _SELECTOR_OWNER_PRIORITY.get(
+            configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
+        ),
+    )
+    owner = severity_ordered(
+        configured_checks,
+        severity=lambda configured: configured[1],
+        priority=lambda configured: _SELECTOR_OWNER_PRIORITY.get(
+            configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
+        ),
+    )[0][0]
+    for check, severity, kwargs in hierarchy:
+        results.extend(
+            check(
+                ds,
+                severity,
+                project_id=project_id,
+                report_selector_error=(check is owner),
+                **kwargs,
+            )
+        )
+    return results

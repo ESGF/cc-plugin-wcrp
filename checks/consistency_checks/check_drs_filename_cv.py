@@ -14,6 +14,9 @@ except ImportError:
     ESG_VOCAB_AVAILABLE = False
 
 
+_CMIP7_DRS_ROOT = "MIP-DRS7"
+
+
 def _normalize_project_id(project_id: str) -> str:
     if isinstance(project_id, str) and project_id.lower() == "cmip7":
         return "cmip7"
@@ -69,8 +72,14 @@ def check_drs_filename(ds, severity, project_id="cmip6"):
     return [ctx.to_result()]
 
 
-def check_drs_directory(ds, severity, project_id="cmip6"):
-    fixed_check_id = "FILE001"
+def check_drs_directory(
+    ds,
+    severity,
+    project_id="cmip6",
+    *,
+    report_directory_structure_error=True,
+):
+    fixed_check_id = "PATH003"
     description = f"[{fixed_check_id}] DRS Directory Vocabulary Check"
     ctx = TestCtx(severity, description)
 
@@ -83,25 +92,41 @@ def check_drs_directory(ds, severity, project_id="cmip6"):
         ctx.add_failure("File path could not be determined.")
         return [ctx.to_result()]
 
-    drs_specs = None
-    try:
-        drs_specs = ds.getncattr("drs_specs")
-    except Exception:
-        drs_specs = None
-
     drs_directory = None
     error_msg = None
 
-    if drs_specs:
-        drs_directory = _find_drs_directory_from_drs_specs(filepath, str(drs_specs))
-
-    # Fallback to legacy helper (CMIP6 / CORDEX style)
-    if not drs_directory:
-        drs_directory, _, error_msg = _find_drs_directory_and_filename(
-            filepath, project_id
+    if str(project_id).strip().lower() == "cmip7":
+        # CMIP7 uses the MIP-DRS7 specification name as its DRS root.  CMIP7
+        # is the following mip_era component, not a legacy fallback root.
+        drs_directory = _find_drs_directory_from_drs_specs(
+            filepath, _CMIP7_DRS_ROOT
         )
+        if not drs_directory:
+            error_msg = (
+                f"DRS project root '{_CMIP7_DRS_ROOT}' not found in the file "
+                f"path '{filepath}'."
+            )
+    else:
+        drs_specs = None
+        try:
+            drs_specs = ds.getncattr("drs_specs")
+        except Exception:
+            drs_specs = None
+
+        if drs_specs:
+            drs_directory = _find_drs_directory_from_drs_specs(
+                filepath, str(drs_specs)
+            )
+
+        # Legacy CMIP6-era layouts use the project identifier as their root.
+        if not drs_directory:
+            drs_directory, _, error_msg = _find_drs_directory_and_filename(
+                filepath, project_id
+            )
 
     if error_msg:
+        if not report_directory_structure_error:
+            return []
         ctx.add_failure(error_msg)
         return [ctx.to_result()]
 

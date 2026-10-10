@@ -129,10 +129,7 @@ def test_cmip6_consistency_entry_point_reports_inconsistent_metadata(
 
 
 def test_cmip6_filename_consistency_reports_unexpected_token_count(tmp_path):
-    filename = (
-        "ta_tavg-al-hxy-u_mon_glb_g122_Model_piControl_"
-        "r1i1p1f1_185101-185113.nc"
-    )
+    filename = "ta_tavg-al-hxy-u_mon_glb_g122_Model_piControl_r1i1p1f1_185101-185113.nc"
     with Dataset(tmp_path / filename, "w") as dataset:
         results = check_filename_vs_global_attrs(
             dataset,
@@ -144,3 +141,38 @@ def test_cmip6_filename_consistency_reports_unexpected_token_count(tmp_path):
     assert results[0].name.startswith("[ATTR005]")
     assert results[0].value[0] < results[0].value[1]
     assert "does not have the expected 7 components" in results[0].msgs[0]
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "tas_Amon_Model_historical_r1i1p1f1.nc",
+        "tas_Amon_Model_historical_r1i1p1f1_gn_200001-200012_extra.nc",
+    ],
+)
+def test_filename_structure_is_left_to_file001_when_configured(tmp_path, filename):
+    with Dataset(tmp_path / filename, "w") as dataset:
+        results = check_filename_vs_global_attrs(
+            dataset,
+            severity=BaseCheck.HIGH,
+            project_id="cmip6",
+            filename_structure_delegated=True,
+        )
+
+    assert results == []
+
+
+def test_filename_value_mismatch_remains_owned_by_attr005(tmp_path):
+    filename = "tas_Amon_Model_historical_r1i1p1f1_gn_200001-200012.nc"
+    with Dataset(tmp_path / filename, "w") as dataset:
+        dataset.variable_id = "pr"
+        results = check_filename_vs_global_attrs(
+            dataset,
+            severity=BaseCheck.HIGH,
+            project_id="cmip6",
+            filename_structure_delegated=True,
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[ATTR005]")
+    assert any("variable_id" in message for message in results[0].msgs)
