@@ -316,6 +316,17 @@ class WCRPBaseCheck(BaseCheck):
             return default_severity_const
         return self.SEVERITY_MAP.get(str(severity_str).upper(), default_severity_const)
 
+    def _global_attribute_rule_enabled(self, attribute_name):
+        """Whether ATTR001/ATTR004 owns one configured global attribute."""
+        global_section = getattr(self.config, "global_", None) if self.config else None
+        if global_section is None:
+            return False
+        for key, rule in global_section.attributes.items():
+            configured_name = getattr(rule, "attribute_name", None) or key
+            if configured_name == attribute_name:
+                return True
+        return False
+
     def _check_global_attributes(self, dataset):
         """Run ESGVoc validation, then TOML rules absent from ESGVoc."""
         if self._esgvoc_project_setup_error:

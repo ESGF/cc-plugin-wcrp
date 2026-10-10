@@ -39,6 +39,9 @@ from checks.coordinate_checks import (
     CoordinateMetadataError,
     GridTopologyConfigError,
     check_coordinate_catalog,
+    coordinate_catalog_required,
+    coordinate_metadata_setup_result,
+    missing_configured_coordinate_result,
     load_catalog,
     load_grid_topology_config,
     resolve_grid_topology,
@@ -333,13 +336,6 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         return ""
 
     def _initialize_coordinate_catalog(self, ds):
-        registry = (
-            self.config.coordinates.registry
-            if self.config and self.config.coordinates
-            else None
-        )
-        if registry is None:
-            return
         branded = self._mapped_branded_variable(ds)
         key, variable_id = self._mapping_key(ds)
         if not branded:
@@ -430,14 +426,15 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             self._run_setup_step(
                 "load the CORDEX-CMIP6 CMOR tables", self._load_cmor_tables
             )
-        try:
-            self._initialize_coordinate_catalog(ds)
-        except Exception as exc:
-            self._coordinate_setup_error = (
-                str(exc)
-                if isinstance(exc, CoordinateMetadataError)
-                else f"Unexpected {type(exc).__name__}: {exc}"
-            )
+        if coordinate_catalog_required(self.config):
+            try:
+                self._initialize_coordinate_catalog(ds)
+            except Exception as exc:
+                self._coordinate_setup_error = (
+                    str(exc)
+                    if isinstance(exc, CoordinateMetadataError)
+                    else f"Unexpected {type(exc).__name__}: {exc}"
+                )
         if self.consistency_output:
             self._write_consistency_output()
 
@@ -768,31 +765,16 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         ]
 
     def check_Coordinate_Metadata_Setup(self, ds):
-        registry = (
-            self.config.coordinates.registry
-            if self.config and self.config.coordinates
-            else None
-        )
-        if registry is None or registry.setup is None:
+        if not self.config:
             return []
-        severity = self.get_severity(registry.setup.severity, "HIGH")
-        ctx = TestCtx(severity, "[COORD000] Coordinate metadata initialization")
-        if self._coordinate_setup_error:
-            source = "CMOR tables" if self.verification_against_tables else "ESGVoc"
-            ctx.add_failure(
-                f"The CORDEX-CMIP6 coordinate checks could not read their "
-                f"metadata from {source}, so all catalogue-driven coordinate "
-                f"checks were skipped. Technical reason: "
-                f"{self._coordinate_setup_error}"
-            )
-        elif self._coordinate_catalog is None:
-            ctx.add_failure(
-                "The CORDEX-CMIP6 coordinate catalog is unavailable for an "
-                "unknown reason; all catalogue-driven checks were skipped."
-            )
-        else:
-            ctx.add_pass()
-        return [ctx.to_result()]
+        source = "CMOR-table" if self.verification_against_tables else "ESGVoc"
+        return coordinate_metadata_setup_result(
+            config=self.config,
+            catalog=self._coordinate_catalog,
+            error=self._coordinate_setup_error,
+            project_label=f"CORDEX-CMIP6 {source}",
+            get_severity=self.get_severity,
+        )
 
     def check_Coordinate_Standard(self, ds):
         registry = (
@@ -863,6 +845,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 naming.climatology_bounds_name if naming else "climatology_bnds"
             ),
             time_bounds_delegated=coverage_rule is not None,
+            data_variable_presence_delegated=bool(
+                self.config.variable and self.config.variable.existence
+            ),
             check_direct_physical_values=(
                 direction.check_direct_physical_values if direction else False
             ),
@@ -890,9 +875,23 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         results = []
         if not self.config or not self.config.coordinates:
             return results
+        coordinate_bounds_enabled = bool(
+            self.config.coordinates.registry
+            and self.config.coordinates.registry.bounds
+        )
+        coordinate_identity_enabled = bool(
+            self.config.coordinates.registry
+            and self.config.coordinates.registry.identity
+        )
         for key, rule in self.config.coordinates.variables.items():
             name = str(rule.name.variable_name if rule.name else key)
             if name not in ds.variables:
+                if not coordinate_identity_enabled:
+                    results.extend(
+                        missing_configured_coordinate_result(
+                            name, rule, self.get_severity
+                        )
+                    )
                 continue
             if rule.monotonicity and name in ds.dimensions:
                 results.extend(
@@ -914,6 +913,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                             frequency=None,
                             expected_cell_methods=self._coordinate_catalog.branded_variable.get(
                                 "cell_methods"
+                            ),
+                            report_structural_prerequisites=(
+                                not coordinate_identity_enabled
                             ),
                         )
                     )
@@ -945,8 +947,10 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     result for result in checked if "[ATTR004]" in result.name
                 )
         time_entries = self._coordinate_entries_for_axis("T")
-        if self._coordinate_catalog is not None and (
-            "time" not in ds.variables or len(time_entries) == 1
+        is_fixed = str(getattr(ds, "frequency", "")).strip() == "fx"
+        if (
+            self._coordinate_catalog is not None
+            and (is_fixed or ("time" in ds.variables and len(time_entries) == 1))
         ):
             time_range = self.config.drs.time_range if self.config.drs else None
             results.extend(
@@ -966,7 +970,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                         if time_entries
                         else False
                     ),
-                    report_climatology_mismatch=False,
+                    report_climatology_mismatch=not coordinate_bounds_enabled,
                 )
             )
         return results

@@ -86,6 +86,9 @@ from checks.coordinate_checks import (
     CoordinateMetadataError,
     GridTopologyConfigError,
     check_coordinate_catalog,
+    coordinate_catalog_required,
+    coordinate_metadata_setup_result,
+    missing_configured_coordinate_result,
     load_catalog,
     load_grid_metadata,
     load_grid_topology_config,
@@ -166,6 +169,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         self._coordinate_grid_topology: Optional[str] = None
         self._coordinate_grid_error: Optional[str] = None
         self._coordinate_grid_metadata: Optional[dict] = None
+        self._coordinate_grid_metadata_error: Optional[str] = None
         # Config directory
         if options and "project_config_dir" in options:
             self.project_config_dir = options["project_config_dir"]
@@ -296,12 +300,13 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         self._coordinate_grid_topology = None
         self._coordinate_grid_error = None
         self._coordinate_grid_metadata = None
+        self._coordinate_grid_metadata_error = None
         registry = (
             self.config.coordinates.registry
             if self.config and self.config.coordinates
             else None
         )
-        if registry is not None:
+        if coordinate_catalog_required(self.config):
             try:
                 branded = self._get_attr("branded_variable", "")
                 self._coordinate_catalog = load_catalog(
@@ -312,12 +317,15 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     for entry in self._coordinate_catalog.data_coordinates.values()
                     if entry.get("id") in self._coordinate_catalog.coordinate_ids
                 )
-                needs_grid_metadata = has_generic_horizontal or any(
-                    getattr(registry, family) is not None
-                    for family in (
-                        "grid_cell_count_availability",
-                        "grid_cell_count_consistency",
-                        "grid_mapping_consistency",
+                needs_grid_metadata = has_generic_horizontal or (
+                    registry is not None
+                    and any(
+                        getattr(registry, family) is not None
+                        for family in (
+                            "grid_cell_count_availability",
+                            "grid_cell_count_consistency",
+                            "grid_mapping_consistency",
+                        )
                     )
                 )
                 grid_label = self._get_attr("grid_label", "")
@@ -325,9 +333,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     try:
                         self._coordinate_grid_metadata = load_grid_metadata(grid_label)
                     except CoordinateMetadataError as exc:
-                        self._coordinate_grid_error = (
+                        self._coordinate_grid_metadata_error = (
                             "The registered CMIP7 grid metadata could not be read. "
                             f"Technical reason: {exc}"
+                        )
+                        self._coordinate_grid_error = (
+                            self._coordinate_grid_metadata_error
                         )
                 if has_generic_horizontal and self._coordinate_grid_error is None:
                     if self._grid_topology_config_error:
@@ -747,7 +758,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             sev = self.get_severity(c.experiment_id_vs_parent_experiment_id.severity)
             res.extend(
                 check_experiment_id_vs_parent_experiment_id(
-                    ds, sev, project_id=self.project_name
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_missing=not self._global_attribute_rule_enabled(
+                        "parent_experiment_id"
+                    ),
                 )
             )
 
@@ -757,7 +773,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             sev = self.get_severity(c.experiment_id_vs_sub_experiment_id.severity)
             res.extend(
                 check_experiment_id_vs_sub_experiment_id(
-                    ds, sev, project_id=self.project_name
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_missing=not self._global_attribute_rule_enabled(
+                        "sub_experiment_id"
+                    ),
                 )
             )
 
@@ -806,32 +827,15 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         ]
 
     def check_Coordinate_Metadata_Setup(self, ds):
-        registry = (
-            self.config.coordinates.registry
-            if self.config and self.config.coordinates
-            else None
-        )
-        if registry is None or registry.setup is None:
+        if not self.config:
             return []
-        severity = self.get_severity(registry.setup.severity, "HIGH")
-        ctx = TestCtx(
-            severity,
-            "[COORD000] ESGVoc coordinate metadata initialization",
+        return coordinate_metadata_setup_result(
+            config=self.config,
+            catalog=self._coordinate_catalog,
+            error=self._coordinate_setup_error,
+            project_label="CMIP7",
+            get_severity=self.get_severity,
         )
-        if self._coordinate_setup_error:
-            ctx.add_failure(
-                "The CMIP7 coordinate checks could not be initialized, so all "
-                "vocabulary-driven coordinate checks were skipped for this file. "
-                f"Technical reason: {self._coordinate_setup_error}"
-            )
-        elif self._coordinate_catalog is None:
-            ctx.add_failure(
-                "The CMIP7 coordinate catalog is unavailable for an unknown reason; "
-                "all vocabulary-driven coordinate checks were skipped."
-            )
-        else:
-            ctx.add_pass()
-        return [ctx.to_result()]
 
     def check_Coordinate_Standard(self, ds):
         registry = (
@@ -889,6 +893,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             grid_topology=self._coordinate_grid_topology,
             grid_resolution_error=self._coordinate_grid_error,
             registered_grid_metadata=self._coordinate_grid_metadata,
+            registered_grid_metadata_error=self._coordinate_grid_metadata_error,
             grid_topology_config=self._grid_topology_config,
             allow_standard_name_fallback=(
                 self._grid_topology_config.allow_standard_name_fallback
@@ -907,6 +912,9 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 else "climatology_bnds"
             ),
             time_bounds_delegated=coverage_rule is not None,
+            data_variable_presence_delegated=bool(
+                self.config.variable and self.config.variable.existence
+            ),
             check_direct_physical_values=(
                 direction.check_direct_physical_values
                 if direction is not None
@@ -944,6 +952,12 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             return res
 
         coords_cfg = self.config.coordinates
+        coordinate_bounds_enabled = bool(
+            coords_cfg.registry and coords_cfg.registry.bounds
+        )
+        coordinate_identity_enabled = bool(
+            coords_cfg.registry and coords_cfg.registry.identity
+        )
         time_coordinate_names = {
             str(entry.get("out_name") or identifier)
             for identifier, entry in self._coordinate_entries_for_axis("T")
@@ -963,7 +977,15 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         # the established time checks that are not replaced by that suite.
         for key, rule in (coords_cfg.variables or {}).items():
             cname = str(rule.name.variable_name if rule.name else key)
-            if cname not in time_coordinate_names or cname not in ds.variables:
+            if cname not in time_coordinate_names:
+                continue
+            if cname not in ds.variables:
+                if not coordinate_identity_enabled:
+                    res.extend(
+                        missing_configured_coordinate_result(
+                            cname, rule, self.get_severity
+                        )
+                    )
                 continue
 
             if rule.monotonicity and cname in ds.dimensions:
@@ -989,6 +1011,9 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                             frequency=None,  # increments injected from TOML in setup()
                             expected_cell_methods=self._coordinate_catalog.branded_variable.get(
                                 "cell_methods"
+                            ),
+                            report_structural_prerequisites=(
+                                not coordinate_identity_enabled
                             ),
                         )
                     )
@@ -1017,10 +1042,11 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 )
 
         time_entries = self._coordinate_entries_for_axis("T")
+        is_fixed = str(getattr(ds, "frequency", "")).strip() == "fx"
         if (
             check_time_range_vs_filename is not None
             and self._coordinate_catalog is not None
-            and ("time" not in ds.variables or len(time_entries) == 1)
+            and (is_fixed or ("time" in ds.variables and len(time_entries) == 1))
         ):
             precision_map = None
             climatology_suffix = ""
@@ -1041,7 +1067,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                         if time_entries
                         else False
                     ),
-                    report_climatology_mismatch=False,
+                    report_climatology_mismatch=not coordinate_bounds_enabled,
                 )
             )
 

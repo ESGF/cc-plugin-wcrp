@@ -22,6 +22,41 @@ from checks.utils import severity_word as configured_severity_word
 _LONGITUDE_PERIOD = 360.0
 
 
+# Ordered consumers which can report that a shared prerequisite is unusable
+# when its usual result family is disabled.  This does not re-enable the
+# owner's semantic checks: it only prevents an enabled dependent check from
+# disappearing without explaining why it could not run.
+PREREQUISITE_FALLBACKS = {
+    "identity": (
+        "attributes",
+        "recommendations",
+        "direction",
+        "valid_range",
+        "requested_values",
+        "bounds",
+        "bounds_name",
+        "associations",
+        "formula",
+        "dimension_order",
+    ),
+    "grid": (
+        "grid_latitude_valid_range",
+        "grid_longitude_valid_range",
+        "grid_longitude_single_cycle",
+        "attributes",
+        "recommendations",
+        "direction",
+        "valid_range",
+        "requested_values",
+        "bounds",
+        "bounds_name",
+        "associations",
+        "formula",
+        "dimension_order",
+    ),
+}
+
+
 class Findings:
     """Collect atomic findings and emit one configured Result per family."""
 
@@ -40,10 +75,46 @@ class Findings:
         self.vertices_dimension_name = vertices_dimension_name
         self.climatology_bounds_name = climatology_bounds_name
         self.time_bounds_delegated = time_bounds_delegated
+        self._reported_prerequisites: set[object] = set()
 
     def add(self, family: str, message: str):
         if family in self.messages and message not in self.messages[family]:
             self.messages[family].append(message)
+
+    def add_prerequisite(
+        self,
+        owner: str,
+        message,
+        *,
+        issue: object | None = None,
+        fallbacks=(),
+    ) -> str | None:
+        """Report one unusable prerequisite through the first enabled owner.
+
+        ``owner`` remains preferred.  If it is disabled, an enabled dependent
+        family reports why it could not be evaluated.  ``issue`` deduplicates a
+        shared root cause when several dependent validators encounter it.
+        """
+        candidates = (owner, *fallbacks, *PREREQUISITE_FALLBACKS.get(owner, ()))
+        family = next((name for name in candidates if name in self.messages), None)
+        if family is None:
+            return None
+        rendered = message(family) if callable(message) else message
+        key = issue if issue is not None else (owner, rendered)
+        if key in self._reported_prerequisites:
+            return family
+        self._reported_prerequisites.add(key)
+        self.add(family, rendered)
+        return family
+
+    def add_blocked(self, families, message: str, *, issue: object) -> str | None:
+        """Report a shared prerequisite failure through an enabled consumer."""
+        family = next((name for name in families if name in self.messages), None)
+        if family is None or issue in self._reported_prerequisites:
+            return family
+        self._reported_prerequisites.add(issue)
+        self.add(family, message)
+        return family
 
     def severity_word(self, family: str, *, noun: bool = False) -> str:
         """Return wording matching the configured severity of one family."""

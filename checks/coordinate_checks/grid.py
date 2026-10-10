@@ -210,10 +210,12 @@ def check_grid_cell_count(
     label = str(registered_grid_metadata.get("id") or "").strip() or "unknown"
     expected = registered_grid_metadata.get("n_cells")
     if expected is None:
-        findings.add(
+        findings.add_prerequisite(
             "grid_cell_count_availability",
             f"Registered grid '{label}' does not define n_cells, so horizontal "
             "cell-count consistency could not be checked.",
+            issue=("missing_registered_cell_count", label),
+            fallbacks=("grid_cell_count_consistency",),
         )
         return
     observed = _observed_grid_cell_count(
@@ -619,19 +621,23 @@ def _check_vertex_valid_range(
         return
 
     if fully_masked_count:
-        findings.add(
+        findings.add_prerequisite(
             "grid",
             f"'{name}': {fully_masked_count} of {total} grid cells have all "
             "vertex values missing. First incident at index "
             f"{first_fully_masked_index}.",
+            issue=("fully_masked_vertices", name),
+            fallbacks=(family,),
         )
     if insufficient_count:
-        findings.add(
+        findings.add_prerequisite(
             "grid",
             f"'{name}': {insufficient_count} of {total} grid cells have fewer "
             "than 3 finite vertex values after permitted masked padding. "
             f"First incident at index {first_insufficient_index} has "
             f"{first_insufficient_finite_count} finite vertex values.",
+            issue=("insufficient_vertices", name),
+            fallbacks=(family,),
         )
     if not saw_finite:
         if not has_explicit_range or (
@@ -692,11 +698,15 @@ def _validate_vertices(
     vertex_entry = catalog.grid_variables.get(f"vertices_{role}", {})
     recommended = str(vertex_entry.get("out_name") or f"vertices_{role}")
     if not declared:
-        findings.add(
+        findings.add_prerequisite(
             "grid",
-            f"It is {findings.severity_word('grid')} for horizontal auxiliary "
-            f"coordinate '{coordinate.name}' to have a "
-            "bounds attribute naming its vertex variable.",
+            lambda family: (
+                f"It is {findings.severity_word(family)} for horizontal auxiliary "
+                f"coordinate '{coordinate.name}' to have a bounds attribute naming "
+                "its vertex variable; dependent vertex checks could not be evaluated."
+            ),
+            issue=("missing_vertices_attribute", coordinate.name),
+            fallbacks=(f"grid_{role}_valid_range",),
         )
         return
     if declared != recommended:
@@ -707,10 +717,13 @@ def _validate_vertices(
             f"{recommended!r}.",
         )
     if declared not in ds.variables:
-        findings.add(
+        findings.add_prerequisite(
             "grid",
             f"'{coordinate.name}' bounds attribute names {declared!r}, but that "
-            "vertex variable is absent.",
+            "vertex variable is absent, so dependent vertex checks could not be "
+            "evaluated.",
+            issue=("missing_vertices_variable", declared),
+            fallbacks=(f"grid_{role}_valid_range",),
         )
         return
     vertices = ds.variables[declared]
@@ -721,12 +734,17 @@ def _validate_vertices(
         and vertices.shape[-1] >= 3
     )
     if not valid:
-        findings.add(
+        findings.add_prerequisite(
             "grid",
-            f"It is {findings.severity_word('grid')} for vertex variable "
-            f"'{declared}' to have the coordinate dimensions "
-            f"{list(coordinate.dimensions)} followed by a vertex dimension of size "
-            f"at least 3; found {list(vertices.dimensions)} with shape {vertices.shape}.",
+            lambda family: (
+                f"It is {findings.severity_word(family)} for vertex variable "
+                f"'{declared}' to have the coordinate dimensions "
+                f"{list(coordinate.dimensions)} followed by a vertex dimension of "
+                f"size at least 3; found {list(vertices.dimensions)} with shape "
+                f"{vertices.shape}. Dependent vertex checks could not be evaluated."
+            ),
+            issue=("invalid_vertices_structure", declared),
+            fallbacks=(f"grid_{role}_valid_range",),
         )
         return
 
@@ -983,17 +1001,22 @@ def validate_horizontal_grid(
             )
         topology = "rectilinear"
     elif resolution_error or topology is None:
-        findings.add(
+        findings.add_prerequisite(
             "grid",
             "The horizontal grid could not be verified. "
             + (resolution_error or "No grid topology was resolved."),
+            issue=(
+                "grid_resolution",
+                resolution_error or "No grid topology was resolved.",
+            ),
         )
         return None
     if topology not in {"rectilinear", "curvilinear", "unstructured"}:
-        findings.add(
+        findings.add_prerequisite(
             "grid",
             f"The horizontal grid could not be verified. Unsupported configured "
             f"topology={topology!r}.",
+            issue="horizontal_grid_unresolved",
         )
         return None
     discovered = {}
@@ -1013,10 +1036,18 @@ def validate_horizontal_grid(
     present = [var for var in discovered.values() if var is not None]
     if len(present) != len(requested):
         missing = [role for role, var in discovered.items() if var is None]
-        findings.add(
+        findings.add_prerequisite(
             "grid",
-            f"The {findings.severity_word('grid')} horizontal coordinate(s) are "
-            f"absent: {missing}.",
+            lambda family: (
+                f"The {findings.severity_word(family)} horizontal coordinate(s) "
+                f"are absent: {missing}."
+                + (
+                    " Dependent horizontal-grid checks could not be evaluated."
+                    if family != "grid"
+                    else ""
+                )
+            ),
+            issue=("missing_horizontal_coordinates", tuple(missing)),
         )
         return None
 
@@ -1038,12 +1069,16 @@ def validate_horizontal_grid(
                 and var.name in ds.dimensions
                 and var.dimensions == (var.name,)
             ):
-                findings.add(
+                findings.add_prerequisite(
                     "grid",
-                    f"It is {findings.severity_word('grid')} for '{expected_name}' "
-                    f"on the configured rectilinear grid to be a 1-D coordinate "
-                    f"variable; found '{var.name}' with "
-                    f"dimensions {list(var.dimensions)}.",
+                    lambda family, expected_name=expected_name, var=var: (
+                        f"It is {findings.severity_word(family)} for "
+                        f"'{expected_name}' on the configured rectilinear grid to "
+                        f"be a 1-D coordinate variable; found '{var.name}' with "
+                        f"dimensions {list(var.dimensions)}. Dependent "
+                        "horizontal-grid checks could not be evaluated."
+                    ),
+                    issue=("invalid_horizontal_structure", var.name),
                 )
                 valid_structure = False
         if not valid_structure:
@@ -1077,21 +1112,29 @@ def validate_horizontal_grid(
     valid_structure = True
     for role, var in discovered.items():
         if var.ndim != ndim:
-            findings.add(
+            findings.add_prerequisite(
                 "grid",
-                f"It is {findings.severity_word('grid')} for '{var.name}' to be "
-                f"{ndim}-D for this grid topology; found dimensions "
-                f"{list(var.dimensions)}.",
+                lambda family, var=var: (
+                    f"It is {findings.severity_word(family)} for '{var.name}' to "
+                    f"be {ndim}-D for this grid topology; found dimensions "
+                    f"{list(var.dimensions)}. Dependent horizontal-grid checks "
+                    "could not be evaluated."
+                ),
+                issue=("invalid_horizontal_structure", var.name),
             )
             valid_structure = False
     if valid_structure:
         dimension_sets = {var.dimensions for var in discovered.values()}
         if len(dimension_sets) != 1:
-            findings.add(
+            findings.add_prerequisite(
                 "grid",
-                f"It is {findings.severity_word('grid')} for latitude and longitude "
-                "auxiliary coordinates to share identical "
-                f"dimensions; found { {role: list(var.dimensions) for role, var in discovered.items()} }.",
+                lambda family: (
+                    f"It is {findings.severity_word(family)} for latitude and "
+                    "longitude auxiliary coordinates to share identical dimensions; "
+                    f"found { {role: list(var.dimensions) for role, var in discovered.items()} }. "
+                    "Dependent horizontal-grid checks could not be evaluated."
+                ),
+                issue="mismatched_horizontal_dimensions",
             )
             valid_structure = False
     if not valid_structure:

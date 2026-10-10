@@ -348,6 +348,7 @@ def check_time_squareness(
     ref_time_units="",
     frequency=None,
     expected_cell_methods=_USE_FILE_CELL_METHODS,
+    report_structural_prerequisites=False,
 ):
     """
     TIME001: Time axis check for a single file.
@@ -363,10 +364,22 @@ def check_time_squareness(
     ctx = TestCtx(severity, "[TIME001] Check Time Squareness ")
 
     if "time" not in ds.variables:
+        if report_structural_prerequisites:
+            ctx.add_failure(
+                "Coordinate variable 'time' is missing, so TIME001 could not be "
+                "evaluated."
+            )
+            return [ctx.to_result()]
         return []
 
     time_var = ds.variables["time"]
     if time_var.ndim != 1:
+        if report_structural_prerequisites:
+            ctx.add_failure(
+                "Coordinate variable 'time' is not one-dimensional, so TIME001 "
+                f"could not be evaluated; found dimensions {list(time_var.dimensions)}."
+            )
+            return [ctx.to_result()]
         return []  # Coordinate identity checks own the invalid time shape.
     units = getattr(time_var, "units", "") or ""
     cal = getattr(time_var, "calendar", "standard") or "standard"

@@ -46,9 +46,11 @@ def select_model_level(findings: Findings, ds, catalog, generic_id: str):
         if reference_id(entry.get("generic_level_name")) == generic_id
     ]
     if out_name not in ds.variables:
-        findings.add(
+        findings.add_prerequisite(
             "identity",
             f"{expectation} Variable {out_name!r} does not exist in the file.",
+            issue=("missing_coordinate", out_name),
+            fallbacks=("formula",),
         )
         return None
     var = ds.variables[out_name]

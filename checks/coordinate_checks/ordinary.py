@@ -42,11 +42,14 @@ def validate_standard_1d(
 ):
     name = str(entry.get("out_name") or entry_id)
     if name not in ds.variables:
-        findings.add(
+        findings.add_prerequisite(
             "identity",
-            f"The {findings.severity_word('identity')} one-dimensional coordinate "
-            f"'{name}' (coordinate ID "
-            f"{entry_id!r}) is absent.",
+            lambda family: (
+                f"The {findings.severity_word(family)} one-dimensional coordinate "
+                f"'{name}' (coordinate ID {entry_id!r}) is absent, so its "
+                "configured dependent coordinate checks could not be evaluated."
+            ),
+            issue=("missing_coordinate", name),
         )
         return None
     var = ds.variables[name]
@@ -181,10 +184,14 @@ def validate_scalar(
 ):
     name = str(entry.get("out_name") or entry_id)
     if name not in ds.variables:
-        findings.add(
+        findings.add_prerequisite(
             "identity",
-            f"The {findings.severity_word('identity')} scalar coordinate '{name}' "
-            "is absent.",
+            lambda family: (
+                f"The {findings.severity_word(family)} scalar coordinate '{name}' "
+                "is absent, so its configured dependent coordinate checks could "
+                "not be evaluated."
+            ),
+            issue=("missing_coordinate", name),
         )
         return None
     var = ds.variables[name]
@@ -276,11 +283,14 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
     dimension_name = str(entry.get("out_name") or entry_id)
     name = "sector"
     if name not in ds.variables:
-        findings.add(
+        findings.add_prerequisite(
             "identity",
-            f"The {findings.severity_word('identity')} text auxiliary coordinate "
-            f"'{name}' for coordinate ID "
-            f"{entry_id!r} is absent.",
+            lambda family: (
+                f"The {findings.severity_word(family)} text auxiliary coordinate "
+                f"'{name}' for coordinate ID {entry_id!r} is absent, so its "
+                "configured dependent coordinate checks could not be evaluated."
+            ),
+            issue=("missing_coordinate", name),
         )
         return None
     var = ds.variables[name]
@@ -323,10 +333,14 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
 def validate_site(findings, ds, data_var, entry_id, entry):
     dimension_name = str(entry.get("out_name") or entry_id)
     if dimension_name not in ds.dimensions:
-        findings.add(
+        findings.add_prerequisite(
             "identity",
-            f"The {findings.severity_word('identity')} site dimension "
-            f"'{dimension_name}' is absent.",
+            lambda family: (
+                f"The {findings.severity_word(family)} site dimension "
+                f"'{dimension_name}' is absent, so dependent site-coordinate "
+                "checks may be incomplete."
+            ),
+            issue=("missing_dimension", dimension_name),
         )
     if data_var is None:
         return

@@ -329,6 +329,47 @@ def test_time003_uses_esgvoc_coordinate_climatology(
     checker.check_Coordinates(nc)
 
     assert observed["expected_is_climatology"] is is_climatology
+    assert observed["report_climatology_mismatch"] is False
+
+
+def test_time003_reports_climatology_mismatch_when_coord008_is_disabled(
+    nc, monkeypatch
+):
+    nc.frequency = "mon"
+    nc.createDimension("time", 1)
+    time = nc.createVariable("time", "f8", ("time",))
+    time.units = "days since 2000-01-01"
+    time.calendar = "standard"
+    time[:] = [0.0]
+    nc.createVariable("ta", "f4", ("time",))
+    entry = coordinate(
+        "time_climatology",
+        "standard_1d",
+        "time",
+        axis="T",
+        cf_standard_name="time",
+        units="days since ?",
+        is_climatology=True,
+    )
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    checker.config.coordinates.registry.bounds = None
+    checker._coordinate_catalog = catalog({entry["id"]: entry})
+    observed = {}
+
+    monkeypatch.setattr("plugins.cmip7.cmip7.check_time_squareness", lambda *a, **k: [])
+
+    def capture(*args, **kwargs):
+        observed.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "plugins.cmip7.cmip7.check_time_range_vs_filename", capture
+    )
+
+    checker.check_Coordinates(nc)
+
+    assert observed["report_climatology_mismatch"] is True
 
 
 def test_calendar_message_wording_follows_configured_severity(nc):

@@ -566,7 +566,12 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
             sev = self.get_severity(c.experiment_id_vs_parent_experiment_id.severity)
             res.extend(
                 check_experiment_id_vs_parent_experiment_id(
-                    ds, sev, project_id=self.project_name
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_missing=not self._global_attribute_rule_enabled(
+                        "parent_experiment_id"
+                    ),
                 )
             )
 
@@ -574,7 +579,12 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
             sev = self.get_severity(c.experiment_id_vs_sub_experiment_id.severity)
             res.extend(
                 check_experiment_id_vs_sub_experiment_id(
-                    ds, sev, project_id=self.project_name
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_missing=not self._global_attribute_rule_enabled(
+                        "sub_experiment_id"
+                    ),
                 )
             )
 
