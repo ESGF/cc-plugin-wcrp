@@ -18,6 +18,8 @@ from checks.coordinate_checks.utils import (
 )
 from checks.utils import (
     severity_ordered,
+)
+from checks.utils import (
     severity_word as configured_severity_word,
 )
 
@@ -384,12 +386,26 @@ def check_single_longitude_cycle(
     name: str,
     *,
     family: str = "valid_range",
+    value_chunks=None,
 ):
     """Require a grid-longitude variable to use no more than one cycle."""
-    array = numeric_values(var)
-    if array is None or not array.size or not np.all(np.isfinite(array)):
+    minimum = maximum = None
+    chunks = value_chunks if value_chunks is not None else (var[...],)
+    try:
+        for chunk in chunks:
+            array = np.ma.asarray(chunk, dtype="float64")
+            array = np.asarray(array.filled(np.nan), dtype="float64").reshape(-1)
+            if not array.size or not np.all(np.isfinite(array)):
+                return
+            chunk_min = float(np.min(array))
+            chunk_max = float(np.max(array))
+            minimum = chunk_min if minimum is None else min(minimum, chunk_min)
+            maximum = chunk_max if maximum is None else max(maximum, chunk_max)
+    except (TypeError, ValueError, IndexError, OSError, RuntimeError):
         return
-    extent = float(np.max(array) - np.min(array))
+    if minimum is None or maximum is None:
+        return
+    extent = maximum - minimum
     slack = valid_range_slack(0.0, _LONGITUDE_PERIOD)
     if extent > _LONGITUDE_PERIOD + slack:
         findings.add(

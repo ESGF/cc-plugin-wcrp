@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
 
 from checks.coordinate_checks.model import reference_id, reference_ids
@@ -18,10 +20,57 @@ from checks.coordinate_checks.validation import (
     valid_range_slack,
 )
 
-
 # At float64 this is 2 MiB of source values. Temporary arrays keep the
 # per-process peak comfortably in the tens of MiB even for multi-million-cell grids.
 _VERTEX_CHUNK_VALUES = 262_144
+_GRID_SCAN_CACHE_BYTES = 32 * 2**20
+
+
+def _vertex_chunk_working_set_bytes(variable):
+    """Estimate cache needed for all storage chunks across one vertex cell."""
+    try:
+        chunks = variable.chunking()
+        if not isinstance(chunks, (list, tuple)) or not chunks:
+            return 0
+        trailing_chunks = (
+            int(variable.shape[-1]) + int(chunks[-1]) - 1
+        ) // int(chunks[-1])
+        return int(np.prod(chunks)) * int(variable.dtype.itemsize) * trailing_chunks
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return 0
+
+
+@contextmanager
+def _bounded_variable_chunk_cache(
+    variable,
+    maximum_bytes=_GRID_SCAN_CACHE_BYTES,
+    *,
+    minimum_working_set_bytes=0,
+):
+    """Temporarily cap a netCDF variable's HDF5 cache during full-grid scans."""
+    try:
+        size, nelems, preemption = variable.get_var_chunk_cache()
+    except (AttributeError, TypeError, ValueError, OSError, RuntimeError):
+        yield
+        return
+    target_size = min(size, max(maximum_bytes, minimum_working_set_bytes))
+    if size <= target_size:
+        yield
+        return
+    try:
+        variable.set_var_chunk_cache(target_size, nelems, preemption)
+    except (AttributeError, TypeError, ValueError, OSError, RuntimeError):
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            # Resetting also releases the scan cache. netCDF4 allocates the
+            # restored cache lazily if a later consumer accesses the variable.
+            variable.set_var_chunk_cache(size, nelems, preemption)
+        except (AttributeError, TypeError, ValueError, OSError, RuntimeError):
+            pass
 
 
 def _by_standard_name(ds, standard_name):
@@ -386,6 +435,16 @@ def _spatial_chunks(variable, *, vertices=False):
             yield (row, column), variable[selection]
 
 
+def _bounded_spatial_chunks(variable, *, vertices=False):
+    """Yield grid blocks while bounding and subsequently releasing I/O cache."""
+    working_set = _vertex_chunk_working_set_bytes(variable) if vertices else 0
+    with _bounded_variable_chunk_cache(
+        variable,
+        minimum_working_set_bytes=working_set,
+    ):
+        yield from _spatial_chunks(variable, vertices=vertices)
+
+
 def _global_cell_index(origin, local_shape, flat_index):
     local = np.unravel_index(flat_index, local_shape)
     return tuple(int(start + offset) for start, offset in zip(origin, local))
@@ -434,7 +493,7 @@ def _check_grid_variable_valid_range(findings, variable, name, entry, *, family)
     saw_finite = False
     saw_nonfinite = False
     try:
-        for origin, chunk in _spatial_chunks(variable):
+        for origin, chunk in _bounded_spatial_chunks(variable):
             values = np.ma.asarray(chunk, dtype="float64").filled(np.nan)
             values = np.asarray(values, dtype="float64")
             finite = np.isfinite(values)
@@ -528,7 +587,7 @@ def _check_vertex_valid_range(
     saw_nonfinite = False
     total = int(np.prod(vertices.shape[:-1]))
     try:
-        for origin, chunk in _spatial_chunks(vertices, vertices=True):
+        for origin, chunk in _bounded_spatial_chunks(vertices, vertices=True):
             masked_cells = np.ma.asarray(chunk, dtype="float64")
             missing = np.ma.getmaskarray(masked_cells).reshape(
                 -1, vertices.shape[-1]
@@ -846,6 +905,7 @@ def _validate_auxiliary(
             var,
             name,
             family="grid_longitude_single_cycle",
+            value_chunks=(chunk for _, chunk in _bounded_spatial_chunks(var)),
         )
     if var.ndim == ndim:
         expected = _grid_dimensions(catalog, entry, var.dimensions)
