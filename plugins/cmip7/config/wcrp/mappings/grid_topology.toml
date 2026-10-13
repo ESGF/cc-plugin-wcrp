@@ -12,14 +12,12 @@ allow_standard_name_fallback = true
 [grid_label_recommendation]
 reduced_horizontal_labels = ["hm", "hy", "hyb", "hys"]
 
-[grid_label_recommendation.horizontal_label]
-hs = "g013"
-ht = "g014"
-
 [grid_label_recommendation.horizontal_label_and_region]
 "hm|glb" = "g010"
 "hm|nh" = "g011"
 "hm|sh" = "g012"
+"hs|glb" = "g013"
+"ht|glb" = "g014"
 
 [grid_type]
 regular_latitude_longitude = "rectilinear"

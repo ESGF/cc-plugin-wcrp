@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 import numpy as np
 
-from checks.coordinate_checks.model import reference_id, reference_ids
+from checks.coordinate_checks.model import as_dict, reference_id, reference_ids
 from checks.coordinate_checks.utils import ncattr, neutral_dtype
 from checks.coordinate_checks.validation import (
     Findings,
@@ -348,6 +348,28 @@ def check_grid_mapping_consistency(
         f"File grid_mapping_name={actual!r} does not match the registered "
         f"grid_mapping={expected!r}{grid}; {expected!r} is the "
         f"{findings.severity_word('grid_mapping_consistency')} value.",
+    )
+
+
+def check_grid_region_consistency(findings, ds, registered_grid_metadata):
+    """Compare the file region with the registered grid's DRS region."""
+    if not registered_grid_metadata:
+        return
+    actual = str(ncattr(ds, "region") or "").strip()
+    registered_region = registered_grid_metadata.get("region")
+    if isinstance(registered_region, str):
+        expected = registered_region.strip()
+    else:
+        expected = str(as_dict(registered_region).get("drs_name") or "").strip()
+    if not actual or not expected or actual == expected:
+        return
+    label = reference_id(registered_grid_metadata.get("id"))
+    grid = f" for registered grid {label!r}" if label else ""
+    findings.add(
+        "grid_region_consistency",
+        f"File region={actual!r} does not match the registered grid "
+        f"region={expected!r}{grid}; {expected!r} is the "
+        f"{findings.severity_word('grid_region_consistency')} value.",
     )
 
 

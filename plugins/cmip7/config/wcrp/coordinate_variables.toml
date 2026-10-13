@@ -49,6 +49,9 @@ severity = "M"
 [coordinates.registry.grid_mapping_consistency]
 severity = "M"
 
+[coordinates.registry.grid_region_consistency]
+severity = "M"
+
 [coordinates.registry.grid_label_recommendation]
 severity = "M"
 

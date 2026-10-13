@@ -8,6 +8,7 @@ from checks.coordinate_checks.grid import (
     check_grid_cell_count,
     check_grid_label_recommendation,
     check_grid_mapping_consistency,
+    check_grid_region_consistency,
     validate_horizontal_grid,
 )
 from checks.coordinate_checks.model import Catalog
@@ -28,6 +29,7 @@ _REGISTRY_FAMILIES = (
     "grid_longitude_valid_range",
     "grid_longitude_single_cycle",
     "grid_mapping_consistency",
+    "grid_region_consistency",
     "grid_label_recommendation",
     "grid_cell_count_availability",
     "grid_cell_count_consistency",
@@ -277,6 +279,7 @@ def check_coordinate_catalog(
             issue=("grid_resolution", registered_grid_metadata_error),
             fallbacks=(
                 "grid_mapping_consistency",
+                "grid_region_consistency",
                 "grid_label_recommendation",
                 "grid_cell_count_availability",
                 "grid_cell_count_consistency",
@@ -307,6 +310,7 @@ def check_coordinate_catalog(
         data_var,
         registered_grid_metadata,
     )
+    check_grid_region_consistency(findings, ds, registered_grid_metadata)
     check_grid_label_recommendation(
         findings,
         ds,

@@ -380,6 +380,7 @@ class CoordinateRegistrySection(BaseModel):
     grid_longitude_valid_range: Optional[CoordinateGlobalRule] = None
     grid_longitude_single_cycle: Optional[CoordinateGlobalRule] = None
     grid_mapping_consistency: Optional[CoordinateGlobalRule] = None
+    grid_region_consistency: Optional[CoordinateGlobalRule] = None
     grid_label_recommendation: Optional[CoordinateGlobalRule] = None
     grid_cell_count_availability: Optional[CoordinateGlobalRule] = None
     grid_cell_count_consistency: Optional[CoordinateGlobalRule] = None

@@ -83,7 +83,13 @@ GRID_AXIS_FIELDS = [
     "out_name",
     "units",
 ]
-GRID_METADATA_FIELDS = ["id", "grid_type", "grid_mapping", "n_cells"]
+GRID_METADATA_FIELDS = [
+    "id",
+    "grid_type",
+    "grid_mapping",
+    "n_cells",
+    "region",
+]
 
 
 class CoordinateMetadataError(RuntimeError):

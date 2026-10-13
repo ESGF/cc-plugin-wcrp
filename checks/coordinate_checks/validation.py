@@ -164,6 +164,9 @@ class Findings:
             "grid_mapping_consistency": (
                 "[COORD011] Registered grid mapping"
             ),
+            "grid_region_consistency": (
+                "[COORD011] Registered grid region"
+            ),
             "grid_label_recommendation": (
                 "[COORD011] Registered grid-label recommendation"
             ),

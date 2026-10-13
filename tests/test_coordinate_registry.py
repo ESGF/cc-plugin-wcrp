@@ -20,6 +20,7 @@ from checks.coordinate_checks.grid import (
     check_grid_cell_count,
     check_grid_label_recommendation,
     check_grid_mapping_consistency,
+    check_grid_region_consistency,
 )
 from checks.coordinate_checks.model import Catalog
 from checks.coordinate_checks.suite import check_coordinate_catalog
@@ -226,6 +227,7 @@ def test_grid_metadata_is_read_once_with_topology_and_cell_count():
     assert metadata["grid_type"] == {"id": "tripolar"}
     assert metadata["grid_mapping"] == {"id": "latitude_longitude"}
     assert metadata["n_cells"] == 118800
+    assert "region" in api.calls[0][2]
     assert len(api.calls) == 1
     assert api.calls[0][:2] == ("grid", "g126")
 
@@ -460,14 +462,13 @@ def test_default_grid_topology_mapping_is_loaded_from_toml():
         ("stretched", "latitude_longitude"): "rectilinear"
     }
     assert config.allow_standard_name_fallback is True
-    assert config.recommended_grid_labels_by_horizontal_label == {
-        "hs": "g013",
-        "ht": "g014",
-    }
+    assert config.recommended_grid_labels_by_horizontal_label == {}
     assert config.recommended_grid_labels_by_horizontal_label_and_region == {
         ("hm", "glb"): "g010",
         ("hm", "nh"): "g011",
         ("hm", "sh"): "g012",
+        ("hs", "glb"): "g013",
+        ("ht", "glb"): "g014",
     }
     assert config.reduced_horizontal_labels == frozenset(
         {"hm", "hy", "hyb", "hys"}
@@ -573,6 +574,7 @@ def test_cmip7_config_sets_registered_grid_cell_count_severities():
     assert registry.grid_cell_count_availability.severity == "L"
     assert registry.grid_cell_count_consistency.severity == "M"
     assert registry.grid_mapping_consistency.severity == "M"
+    assert registry.grid_region_consistency.severity == "M"
 
 
 def test_cmip7_config_allows_unset_computed_standard_name():
@@ -1816,6 +1818,58 @@ def test_registered_grid_mapping_rejects_conflicting_file_value(nc):
     ]
 
 
+@pytest.mark.parametrize(
+    ("actual", "registered"),
+    [
+        (None, {"drs_name": "glb"}),
+        ("glb", None),
+        ("glb", {"id": "global"}),
+        ("glb", {"drs_name": "glb"}),
+    ],
+)
+def test_registered_grid_region_accepts_matching_or_unavailable_values(
+    nc, actual, registered
+):
+    if actual is not None:
+        nc.region = actual
+    findings = Findings({"grid_region_consistency": BaseCheck.MEDIUM})
+
+    check_grid_region_consistency(
+        findings,
+        nc,
+        {"id": "g100", "region": registered},
+    )
+
+    result = findings.results()[0]
+    assert result.weight == BaseCheck.MEDIUM
+    assert result.value == (1, 1)
+    assert not result.msgs
+
+
+def test_registered_grid_region_rejects_conflicting_file_value(nc):
+    nc.region = "nh"
+    findings = Findings({"grid_region_consistency": BaseCheck.MEDIUM})
+
+    check_grid_region_consistency(
+        findings,
+        nc,
+        {
+            "id": "g010",
+            "region": {"id": "global", "drs_name": "glb"},
+        },
+    )
+
+    result = findings.results()[0]
+    assert result.weight == BaseCheck.MEDIUM
+    assert result.value == (0, 1)
+    assert result.msgs == [
+        (
+            "File region='nh' does not match the registered grid region='glb' "
+            "for registered grid 'g010'; 'glb' is the recommended value."
+        )
+    ]
+
+
 def _cell_count_results(
     nc, metadata, *, cv=None, topology="rectilinear", topology_config=None
 ):
@@ -1937,6 +1991,82 @@ def test_special_layout_recommends_grid_label_without_cell_count(
     result = findings.results()[0]
     assert result.value == (0, 1)
     assert f"registered grid_label='{expected}'" in result.msgs[0]
+
+
+@pytest.mark.parametrize(
+    ("dimensions", "horizontal_label", "region", "grid_label"),
+    [
+        (("time",), "hm", "glb", "g010"),
+        (("time",), "hm", "nh", "g011"),
+        (("time",), "hm", "sh", "g012"),
+        (("site", "time"), "hs", "glb", "g013"),
+        (("oline", "time"), "ht", "glb", "g014"),
+    ],
+)
+def test_special_grid_recommendations_agree_with_registered_regions(
+    nc, dimensions, horizontal_label, region, grid_label
+):
+    nc.horizontal_label = horizontal_label
+    nc.region = region
+    root = Path(__file__).parents[1]
+    config = load_grid_topology_config(
+        root / "plugins/cmip7/config/wcrp/mappings/grid_topology.toml"
+    )
+    findings = Findings(
+        {
+            "grid_label_recommendation": BaseCheck.MEDIUM,
+            "grid_region_consistency": BaseCheck.MEDIUM,
+        }
+    )
+    metadata = {
+        "id": grid_label,
+        "region": {"drs_name": region},
+    }
+
+    check_grid_label_recommendation(
+        findings,
+        nc,
+        catalog({}, dimensions=dimensions),
+        metadata,
+        config,
+    )
+    check_grid_region_consistency(findings, nc, metadata)
+
+    assert all(result.value == (1, 1) for result in findings.results())
+    assert all(not result.msgs for result in findings.results())
+
+
+def test_special_grid_recommendation_and_region_findings_are_consistent(nc):
+    nc.horizontal_label = "hm"
+    nc.region = "nh"
+    root = Path(__file__).parents[1]
+    config = load_grid_topology_config(
+        root / "plugins/cmip7/config/wcrp/mappings/grid_topology.toml"
+    )
+    findings = Findings(
+        {
+            "grid_label_recommendation": BaseCheck.MEDIUM,
+            "grid_region_consistency": BaseCheck.MEDIUM,
+        }
+    )
+    metadata = {
+        "id": "g010",
+        "region": {"id": "global", "drs_name": "glb"},
+    }
+
+    check_grid_label_recommendation(
+        findings,
+        nc,
+        catalog({}, dimensions=("time",)),
+        metadata,
+        config,
+    )
+    check_grid_region_consistency(findings, nc, metadata)
+
+    messages = [message for result in findings.results() for message in result.msgs]
+    assert any("registered grid_label='g011'" in message for message in messages)
+    assert any("registered grid region='glb'" in message for message in messages)
+    assert all("'nh'" in message or "g011" in message for message in messages)
 
 
 def test_basin_layout_does_not_inherit_false_ht_grid_recommendation(nc):

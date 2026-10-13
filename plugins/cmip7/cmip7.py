@@ -323,6 +323,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                             "grid_cell_count_availability",
                             "grid_cell_count_consistency",
                             "grid_mapping_consistency",
+                            "grid_region_consistency",
                         )
                     )
                 )
@@ -914,6 +915,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 "grid_longitude_valid_range",
                 "grid_longitude_single_cycle",
                 "grid_mapping_consistency",
+                "grid_region_consistency",
                 "grid_label_recommendation",
                 "grid_cell_count_availability",
                 "grid_cell_count_consistency",
