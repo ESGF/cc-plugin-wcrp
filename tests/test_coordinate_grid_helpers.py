@@ -422,7 +422,9 @@ def test_vertex_valid_range_bounds_and_releases_netcdf_chunk_cache():
 @pytest.mark.parametrize(
     ("lower", "upper", "expected"),
     [
-        (None, None, 1.0e-6),
+        (None, None, 1.0e-12),
+        (0.0, 0.0, 1.0e-12),
+        (0.0, 1.0e-4, 1.0e-10),
         (0.0, 360.0, 3.6e-4),
         (-90.0, 90.0, 9.0e-5),
     ],

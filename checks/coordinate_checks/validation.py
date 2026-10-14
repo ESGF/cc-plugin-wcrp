@@ -10,6 +10,7 @@ from checks.coordinate_checks.utils import (
     bounds_pairs,
     compare_units,
     direct_numeric_equal,
+    direct_numeric_slack,
     formatted,
     ncattr,
     neutral_dtype,
@@ -341,9 +342,9 @@ def numeric_values(var) -> np.ndarray | None:
 
 
 def valid_range_slack(lower=None, upper=None) -> float:
-    """Return symmetric numerical slack, including when one limit is zero."""
+    """Return symmetric range slack with a small absolute numerical floor."""
     limits = [abs(float(value)) for value in (lower, upper) if value is not None]
-    return 1.0e-6 * max([1.0, *limits])
+    return max(1.0e-12, 1.0e-6 * max(limits, default=0.0))
 
 
 def check_valid_range(
@@ -669,11 +670,15 @@ def check_requested_numeric(findings: Findings, var, name: str, entry: dict):
     factor = entry.get("tolerance")
     missing = []
     for index, expected_value in enumerate(expected):
+        representation_slack = float(direct_numeric_slack(expected_value))
         if factor is None:
-            tolerance = 0.0
+            tolerance = representation_slack
             matched = np.any(direct_numeric_equal(array, expected_value))
         else:
-            tolerance = requested_tolerance(index, expected, float(factor))
+            tolerance = max(
+                representation_slack,
+                requested_tolerance(index, expected, float(factor)),
+            )
             matched = np.any(np.abs(array - expected_value) <= tolerance)
         if not matched:
             missing.append((expected_value, tolerance))
@@ -852,16 +857,23 @@ def check_bounds(
                     "requested_values",
                     f"Scalar bounds '{declared}'={pairs[0].tolist()}; the "
                     f"{findings.severity_word('requested_values')} pair is "
-                    f"{expected_pair.tolist()} (no tolerance applies to scalars).",
+                    f"{expected_pair.tolist()} (only numerical representation "
+                    "slack applies to scalars).",
                 )
         else:
             factor = entry.get("tolerance")
             for expected_pair in expected_pairs:
-                tolerances = (
-                    bound_tolerances(expected_pair, float(factor))
-                    if factor is not None
-                    else (0.0, 0.0)
+                representation_slack = tuple(
+                    float(value) for value in direct_numeric_slack(expected_pair)
                 )
+                if factor is None:
+                    tolerances = representation_slack
+                else:
+                    configured = bound_tolerances(expected_pair, float(factor))
+                    tolerances = tuple(
+                        max(representation_slack[edge], configured[edge])
+                        for edge in (0, 1)
+                    )
                 matches = [
                     pair
                     for pair in pairs

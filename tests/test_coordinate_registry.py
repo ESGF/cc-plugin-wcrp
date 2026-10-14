@@ -1445,9 +1445,67 @@ def test_direct_1d_values_allow_only_float_precision_noise(nc):
     )
     assert any(
         "'level' does not contain requested value(s)" in message
-        and "(550.0, 0.0)" in message
+        and "(550.0, 5.51e-10)" in message
         for message in messages(result)
     )
+
+
+def test_direct_1d_bounds_allow_only_float_precision_noise(nc):
+    nc.createDimension("level", 2)
+    nc.createDimension("bnds", 2)
+    level = nc.createVariable("level", "f8", ("level",))
+    level[:] = [550.0, 650.0]
+    level.bounds = "level_bnds"
+    bounds = nc.createVariable("level_bnds", "f8", ("level", "bnds"))
+    bounds[:] = [
+        [500.0000000001, 599.9999999999],
+        [600.0000000001, 699.9999999999],
+    ]
+    nc.createVariable("ta", "f4", ("level",))
+    entry = coordinate(
+        "level",
+        "standard_1d",
+        "level",
+        stored_direction="increasing",
+        coordinate_bounds=[500.0, 600.0, 700.0],
+        bounds_required=True,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"level": entry}), severities=FAMILIES
+    )
+    requested_values = next(item for item in result if "COORD007" in item.name)
+    assert requested_values.value == (1, 1)
+
+    bounds[1, 1] = 699.99
+    result = check_coordinate_catalog(
+        nc, catalog({"level": entry}), severities=FAMILIES
+    )
+    assert any(
+        "'level_bnds' does not contain requested bound pair [600.0, 700.0]"
+        in message
+        for message in messages(result)
+    )
+
+
+def test_configured_requested_tolerance_keeps_representation_slack_at_zero(nc):
+    nc.createDimension("level", 1)
+    level = nc.createVariable("level", "f8", ("level",))
+    level[:] = [5.0e-13]
+    nc.createVariable("ta", "f4", ("level",))
+    entry = coordinate(
+        "level",
+        "standard_1d",
+        "level",
+        coordinate_values=[0.0],
+        tolerance=1.0,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"level": entry}), severities=FAMILIES
+    )
+    requested_values = next(item for item in result if "COORD007" in item.name)
+    assert requested_values.value == (1, 1)
 
 
 def test_data_dimensions_follow_reverse_esgvoc_cmor_order(nc):
