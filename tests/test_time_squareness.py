@@ -75,6 +75,51 @@ def test_subdaily_non_point_cell_method_uses_interval_center(tmp_path):
         assert messages(check_time_range_vs_filename(dataset)) == []
 
 
+def test_registry_cell_methods_drive_sampling_despite_incorrect_file_value(tmp_path):
+    path = tmp_path / "tas_day_model_exp_r1i1p1f1_gn_20000101-20000102.nc"
+    with make_time_file(
+        path,
+        frequency="day",
+        table_id="day",
+        times=[0.5, 1.5],
+        bounds=[[0.0, 1.0], [1.0, 2.0]],
+    ) as dataset:
+        dataset.variables["tas"].cell_methods = "time: point"
+        expected = [
+            "area: mean time: mean",
+            "area: mean time: mean (interval: 1 day)",
+        ]
+
+        assert messages(
+            check_time_squareness(dataset, expected_cell_methods=expected)
+        ) == []
+        assert any(
+            "not match the expected axis" in message
+            for message in messages(check_time_squareness(dataset))
+        )
+
+
+def test_registry_cell_methods_with_conflicting_time_semantics_skip_axis(tmp_path):
+    path = tmp_path / "tas_Amon_model_exp_r1i1p1f1_gn_200001-200002.nc"
+    with make_time_file(
+        path,
+        frequency="mon",
+        table_id="Amon",
+        times=[15.0, 45.0],
+        bounds=[[0.0, 30.0], [30.0, 60.0]],
+    ) as dataset:
+        found = messages(
+            check_time_squareness(
+                dataset,
+                expected_cell_methods=["time: point", "time: mean"],
+            )
+        )
+
+    assert len(found) == 1
+    assert "imply both point and interval time sampling" in found[0]
+    assert "dependent axis check was skipped" in found[0]
+
+
 @pytest.mark.parametrize(
     "frequency,hours,label",
     [
@@ -104,6 +149,38 @@ def test_subdaily_mean_time_checks_agree_and_detect_wrong_spacing(
             "First incident at index 1" in msg
             for msg in messages(check_time_squareness(dataset))
         )
+
+
+def test_long_hourly_axis_does_not_accumulate_epoch_cancellation_error(tmp_path):
+    path = tmp_path / "pr_1hr_test_203201010030-203201010030.nc"
+    units = "days since 1850-01-01 00:00:00"
+    calendar = "standard"
+    # This length crosses the old cancellation threshold, whose first false
+    # mismatch occurred at index 34,360 with a 0.0144-second expected-axis drift.
+    count = 40_000
+    start = cftime.date2num(
+        cftime.datetime(2032, 1, 1, calendar=calendar),
+        units=units,
+        calendar=calendar,
+    )
+    edges = float(start) + np.arange(count + 1, dtype="float64") / 24.0
+
+    with Dataset(path, "w") as dataset:
+        dataset.frequency = "1hr"
+        dataset.variable_id = "pr"
+        dataset.createDimension("time", count)
+        dataset.createDimension("bnds", 2)
+        time = dataset.createVariable("time", "f8", ("time",))
+        time.units = units
+        time.calendar = calendar
+        time.bounds = "time_bnds"
+        bounds = dataset.createVariable("time_bnds", "f8", ("time", "bnds"))
+        bounds[:] = np.column_stack((edges[:-1], edges[1:]))
+        time[:] = bounds[:].mean(axis=1)
+        data = dataset.createVariable("pr", "f4", ("time",))
+        data.cell_methods = "time: mean"
+
+        assert messages(check_time_squareness(dataset)) == []
 
 
 def test_climatology_uses_multi_year_bounds_midpoints(tmp_path):

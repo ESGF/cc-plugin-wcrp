@@ -41,15 +41,23 @@ class GridTopologyConfig:
     """Mappings used to reduce grid metadata to a checkable topology.
 
     ``grid_type_and_mapping`` keys are ``(grid_type, grid_mapping)`` pairs.
-    They take precedence over the less-specific grid-type mapping.  Grid-label
-    mappings are a temporary fallback until the EMD grid relationship is
-    available through ESGVoc.
+    Explicit grid-label mappings take precedence so exceptional registered
+    grids can override general EMD rules. Unlisted labels use the structured
+    mappings and therefore do not require a configuration update.
     """
 
     grid_labels: dict[str, str] = field(default_factory=dict)
     grid_types: dict[str, str] = field(default_factory=dict)
+    grid_mappings: dict[str, str] = field(default_factory=dict)
     grid_type_and_mapping: dict[tuple[str, str], str] = field(default_factory=dict)
     allow_standard_name_fallback: bool = True
+    recommended_grid_labels_by_horizontal_label: dict[str, str] = field(
+        default_factory=dict
+    )
+    recommended_grid_labels_by_horizontal_label_and_region: dict[
+        tuple[str, str], str
+    ] = field(default_factory=dict)
+    reduced_horizontal_labels: frozenset[str] = field(default_factory=frozenset)
 
 
 def _mapping_table(source: Mapping, key: str) -> Mapping:
@@ -97,6 +105,10 @@ def _parse_config(source: Mapping) -> GridTopologyConfig:
         str(key): _topology(value, f"grid_type {key!r}")
         for key, value in _mapping_table(source, "grid_type").items()
     }
+    grid_mappings = {
+        str(key): _topology(value, f"grid_mapping {key!r}")
+        for key, value in _mapping_table(source, "grid_mapping").items()
+    }
     combinations = {}
     for key, value in _mapping_table(source, "grid_type_and_mapping").items():
         parts = str(key).split("|", 1)
@@ -107,11 +119,44 @@ def _parse_config(source: Mapping) -> GridTopologyConfig:
             )
         pair = tuple(part.strip() for part in parts)
         combinations[pair] = _topology(value, f"grid_type/grid_mapping {key!r}")
+
+    recommendations = _mapping_table(source, "grid_label_recommendation")
+    reduced_horizontal_labels = recommendations.get(
+        "reduced_horizontal_labels", []
+    ) or []
+    if not isinstance(reduced_horizontal_labels, list):
+        raise GridTopologyConfigError(
+            "grid_label_recommendation.reduced_horizontal_labels must be a "
+            "TOML array."
+        )
+    by_horizontal_label = {
+        str(key): str(value)
+        for key, value in _mapping_table(
+            recommendations, "horizontal_label"
+        ).items()
+    }
+    by_horizontal_label_and_region = {}
+    for key, value in _mapping_table(
+        recommendations, "horizontal_label_and_region"
+    ).items():
+        parts = str(key).split("|", 1)
+        if len(parts) != 2 or not all(part.strip() for part in parts):
+            raise GridTopologyConfigError(
+                "[grid_label_recommendation.horizontal_label_and_region] keys "
+                "must have the form 'horizontal_label|region'."
+            )
+        by_horizontal_label_and_region[tuple(part.strip() for part in parts)] = str(
+            value
+        )
     return GridTopologyConfig(
         labels,
         grid_types,
+        grid_mappings,
         combinations,
         allow_standard_name_fallback,
+        by_horizontal_label,
+        by_horizontal_label_and_region,
+        frozenset(str(value) for value in reduced_horizontal_labels),
     )
 
 
@@ -140,7 +185,7 @@ def resolve_grid_topology(
     grid_type="",
     grid_mapping="",
 ) -> tuple[str | None, str | None]:
-    """Resolve topology from EMD metadata, falling back to ``grid_label``.
+    """Resolve topology from an explicit label override, then EMD metadata.
 
     ESGVoc references may be strings, dictionaries, or resolved Pydantic
     models.  No topology is inferred from shapes in the netCDF file: an
@@ -150,6 +195,10 @@ def resolve_grid_topology(
     type_id = _identifier(grid_type)
     mapping_id = _identifier(grid_mapping)
 
+    if label:
+        topology = config.grid_labels.get(label)
+        if topology:
+            return topology, None
     if type_id and mapping_id:
         topology = config.grid_type_and_mapping.get((type_id, mapping_id))
         if topology:
@@ -158,20 +207,20 @@ def resolve_grid_topology(
         topology = config.grid_types.get(type_id)
         if topology:
             return topology, None
-    if label:
-        topology = config.grid_labels.get(label)
+    if mapping_id:
+        topology = config.grid_mappings.get(mapping_id)
         if topology:
             return topology, None
-    if type_id:
-        detail = f"grid_type={type_id!r}"
-        if mapping_id:
+    if type_id or mapping_id:
+        detail = f"grid_type={type_id!r}" if type_id else f"grid_mapping={mapping_id!r}"
+        if type_id and mapping_id:
             detail += f" and grid_mapping={mapping_id!r}"
         if label:
             detail += f", or fallback grid_label={label!r}"
         return None, f"No horizontal topology is configured for {detail}."
     if not label:
         return None, (
-            "The file has no non-empty global 'grid_label' attribute and ESGVoc "
-            "does not yet expose the EMD grid_type/grid_mapping relationship."
+            "The file has no non-empty global 'grid_label' attribute and no "
+            "grid_type/grid_mapping relationship was supplied by the project metadata."
         )
     return None, f"No horizontal topology is configured for grid_label={label!r}."

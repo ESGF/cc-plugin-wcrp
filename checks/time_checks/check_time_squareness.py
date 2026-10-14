@@ -16,6 +16,9 @@ from checks.utils import add_time_increment, severity_word
 
 NDECIMALS = 6
 _TIME_RANGE_RE = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$", re.IGNORECASE)
+_TIME_UNIT_RE = re.compile(r"^\s*([A-Za-z_]+)\s+since\b", re.IGNORECASE)
+_TIME_CELL_METHOD_RE = re.compile(r"(?:^|\s)time:\s*([A-Za-z_]+)", re.IGNORECASE)
+_USE_FILE_CELL_METHODS = object()
 
 
 class RepresentativeIntervalError(ValueError):
@@ -117,6 +120,52 @@ def _is_instantaneous(ds, target_var: str | None, freq_id: str) -> bool:
     if freq_id in set(AVERAGE_CORRECTION_FREQ):
         return False
     return True
+
+
+def _expected_time_sampling(
+    cell_methods, freq_id: str
+) -> tuple[bool | None, str | None]:
+    """Derive one point/interval interpretation from all permitted values."""
+    if isinstance(cell_methods, str):
+        allowed = [cell_methods]
+    else:
+        allowed = list(cell_methods or [])
+    allowed = [str(value).strip() for value in allowed if str(value).strip()]
+    if not allowed:
+        return None, "the known branded variable does not define cell_methods"
+
+    interpretations = set()
+    for value in allowed:
+        # Parenthetical interval information and comments do not change whether
+        # the time coordinate represents a point or an interval statistic.
+        without_comments = re.sub(r"\([^)]*\)", "", value)
+        methods = _TIME_CELL_METHOD_RE.findall(without_comments)
+        if methods:
+            interpretations.update(method.lower() == "point" for method in methods)
+        else:
+            interpretations.add(freq_id not in set(AVERAGE_CORRECTION_FREQ))
+
+    if len(interpretations) != 1:
+        return (
+            None,
+            "the permitted cell_methods values imply both point and interval "
+            f"time sampling: {allowed!r}",
+        )
+    return interpretations.pop(), None
+
+
+def _fixed_step_num(d0, d1, units: str, calendar: str) -> float:
+    """Return a fixed increment in file units without epoch cancellation."""
+    match = _TIME_UNIT_RE.match(units)
+    if match is None:
+        raise ValueError(f"Unsupported time units {units!r}")
+
+    # Subtracting two large absolute date2num values introduces a tiny error
+    # that grows with every step. Use the same unit with d0 as a local origin,
+    # where the subtraction is between zero and one small increment.
+    local_units = f"{match.group(1)} since {d0}"
+    local_values = cftime.date2num([d0, d1], units=local_units, calendar=calendar)
+    return float(local_values[1] - local_values[0])
 
 
 def _midpoint_num(d0, d1, units: str, calendar: str) -> float:
@@ -278,13 +327,24 @@ def _parse_freq_token(token: str):
     return None
 
 
-def _resolve_increment(table_id: str, freq_id: str, fallback_freq: dict | None):
+def _resolve_increment(
+    table_id: str,
+    freq_id: str,
+    fallback_freq: dict | None,
+    increment_mapping: dict | None = None,
+):
     """
     Resolution order:
-      1) local nctime mapping: (table_id, freq_id)
-      2) local nctime mapping: ('None', freq_id)
-      3) TOML fallback: frequency[freq_id] -> token -> (val, unit)
+      1) project-local mapping supplied by the checker instance
+      2) built-in nctime mapping: (table_id, freq_id)
+      3) built-in nctime mapping: ('None', freq_id)
+      4) TOML fallback: frequency[freq_id] -> token -> (val, unit)
     """
+    if increment_mapping:
+        if (table_id, freq_id) in increment_mapping:
+            return increment_mapping[(table_id, freq_id)]
+        if ("None", freq_id) in increment_mapping:
+            return increment_mapping[("None", freq_id)]
     if (table_id, freq_id) in FREQ_INC:
         return FREQ_INC[(table_id, freq_id)]
     if ("None", freq_id) in FREQ_INC:
@@ -295,7 +355,17 @@ def _resolve_increment(table_id: str, freq_id: str, fallback_freq: dict | None):
 
 
 def check_time_squareness(
-    ds, severity=BaseCheck.HIGH, calendar="", ref_time_units="", frequency=None
+    ds,
+    severity=BaseCheck.HIGH,
+    calendar="",
+    ref_time_units="",
+    frequency=None,
+    expected_cell_methods=_USE_FILE_CELL_METHODS,
+    report_structural_prerequisites=False,
+    report_units_prerequisite=True,
+    report_bounds_prerequisites=True,
+    increment_mapping=None,
+    filename_structure_delegated=False,
 ):
     """
     TIME001: Time axis check for a single file.
@@ -304,16 +374,29 @@ def check_time_squareness(
     - Declared climatological bounds: coordinate midpoint
     - Primary: FREQ_INC (table_id, frequency)
     - Start: filename start boundary
-    - Average data: midpoint convention for AVERAGE_CORRECTION_FREQ
+    - Sampling semantics: permitted branded-variable cell_methods when supplied,
+      otherwise the file metadata used by legacy/direct callers
     - Optional policy: calendar / ref_time_units equality checks
     """
     ctx = TestCtx(severity, "[TIME001] Check Time Squareness ")
 
     if "time" not in ds.variables:
+        if report_structural_prerequisites:
+            ctx.add_failure(
+                "Coordinate variable 'time' is missing, so TIME001 could not be "
+                "evaluated."
+            )
+            return [ctx.to_result()]
         return []
 
     time_var = ds.variables["time"]
     if time_var.ndim != 1:
+        if report_structural_prerequisites:
+            ctx.add_failure(
+                "Coordinate variable 'time' is not one-dimensional, so TIME001 "
+                f"could not be evaluated; found dimensions {list(time_var.dimensions)}."
+            )
+            return [ctx.to_result()]
         return []  # Coordinate identity checks own the invalid time shape.
     units = getattr(time_var, "units", "") or ""
     cal = getattr(time_var, "calendar", "standard") or "standard"
@@ -326,7 +409,23 @@ def check_time_squareness(
         )
 
     if not units:
+        if not report_units_prerequisite:
+            return []
         ctx.add_failure("Missing time.units; cannot rebuild theoretical axis.")
+        return [ctx.to_result()]
+
+    try:
+        # Validate the encoding independently of the file's potentially very
+        # large numerical dates.  Value zero is sufficient to validate units
+        # syntax and the calendar without imposing a datetime range limit.
+        cftime.num2date(0.0, units=units, calendar=cal)
+    except Exception as exc:
+        if not report_units_prerequisite:
+            return []
+        ctx.add_failure(
+            f"Invalid time units or calendar; TIME001 cannot rebuild the axis. "
+            f"Technical reason: {type(exc).__name__}: {exc}"
+        )
         return [ctx.to_result()]
 
     raw_time = np.ma.asarray(time_var[:])
@@ -342,6 +441,33 @@ def check_time_squareness(
         return [ctx.to_result()]
 
     is_climatology = bool(getattr(time_var, "climatology", "") or "")
+    declared_name = str(
+        getattr(time_var, "climatology", "") or getattr(time_var, "bounds", "") or ""
+    )
+    if declared_name:
+        bounds_var = ds.variables.get(declared_name)
+        bounds_error = None
+        if bounds_var is None:
+            bounds_error = f"referenced variable {declared_name!r} is absent"
+        elif (
+            bounds_var.ndim != 2
+            or bounds_var.shape != (time_var.shape[0], 2)
+            or bounds_var.dimensions[0] != time_var.dimensions[0]
+        ):
+            bounds_error = (
+                f"{declared_name!r} must have dimensions "
+                f"({time_var.dimensions[0]!r}, <size-2>); found "
+                f"{list(bounds_var.dimensions)} with shape {bounds_var.shape}"
+            )
+        if bounds_error:
+            if not report_bounds_prerequisites:
+                return []
+            ctx.add_failure(
+                f"The declared time bounds are structurally invalid: {bounds_error}. "
+                "TIME001 could not evaluate their spacing or midpoint placement."
+            )
+            return [ctx.to_result()]
+
     midpoint_checked, declared_bounds = _check_declared_bounds_midpoints(
         ctx,
         ds,
@@ -364,7 +490,12 @@ def check_time_squareness(
         return [ctx.to_result()]
 
     table_id = _resolve_table_id(ds)
-    inc = _resolve_increment(table_id, freq_id, frequency or {})
+    inc = _resolve_increment(
+        table_id,
+        freq_id,
+        frequency or {},
+        increment_mapping=increment_mapping,
+    )
     if not inc:
         ctx.add_failure(
             f"Cannot resolve increment for (table_id={table_id}, frequency={freq_id})."
@@ -382,6 +513,10 @@ def check_time_squareness(
     # Start boundary from filename
     start_tuple = _parse_filename_start(_get_ds_path(ds))
     if not start_tuple:
+        if filename_structure_delegated:
+            # Midpoint validation above is independent of the filename. Keep
+            # any such finding while leaving only the parsing failure to FILE001.
+            return [ctx.to_result()] if ctx.messages else []
         ctx.add_failure("Cannot parse filename time range start (_YYYY..-YYYY..nc).")
         return [ctx.to_result()]
 
@@ -394,9 +529,19 @@ def check_time_squareness(
         )
         return [ctx.to_result()]
 
-    # Instantaneous vs average
+    # Instantaneous vs interval sampling. Project plugins supply the registry
+    # values; the file fallback remains for direct/legacy callers.
     target = _resolve_target_variable(ds)
-    instantaneous = _is_instantaneous(ds, target, freq_id)
+    if expected_cell_methods is _USE_FILE_CELL_METHODS:
+        instantaneous = _is_instantaneous(ds, target, freq_id)
+    else:
+        instantaneous, reason = _expected_time_sampling(expected_cell_methods, freq_id)
+        if instantaneous is None:
+            ctx.add_failure(
+                "TIME001 cannot determine the required time sampling because "
+                f"{reason}; the dependent axis check was skipped."
+            )
+            return [ctx.to_result()]
     use_midpoint = not instantaneous
 
     # Read actual time axis
@@ -423,8 +568,7 @@ def check_time_squareness(
             d0 = start_boundary
             d1 = add_time_increment(d0, inc_val, inc_unit, cal)
             reference_n0 = float(cftime.date2num(d0, units=units, calendar=cal))
-            reference_n1 = float(cftime.date2num(d1, units=units, calendar=cal))
-            step_num = reference_n1 - reference_n0
+            step_num = _fixed_step_num(d0, d1, units, cal)
             n0 = (
                 float(actual[0]) - step_num / 2.0
                 if use_midpoint and label_is_representative
@@ -457,11 +601,7 @@ def check_time_squareness(
                 nxt = add_time_increment(cur, inc_val, inc_unit, cal)
                 cur_num = float(cftime.date2num(cur, units=units, calendar=cal))
                 nxt_num = float(cftime.date2num(nxt, units=units, calendar=cal))
-                theo[i] = (
-                    0.5 * (cur_num + nxt_num)
-                    if use_midpoint
-                    else cur_num
-                )
+                theo[i] = 0.5 * (cur_num + nxt_num) if use_midpoint else cur_num
                 if bounds_available:
                     theo_bounds[i] = (cur_num, nxt_num)
                 cur = nxt

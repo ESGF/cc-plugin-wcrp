@@ -13,7 +13,7 @@ from checks.coordinate_checks.model import (
     reference_ids,
 )
 
-MINIMUM_ESGVOC_VERSION = Version("5.1.0")
+MINIMUM_ESGVOC_VERSION = Version("7.0.0")
 
 DATA_COORDINATE_FIELDS = [
     "id",
@@ -83,10 +83,51 @@ GRID_AXIS_FIELDS = [
     "out_name",
     "units",
 ]
+GRID_METADATA_FIELDS = [
+    "id",
+    "grid_type",
+    "grid_mapping",
+    "n_cells",
+    "region",
+]
 
 
 class CoordinateMetadataError(RuntimeError):
     """The coordinate standard could not be initialized reliably."""
+
+
+def load_grid_metadata(
+    grid_label: str,
+    *,
+    api=None,
+    installed_version: str | None = None,
+) -> dict:
+    """Read one registered grid and its EMD topology metadata."""
+    lookup_id = str(grid_label or "").strip()
+    if not lookup_id:
+        raise CoordinateMetadataError(
+            "The file has no non-empty global 'grid_label' attribute, so its "
+            "registered grid metadata cannot be obtained from ESGVoc."
+        )
+    if api is None:
+        api = _get_api()
+    else:
+        require_supported_version(installed_version)
+    try:
+        record = api.get_term_in_data_descriptor(
+            "grid", lookup_id, GRID_METADATA_FIELDS
+        )
+    except Exception as exc:
+        raise CoordinateMetadataError(
+            f"ESGVoc failed while reading registered grid {lookup_id!r}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if record is None:
+        raise CoordinateMetadataError(
+            f"Registered grid {lookup_id!r} was not found in the ESGVoc "
+            "Universe 'grid' data descriptor."
+        )
+    return as_dict(record)
 
 
 def require_supported_version(installed_version: str | None = None) -> str:
@@ -149,12 +190,50 @@ def _all(api, project_id: str, descriptor: str, fields: list[str]):
     return records
 
 
+def _all_with_universe_fallback(
+    api, project_id: str, descriptor: str, fields: list[str]
+):
+    """Read project records, falling back to the matching Universe descriptor."""
+    project_error = None
+    try:
+        records = api.get_all_terms_in_collection(project_id, descriptor, fields)
+    except Exception as exc:
+        project_error = exc
+        records = []
+    if records:
+        return records
+    try:
+        records = api.get_all_terms_in_data_descriptor(descriptor, fields)
+    except Exception as exc:
+        project_detail = (
+            f" Project collection error: {type(project_error).__name__}: "
+            f"{project_error}."
+            if project_error is not None
+            else ""
+        )
+        raise CoordinateMetadataError(
+            f"ESGVoc could not read coordinate metadata {descriptor!r} from "
+            f"project {project_id!r} or its Universe data descriptor."
+            f"{project_detail} Universe descriptor error: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if not records:
+        raise CoordinateMetadataError(
+            "ESGVoc returned no records for coordinate collection/data "
+            f"descriptor {descriptor!r}; the coordinate catalog is incomplete."
+        )
+    return records
+
+
 def load_catalog(
     branded_variable_id: str,
     *,
     project_id: str = "cmip7",
     api=None,
     installed_version: str | None = None,
+    branded_collection: str = "branded_variable",
+    file_variable_name: str = "",
+    allow_universe_coordinate_fallback: bool = False,
 ) -> Catalog:
     """Read the branded variable and complete coordinate catalog exactly once."""
     if api is None:
@@ -171,18 +250,19 @@ def load_catalog(
     try:
         branded_record = api.get_term_in_collection(
             project_id,
-            "branded_variable",
+            branded_collection,
             lookup_id,
-            ["id", "out_name", "dimensions"],
+            ["id", "out_name", "variable_root_name", "dimensions", "cell_methods"],
         )
     except Exception as exc:
         raise CoordinateMetadataError(
-            "ESGVoc failed while reading known_branded_variable "
+            f"ESGVoc failed while reading {branded_collection} "
             f"{branded_variable_id!r}: {type(exc).__name__}: {exc}"
         ) from exc
     if branded_record is None:
         raise CoordinateMetadataError(
-            f"Known branded variable {branded_variable_id!r} was not found in ESGVoc."
+            f"Known branded variable {branded_variable_id!r} was not found in "
+            f"ESGVoc project collection {project_id!r}/{branded_collection!r}."
         )
     branded = as_dict(branded_record)
     coordinate_ids = reference_ids(branded.get("dimensions"))
@@ -192,8 +272,11 @@ def load_catalog(
             "coordinate references in ESGVoc field 'dimensions'."
         )
 
+    read_all = (
+        _all_with_universe_fallback if allow_universe_coordinate_fallback else _all
+    )
     data_coordinates = records_by_id(
-        _all(api, project_id, "data_coordinate", DATA_COORDINATE_FIELDS)
+        read_all(api, project_id, "data_coordinate", DATA_COORDINATE_FIELDS)
     )
     missing = [
         identifier
@@ -214,13 +297,16 @@ def load_catalog(
         coordinate_ids=tuple(coordinate_ids),
         data_coordinates=data_coordinates,
         model_levels=records_by_id(
-            _all(api, project_id, "model_level_coordinate", MODEL_LEVEL_FIELDS)
+            read_all(api, project_id, "model_level_coordinate", MODEL_LEVEL_FIELDS)
         ),
         formula_terms=records_by_id(
-            _all(api, project_id, "formula_term", FORMULA_TERM_FIELDS)
+            read_all(api, project_id, "formula_term", FORMULA_TERM_FIELDS)
         ),
         grid_variables=records_by_id(
-            _all(api, project_id, "grid_variable", GRID_VARIABLE_FIELDS)
+            read_all(api, project_id, "grid_variable", GRID_VARIABLE_FIELDS)
         ),
-        grid_axes=records_by_id(_all(api, project_id, "grid_axis", GRID_AXIS_FIELDS)),
+        grid_axes=records_by_id(
+            read_all(api, project_id, "grid_axis", GRID_AXIS_FIELDS)
+        ),
+        file_variable_name=file_variable_name,
     )

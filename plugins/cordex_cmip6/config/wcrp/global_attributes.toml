@@ -1,0 +1,101 @@
+# ESGVoc attribute specifications are authoritative. These entries select
+# project severities; CORDEX-specific semantic checks remain separately enabled.
+
+[global.attributes.activity_id]
+severity = "H"
+
+[global.attributes.Conventions]
+severity = "H"
+
+[global.attributes.contact]
+severity = "H"
+
+[global.attributes.creation_date]
+severity = "H"
+
+[global.attributes.domain_id]
+severity = "H"
+
+[global.attributes.domain]
+severity = "H"
+
+[global.attributes.driving_experiment_id]
+severity = "H"
+
+[global.attributes.driving_experiment]
+severity = "H"
+
+[global.attributes.driving_institution_id]
+severity = "H"
+
+[global.attributes.driving_source_id]
+severity = "H"
+
+[global.attributes.driving_source]
+severity = "H"
+
+[global.attributes.driving_variant_label]
+severity = "H"
+
+[global.attributes.frequency]
+severity = "H"
+
+[global.attributes.grid]
+severity = "H"
+
+[global.attributes.history]
+severity = "L"
+
+[global.attributes.institution_id]
+severity = "H"
+
+[global.attributes.institution]
+severity = "H"
+
+[global.attributes.license]
+severity = "H"
+
+[global.attributes.mip_era]
+severity = "H"
+
+[global.attributes.product]
+severity = "H"
+
+[global.attributes.project_id]
+severity = "H"
+
+[global.attributes.references]
+severity = "L"
+
+[global.attributes.source_id]
+severity = "H"
+
+[global.attributes.source]
+severity = "H"
+
+[global.attributes.source_type]
+severity = "H"
+
+[global.attributes.tracking_id]
+severity = "H"
+
+[global.attributes.variable_id]
+severity = "H"
+
+[global.attributes.version_realization]
+severity = "H"
+
+[global.attributes.version_realization_info]
+severity = "L"
+
+[global.consistency.filename_vs_attributes]
+severity = "H"
+
+[global.consistency.institution_id_vs_institution]
+severity = "H"
+
+[global.consistency.source_id_vs_source]
+severity = "H"
+
+[global.consistency.driving_source_id_vs_driving_source]
+severity = "H"

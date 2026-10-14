@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -12,6 +13,12 @@ from checks.attribute_checks.check_global_attributes_esgvoc import (
     get_global_attribute_names,
     normalize_global_attributes,
 )
+from plugins import wcrp_base
+from plugins.c3scmip6.c3scmip6.c3scmip6 import C3SCmip6ProjectCheck
+from plugins.cmip6.cmip6 import Cmip6ProjectCheck
+from plugins.cmip6plus.cmip6plus import Cmip6PlusProjectCheck
+from plugins.cmip7.cmip7 import Cmip7ProjectCheck
+from plugins.cordex_cmip6.cordex_cmip6 import CordexCmip6ProjectCheck
 from plugins.wcrp_base import WCRPBaseCheck
 
 
@@ -21,6 +28,7 @@ class FakeSpec:
     attr_field_value_type: str
     attr_field_name: str | None = None
     is_required: bool = False
+    source_collection_key: str | None = None
 
 
 class FakeDataset:
@@ -177,6 +185,42 @@ def test_multiple_invalid_tokens_remain_one_attr004_assertion():
     assert "BAD2" in attr004[0].msgs[0]
 
 
+def test_specific_key_accepts_one_value_from_descriptor_list(monkeypatch):
+    source = "Regional Climate Model REMO (2023)"
+    report = GAReport(
+        project_id="cordex-cmip6",
+        filename="example.nc",
+        results=[
+            AttributeResult(
+                "source",
+                False,
+                "source not found",
+                source,
+                "source_id",
+            ),
+        ],
+    )
+    validator = FakeValidator(report)
+    validator._specs = [
+        FakeSpec("source_id", "string", "source", True, "source")
+    ]
+    monkeypatch.setattr(
+        "checks.attribute_checks.check_global_attributes_esgvoc.voc.get_term_in_collection",
+        lambda project_id, collection_id, term_id: SimpleNamespace(
+            source=["Regional Climate Model REMO", source]
+        ),
+    )
+
+    results = check_global_attributes_esgvoc(
+        FakeDataset({"source_id": "REMO2020-2-2", "source": source}),
+        "cordex-cmip6",
+        validator=validator,
+    )
+
+    assert len(results) == 2
+    assert all(not result.msgs for result in results)
+
+
 def test_esgvoc_failure_is_reported_once_as_setup_error():
     class BrokenValidator(FakeValidator):
         def validate(self, attributes, filename=None):
@@ -191,6 +235,61 @@ def test_esgvoc_failure_is_reported_once_as_setup_error():
     assert len(results) == 1
     assert results[0].name == "[ATTR004] ESGVoc global attribute validation setup"
     assert "RuntimeError: database unavailable" in results[0].msgs[0]
+
+
+def test_invalid_esgvoc_project_database_is_reported_once(monkeypatch, caplog):
+    class InvalidProjectAPI:
+        def __init__(self):
+            self.project_calls = 0
+
+        def get_project(self, project_id):
+            self.project_calls += 1
+            logging.getLogger("esgvoc.api.projects").error(
+                "invalid project specifications"
+            )
+            return None
+
+        def get_active_database_info(self, project_id):
+            return {"version": "2.3.0"}
+
+    api = InvalidProjectAPI()
+    monkeypatch.setattr(wcrp_base, "ev", api)
+    monkeypatch.setattr(wcrp_base, "ESG_VOCAB_AVAILABLE", True)
+
+    checker = Cmip7ProjectCheck()
+    checker.setup_warnings = []
+    with caplog.at_level(logging.ERROR):
+        checker._initialize_esgvoc_project_specs()
+    results = checker.check_setup_warnings(None)
+
+    registry_results = [
+        result for result in results if result.name == "Variable Registry"
+    ]
+    assert len(registry_results) == 1
+    assert registry_results[0].weight == BaseCheck.HIGH
+    assert "database (version '2.3.0') may be absent or incompatible" in (
+        registry_results[0].msgs[0]
+    )
+    assert checker.check_Global_Attributes(None) == []
+    assert checker.check_DRS(None) == []
+
+    second_checker = Cmip7ProjectCheck()
+    second_checker._initialize_esgvoc_project_specs()
+    assert api.project_calls == 1
+    assert "invalid project specifications" not in caplog.text
+
+
+def test_all_esgvoc_backed_project_plugins_enable_project_database_probe():
+    assert all(
+        checker_class._uses_esgvoc_project_specs
+        for checker_class in (
+            Cmip7ProjectCheck,
+            Cmip6ProjectCheck,
+            Cmip6PlusProjectCheck,
+            C3SCmip6ProjectCheck,
+            CordexCmip6ProjectCheck,
+        )
+    )
 
 
 def test_base_routes_esgvoc_and_local_attributes_to_separate_checkers():

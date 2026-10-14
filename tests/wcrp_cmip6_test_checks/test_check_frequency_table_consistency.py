@@ -1,34 +1,29 @@
+"""Integration coverage for frequency/table consistency."""
 
-#!/usr/bin/env python
-"""
-Test for check_frequency_table_consistency.py
-Author: Ayoub NACHITE ''IPSL''
-"""
+from pathlib import Path
 
-import os
-from netCDF4 import Dataset
+import pytest
+import toml
 from compliance_checker.base import BaseCheck
-from ...checks.consistency_checks import check_frequency_table_consistency as checker
-from compliance_checker.tests import BaseTestCase
 
-class TestCheckFrequencyTableConsistency(BaseTestCase):
+from checks.consistency_checks.check_frequency_table_consistency import (
+    check_frequency_table_id_consistency,
+)
+from tests.wcrp_cmip6_test_checks.conftest import result_passed
 
-    def test_check_frequency_table_id_consistency(self):
-        file_path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__),
-            "..", "..", "data", "CMIP6", "CMIP", "IPSL", "IPSL-CM5A2-INCA",
-            "historical", "r1i1p1f1", "Amon", "pr", "gr", "v20240619",
-            "pr_Amon_IPSL-CM5A2-INCA_historical_r1i1p1f1_gr_185001-201412.nc"
-        ))
+pytestmark = pytest.mark.remote_data
 
-        mapping_file = os.path.abspath(os.path.join(
-            os.path.dirname(__file__),
-            "mapping.toml"
-        ))
 
-        dataset = Dataset(file_path, mode="r")
-        results = checker.check_frequency_table_id_consistency(dataset, mapping_file, severity=BaseCheck.MEDIUM)
-        assert len(results) == 1
-        for res in results:
-            self.assert_result_is_good(res) 
+def test_check_frequency_table_id_consistency(cmip6_reference_dataset):
+    mapping_path = Path(__file__).with_name("mapping.toml")
+    mapping = toml.load(mapping_path)["frequency_table_id_mapping"]
 
+    results = check_frequency_table_id_consistency(
+        cmip6_reference_dataset,
+        mapping,
+        severity=BaseCheck.MEDIUM,
+    )
+
+    assert len(results) == 1
+    assert result_passed(results[0])
+    assert results[0].name.startswith("[ATTR008]")

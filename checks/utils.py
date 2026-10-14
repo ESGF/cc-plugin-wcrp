@@ -54,6 +54,28 @@ def severity_word(severity, noun=False):
     return SEVERITY_WORDING_MAP.get(severity, "recommended")
 
 
+def severity_ordered(items, *, severity, priority=None):
+    """Return configured items by severity, then by stable semantic priority.
+
+    ``priority`` represents the check hierarchy maintained by the plugin.  The
+    original position is the final tie-breaker so ordering remains deterministic
+    even for an unknown or newly added item.
+    """
+    indexed = list(enumerate(items))
+    priority = priority or (lambda _item: 0)
+    return [
+        item
+        for _position, item in sorted(
+            indexed,
+            key=lambda pair: (
+                -int(severity(pair[1])),
+                int(priority(pair[1])),
+                pair[0],
+            ),
+        )
+    ]
+
+
 # === Mapping CMOR<-->python datatypes
 dtypesdict = {
     "integer": np.int32,

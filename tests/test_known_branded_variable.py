@@ -57,6 +57,45 @@ def test_new_known_branded_variable_uses_canonical_fields_directly():
     assert len(calls) == 1
 
 
+def test_new_known_branded_variable_preserves_list_metadata():
+    record = {
+        **NEW_RECORD,
+        "long_name": ["Air Temperature", "Atmospheric Temperature"],
+        "cell_methods": ["area: time: mean", "area: mean time: mean"],
+        "cell_measures": ["area: areacella"],
+        "comment": ["Air temperature comment", "Alternative comment"],
+    }
+
+    expected = normalize_known_branded_variable(record)
+
+    assert expected.long_name == ["Air Temperature", "Atmospheric Temperature"]
+    assert expected.cell_methods == [
+        "area: time: mean",
+        "area: mean time: mean",
+    ]
+    assert expected.cell_measures == ["area: areacella"]
+    assert expected.comment == ["Air temperature comment", "Alternative comment"]
+
+
+@pytest.mark.parametrize("is_climatology", [False, True])
+def test_resolved_time_coordinate_supplies_climatology_flag(is_climatology):
+    record = {
+        **NEW_RECORD,
+        "dimensions": [
+            SimpleNamespace(
+                id="time_climatology" if is_climatology else "time",
+                axis="T",
+                is_climatology=is_climatology,
+            ),
+            SimpleNamespace(id="latitude", axis="Y", is_climatology=False),
+        ],
+    }
+
+    expected = normalize_known_branded_variable(record)
+
+    assert expected.time_is_climatology is is_climatology
+
+
 def test_legacy_known_branded_variable_maps_units_and_looks_up_long_name():
     legacy = {
         "id": NEW_RECORD["id"],
@@ -196,6 +235,54 @@ def test_all_registry_backed_plugins_use_new_known_branded_variable_model(
         assert expected.cell_measures == "area: areacella"
     else:
         assert calls[0]["data_descriptor_id"] == "known_branded_variable"
+
+
+@pytest.mark.parametrize(
+    ("module_name", "checker_class"),
+    [
+        ("plugins.cmip6.cmip6", Cmip6ProjectCheck),
+        ("plugins.cmip6plus.cmip6plus", Cmip6PlusProjectCheck),
+        ("plugins.c3scmip6.c3scmip6.c3scmip6", C3SCmip6ProjectCheck),
+    ],
+)
+def test_cmip6_family_time003_uses_resolved_coordinate_climatology(
+    tmp_path, monkeypatch, module_name, checker_class
+):
+    module = importlib.import_module(module_name)
+    record = {
+        **NEW_RECORD,
+        "dimensions": [
+            SimpleNamespace(id="time_climatology", axis="T", is_climatology=True)
+        ],
+    }
+    monkeypatch.setattr(
+        module,
+        "find_terms_in_data_descriptor",
+        lambda **kwargs: [SimpleNamespace(**record)],
+    )
+    monkeypatch.setattr(module, "check_time_squareness", lambda *args, **kwargs: [])
+    observed = {}
+
+    def capture(*args, **kwargs):
+        observed.update(kwargs)
+        return []
+
+    monkeypatch.setattr(module, "check_time_range_vs_filename", capture)
+    checker = checker_class()
+    checker._load_split_config()
+    checker.variable_id_to_branded_variable = {"Amon.tas": NEW_RECORD["id"]}
+
+    from netCDF4 import Dataset
+
+    with Dataset(tmp_path / "tas_Amon_200001-201012-clim.nc", "w") as dataset:
+        dataset.variable_id = "tas"
+        dataset.table_id = "Amon"
+        dataset.frequency = "mon"
+        dataset.createDimension("time", 1)
+        dataset.createVariable("time", "f8", ("time",))[:] = [0.0]
+        checker.check_Coordinates(dataset)
+
+    assert observed["expected_is_climatology"] is True
 
 
 def test_cmip7_long_name_fallback_uses_project_variable_collection(monkeypatch):

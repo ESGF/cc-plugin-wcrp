@@ -28,7 +28,7 @@ def check_bounds_value_consistency(ds, var_name, severity=BaseCheck.MEDIUM):
 
     if bnds_name not in ds.variables:
         ctx.add_failure(f"Declared bounds variable '{bnds_name}' not found for '{var_name}'.")
-        return []
+        return [ctx.to_result()]
 
     bnds_var = ds.variables[bnds_name]
     # Skip silently when bounds are not interval-shaped (n, 2).

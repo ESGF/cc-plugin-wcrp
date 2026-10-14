@@ -49,12 +49,13 @@ def check_compression(
         return [testctx.to_result()]
 
     # Retrieve compression info
-    complevel = ds[variable_name].filters()["complevel"]
-    shuffle = ds[variable_name].filters()["shuffle"]
+    filters = ds[variable_name].filters() or {}
+    complevel = filters.get("complevel")
+    shuffle = filters.get("shuffle")
 
     if complevel is None or shuffle is None:
         testctx.add_failure(
-            f"It is {qualifier} that data variable be compressed with a 'deflate level' of '{expected_complevel}'"
+            f"It is {qualifier} that data variable be compressed with a 'deflate level' of '{expected_complevel}' "
             f"""{"and with the 'shuffle' option enabled." if expected_shuffle else "."} """
             "The data appears uncompressed."
         )

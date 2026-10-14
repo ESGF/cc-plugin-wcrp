@@ -45,7 +45,7 @@ Each WCRP plugin:
 
 ## Configuration
 
-WCRP plugins are driven by TOML configuration files. CMIP6/CMIP7 currently use a **split-TOML** layout, while CORDEX-CMIP6 and the Data plugin still rely on a **single TOML** file (legacy layout).
+WCRP plugins are driven by TOML configuration files. CMIP6, CMIP7, and CORDEX-CMIP6 use a **split-TOML** layout, while the Data plugin retains its single-file layout.
 
 For a full description of the TOML tree, naming conventions, and the underlying configuration model, see: **Configuration** (`configuration.md`).
 
@@ -53,6 +53,5 @@ For a full description of the TOML tree, naming conventions, and the underlying 
 
 - **CMIP6 (`wcrp_cmip6`)**: uses the split-TOML layout under `plugins/cmip6/config/wcrp/` (plus `mappings/`).
 - **CMIP7 (`wcrp_cmip7`)**: uses the split-TOML layout under `plugins/cmip7/config/wcrp/`.
-- **CORDEX-CMIP6 (`wcrp_cordex_cmip6`)**: *for now* uses the legacy single-file configuration (e.g. `wcrp_config.toml` + `mapping_variables.toml`).  
-  This will be migrated to the same split-TOML structure as CMIP6/CMIP7.
+- **CORDEX-CMIP6 (`wcrp_cordex_cmip6`)**: uses the split-TOML layout under `plugins/cordex_cmip6/config/wcrp/`; ESGVoc is the default variable/coordinate metadata source and CMOR tables remain optional.
 - **Data plugin (`wcrp_data`)**: kept as a **single TOML** configuration for now (data plausibility focused), to remain lightweight and independent from project-specific split trees.
