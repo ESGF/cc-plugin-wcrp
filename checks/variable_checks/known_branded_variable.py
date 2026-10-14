@@ -12,9 +12,11 @@ BRANDED_VARIABLE_FIELDS = [
     "long_name",
     "cf_standard_name",
     "units",
+    "cf_units",
     "dimensions",
     "cell_methods",
     "cell_measures",
+    "comment",
     "description",
     "flag_values",
     "flag_meanings",
@@ -34,14 +36,16 @@ class ExpectedVariableMetadata:
     cf_standard_name: str | None = None
     units: str | None = None
     dimensions: list[str] | None = None
-    cell_methods: str | None = None
-    cell_measures: str | None = None
+    cell_methods: str | list[str] | None = None
+    cell_measures: str | list[str] | None = None
+    comment: str | list[str] | None = None
     description: str | None = None
-    long_name: str | None = None
+    long_name: str | list[str] | None = None
     out_name: str | None = None
     flag_values: Any = None
     flag_meanings: Any = None
     variable_root_name: str | None = None
+    time_is_climatology: bool | None = None
 
     @property
     def cf_units(self) -> str | None:
@@ -85,6 +89,18 @@ def _reference_ids(values: Any) -> list[str] | None:
     return [identifier for value in values if (identifier := _reference_id(value))]
 
 
+def _time_is_climatology(values: Any) -> bool | None:
+    """Read the unique time coordinate's climatology flag from resolved references."""
+    time_coordinates = [
+        value
+        for value in values or []
+        if not isinstance(value, str) and str(_value(value, "axis", "")) == "T"
+    ]
+    if len(time_coordinates) != 1:
+        return None
+    return bool(_value(time_coordinates[0], "is_climatology", False))
+
+
 def normalize_known_branded_variable(
     term: Any,
     *,
@@ -95,19 +111,22 @@ def normalize_known_branded_variable(
     if units is None:
         units = _nonempty(_value(term, "cf_units"))
     long_name = _nonempty(_value(term, "long_name")) or _nonempty(fallback_long_name)
+    dimensions = _value(term, "dimensions")
     return ExpectedVariableMetadata(
         id=_nonempty(_value(term, "id")),
         cf_standard_name=_nonempty(_value(term, "cf_standard_name")),
         units=units,
-        dimensions=_reference_ids(_value(term, "dimensions")),
+        dimensions=_reference_ids(dimensions),
         cell_methods=_nonempty(_value(term, "cell_methods")),
         cell_measures=_nonempty(_value(term, "cell_measures")),
+        comment=_nonempty(_value(term, "comment")),
         description=_nonempty(_value(term, "description")),
         long_name=long_name,
         out_name=_nonempty(_value(term, "out_name")),
         flag_values=_value(term, "flag_values"),
         flag_meanings=_value(term, "flag_meanings"),
         variable_root_name=_reference_id(_value(term, "variable_root_name")),
+        time_is_climatology=_time_is_climatology(dimensions),
     )
 
 
@@ -202,6 +221,8 @@ def lookup_expected_variable_metadata_in_collection(
     branded_variable_id: str,
     *,
     fallback_variable_id: str | None = None,
+    branded_collection: str = "branded_variable",
+    variable_collection: str = "variable",
 ) -> VariableMetadataLookup:
     """Read branded-variable metadata from one project's collections.
 
@@ -213,20 +234,20 @@ def lookup_expected_variable_metadata_in_collection(
     try:
         branded = get_term(
             project_id=project_id,
-            collection_id="branded_variable",
+            collection_id=branded_collection,
             term_id=branded_lookup_id,
             selected_term_fields=BRANDED_VARIABLE_FIELDS,
         )
     except Exception as exc:
         raise KnownBrandedVariableLookupError(
-            f"Registry lookup error for {project_id}/branded_variable "
+            f"Registry lookup error for {project_id}/{branded_collection} "
             f"{branded_variable_id!r}: {type(exc).__name__}: {exc}"
         ) from exc
 
     if branded is None:
         raise KnownBrandedVariableLookupError(
             f"Branded variable {branded_variable_id!r} was not found in "
-            f"the {project_id!r} project collection."
+            f"the {project_id!r}/{branded_collection!r} project collection."
         )
 
     expected = normalize_known_branded_variable(branded)
@@ -246,14 +267,15 @@ def lookup_expected_variable_metadata_in_collection(
     try:
         variable = get_term(
             project_id=project_id,
-            collection_id="variable",
+            collection_id=variable_collection,
             term_id=variable_id,
             selected_term_fields=["id", "long_name"],
         )
     except Exception as exc:
         return VariableMetadataLookup(
             expected,
-            f"Registry lookup error for {project_id}/variable {variable_id!r}: "
+            f"Registry lookup error for {project_id}/{variable_collection} "
+            f"{variable_id!r}: "
             f"{type(exc).__name__}: {exc}. Only 'long_name' is unavailable.",
         )
 

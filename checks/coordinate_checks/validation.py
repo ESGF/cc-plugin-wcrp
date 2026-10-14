@@ -9,13 +9,56 @@ from checks.coordinate_checks.utils import (
     bound_tolerances,
     bounds_pairs,
     compare_units,
+    direct_numeric_equal,
     formatted,
     ncattr,
     neutral_dtype,
     requested_tolerance,
     values,
 )
-from checks.utils import severity_word as configured_severity_word
+from checks.utils import (
+    severity_ordered,
+)
+from checks.utils import (
+    severity_word as configured_severity_word,
+)
+
+_LONGITUDE_PERIOD = 360.0
+
+
+# Ordered consumers which can report that a shared prerequisite is unusable
+# when its usual result family is disabled.  This does not re-enable the
+# owner's semantic checks: it only prevents an enabled dependent check from
+# disappearing without explaining why it could not run.
+PREREQUISITE_FALLBACKS = {
+    "identity": (
+        "attributes",
+        "recommendations",
+        "direction",
+        "valid_range",
+        "requested_values",
+        "bounds",
+        "bounds_name",
+        "associations",
+        "formula",
+        "dimension_order",
+    ),
+    "grid": (
+        "grid_latitude_valid_range",
+        "grid_longitude_valid_range",
+        "grid_longitude_single_cycle",
+        "attributes",
+        "recommendations",
+        "direction",
+        "valid_range",
+        "requested_values",
+        "bounds",
+        "bounds_name",
+        "associations",
+        "formula",
+        "dimension_order",
+    ),
+}
 
 
 class Findings:
@@ -36,10 +79,60 @@ class Findings:
         self.vertices_dimension_name = vertices_dimension_name
         self.climatology_bounds_name = climatology_bounds_name
         self.time_bounds_delegated = time_bounds_delegated
+        self._reported_prerequisites: set[object] = set()
 
     def add(self, family: str, message: str):
         if family in self.messages and message not in self.messages[family]:
             self.messages[family].append(message)
+
+    def add_prerequisite(
+        self,
+        owner: str,
+        message,
+        *,
+        issue: object | None = None,
+        fallbacks=(),
+    ) -> str | None:
+        """Report one unusable prerequisite through the best enabled owner.
+
+        The highest configured severity wins.  The hard-coded hierarchy is a
+        stable tie-breaker.  ``issue`` deduplicates a shared root cause when
+        several dependent validators encounter it.
+        """
+        candidates = (owner, *fallbacks, *PREREQUISITE_FALLBACKS.get(owner, ()))
+        enabled = list(
+            dict.fromkeys(name for name in candidates if name in self.messages)
+        )
+        ordered = severity_ordered(
+            enabled,
+            severity=lambda name: self.severities[name],
+        )
+        family = ordered[0] if ordered else None
+        if family is None:
+            return None
+        rendered = message(family) if callable(message) else message
+        key = issue if issue is not None else (owner, rendered)
+        if key in self._reported_prerequisites:
+            return family
+        self._reported_prerequisites.add(key)
+        self.add(family, rendered)
+        return family
+
+    def add_blocked(self, families, message: str, *, issue: object) -> str | None:
+        """Report a shared prerequisite failure through an enabled consumer."""
+        enabled = list(
+            dict.fromkeys(name for name in families if name in self.messages)
+        )
+        ordered = severity_ordered(
+            enabled,
+            severity=lambda name: self.severities[name],
+        )
+        family = ordered[0] if ordered else None
+        if family is None or issue in self._reported_prerequisites:
+            return family
+        self._reported_prerequisites.add(issue)
+        self.add(family, message)
+        return family
 
     def severity_word(self, family: str, *, noun: bool = False) -> str:
         """Return wording matching the configured severity of one family."""
@@ -55,10 +148,34 @@ class Findings:
                 f"{self.severity_word('recommendations', noun=True)}s"
             ),
             "allowed_when_unset": (
-                "[COORD004a] Allowed attributes with unset definitions"
+                "[COORD004a] Additional permitted coordinate metadata"
             ),
             "direction": "[COORD005] Coordinate monotonicity and stored direction",
             "valid_range": "[COORD006] Coordinate valid range",
+            "grid_latitude_valid_range": (
+                "[COORD006] Grid-latitude valid range"
+            ),
+            "grid_longitude_valid_range": (
+                "[COORD006] Grid-longitude valid range"
+            ),
+            "grid_longitude_single_cycle": (
+                "[COORD006] Grid-longitude single cycle"
+            ),
+            "grid_mapping_consistency": (
+                "[COORD011] Registered grid mapping"
+            ),
+            "grid_region_consistency": (
+                "[COORD011] Registered grid region"
+            ),
+            "grid_label_recommendation": (
+                "[COORD011] Registered grid-label recommendation"
+            ),
+            "grid_cell_count_availability": (
+                "[COORD011] Registered grid cell-count metadata"
+            ),
+            "grid_cell_count_consistency": (
+                "[COORD011] Horizontal grid cell count"
+            ),
             "requested_values": "[COORD007] Requested coordinate values",
             "bounds": "[COORD008] Coordinate bounds",
             "bounds_name": "[COORD009] Coordinate bounds naming",
@@ -206,9 +323,10 @@ def report_allowed_when_unset(
         return False
     findings.add(
         "allowed_when_unset",
-        f"'{name}' defines {attribute}={formatted(actual)} although its coordinate "
-        "definition is empty; this is permitted by the configured "
-        "allowed_when_unset exception.",
+        f"Coordinate '{name}' defines optional attribute "
+        f"{attribute}={formatted(actual)}. No expected value is currently "
+        "specified in the coordinate vocabulary, so this value cannot be "
+        "verified.",
     )
     return True
 
@@ -222,31 +340,111 @@ def numeric_values(var) -> np.ndarray | None:
         return None
 
 
-def check_valid_range(findings: Findings, var, name: str, entry: dict):
+def valid_range_slack(lower=None, upper=None) -> float:
+    """Return symmetric numerical slack, including when one limit is zero."""
+    limits = [abs(float(value)) for value in (lower, upper) if value is not None]
+    return 1.0e-6 * max([1.0, *limits])
+
+
+def check_valid_range(
+    findings: Findings,
+    var,
+    name: str,
+    entry: dict,
+    *,
+    family: str = "valid_range",
+):
     lower = entry.get("valid_min")
     upper = entry.get("valid_max")
     if lower is None and upper is None:
         return
     array = numeric_values(var)
     if array is None or not array.size or not np.all(np.isfinite(array)):
-        findings.add("valid_range", f"'{name}' has no finite numeric values to check.")
+        findings.add(family, f"'{name}' has no finite numeric values to check.")
         return
+    slack = valid_range_slack(lower, upper)
     if lower is not None:
-        slack = 1.0e-6 * abs(float(lower))
         offending = array[array < float(lower) - slack]
         if offending.size:
             findings.add(
-                "valid_range",
-                f"'{name}' contains {offending.min()} below required valid_min={lower}.",
+                family,
+                f"'{name}' contains {offending.min()} below "
+                f"{findings.severity_word(family)} valid_min={lower}. "
+                f"The comparison permits numerical tolerance={slack}.",
             )
     if upper is not None:
-        slack = 1.0e-6 * abs(float(upper))
         offending = array[array > float(upper) + slack]
         if offending.size:
             findings.add(
-                "valid_range",
-                f"'{name}' contains {offending.max()} above required valid_max={upper}.",
+                family,
+                f"'{name}' contains {offending.max()} above "
+                f"{findings.severity_word(family)} valid_max={upper}. "
+                f"The comparison permits numerical tolerance={slack}.",
             )
+
+
+def check_single_longitude_cycle(
+    findings: Findings,
+    var,
+    name: str,
+    *,
+    family: str = "valid_range",
+    value_chunks=None,
+):
+    """Require a grid-longitude variable to use no more than one cycle."""
+    minimum = maximum = None
+    chunks = value_chunks if value_chunks is not None else (var[...],)
+    try:
+        for chunk in chunks:
+            array = np.ma.asarray(chunk, dtype="float64")
+            array = np.asarray(array.filled(np.nan), dtype="float64").reshape(-1)
+            if not array.size or not np.all(np.isfinite(array)):
+                return
+            chunk_min = float(np.min(array))
+            chunk_max = float(np.max(array))
+            minimum = chunk_min if minimum is None else min(minimum, chunk_min)
+            maximum = chunk_max if maximum is None else max(maximum, chunk_max)
+    except (TypeError, ValueError, IndexError, OSError, RuntimeError):
+        return
+    if minimum is None or maximum is None:
+        return
+    extent = maximum - minimum
+    slack = valid_range_slack(0.0, _LONGITUDE_PERIOD)
+    if extent > _LONGITUDE_PERIOD + slack:
+        findings.add(
+            family,
+            f"Grid-longitude coordinate '{name}' spans {extent} degrees; it is "
+            f"{findings.severity_word(family)} to span no more than one "
+            f"{_LONGITUDE_PERIOD:g}-degree "
+            f"cycle plus numerical slack={slack}.",
+        )
+
+
+def _is_longitude(var, entry: dict) -> bool:
+    standard_name = str(entry.get("cf_standard_name") or ncattr(var, "standard_name"))
+    return standard_name in {"longitude", "grid_longitude"}
+
+
+def _unwrap_longitude_pairs(
+    pairs: np.ndarray, coordinates: np.ndarray | None
+) -> np.ndarray:
+    """Place each longitude-bound pair on the branch around its parent value."""
+    if coordinates is not None and coordinates.size == pairs.shape[0]:
+        references = coordinates.reshape(-1, 1)
+    else:
+        references = pairs[:, :1]
+    offsets = (pairs - references + 0.5 * _LONGITUDE_PERIOD) % _LONGITUDE_PERIOD
+    offsets -= 0.5 * _LONGITUDE_PERIOD
+    return references + offsets
+
+
+def _cyclic_absolute_difference(actual, expected):
+    difference = (
+        np.asarray(actual, dtype="float64")
+        - np.asarray(expected, dtype="float64")
+        + 0.5 * _LONGITUDE_PERIOD
+    ) % _LONGITUDE_PERIOD - 0.5 * _LONGITUDE_PERIOD
+    return np.abs(difference)
 
 
 def _strict_direction(array: np.ndarray) -> str | None:
@@ -385,12 +583,19 @@ def check_bounds_direction(
     scalar: bool = False,
 ):
     """Require bounds to follow the prescribed or observed coordinate direction."""
+    coordinates = None
+    if not scalar and coord_var.ndim == 1:
+        coordinates = numeric_values(coord_var)
+    direction_pairs = (
+        _unwrap_longitude_pairs(pairs, coordinates)
+        if _is_longitude(coord_var, entry)
+        else pairs
+    )
     direction = str(entry.get("stored_direction") or "")
     source = "the prescribed stored_direction"
     if direction not in {"increasing", "decreasing"}:
         direction = ""
     if not direction and not scalar and coord_var.ndim == 1:
-        coordinates = numeric_values(coord_var)
         if (
             coordinates is not None
             and coordinates.size >= 2
@@ -401,7 +606,7 @@ def check_bounds_direction(
     if not direction:
         return
 
-    internal_differences = pairs[:, 1] - pairs[:, 0]
+    internal_differences = direction_pairs[:, 1] - direction_pairs[:, 0]
     internal_valid = (
         np.all(internal_differences > 0)
         if direction == "increasing"
@@ -415,7 +620,7 @@ def check_bounds_direction(
         )
 
     if not scalar and pairs.shape[0] > 1:
-        overall_differences = np.diff(pairs, axis=0)
+        overall_differences = np.diff(direction_pairs, axis=0)
         overall_valid = (
             np.all(overall_differences > 0)
             if direction == "increasing"
@@ -464,12 +669,13 @@ def check_requested_numeric(findings: Findings, var, name: str, entry: dict):
     factor = entry.get("tolerance")
     missing = []
     for index, expected_value in enumerate(expected):
-        tolerance = (
-            requested_tolerance(index, expected, float(factor))
-            if factor is not None
-            else 0.0
-        )
-        if not np.any(np.abs(array - expected_value) <= tolerance):
+        if factor is None:
+            tolerance = 0.0
+            matched = np.any(direct_numeric_equal(array, expected_value))
+        else:
+            tolerance = requested_tolerance(index, expected, float(factor))
+            matched = np.any(np.abs(array - expected_value) <= tolerance)
+        if not matched:
             missing.append((expected_value, tolerance))
     if missing:
         findings.add(
@@ -488,7 +694,6 @@ def check_bounds(
     *,
     scalar=False,
     recommended_name: str | None = None,
-    allowed_attributes=(),
 ):
     """Follow the coordinate's bounds attribute and validate that variable."""
     time_coverage_owned_by_time002 = (
@@ -523,14 +728,6 @@ def check_bounds(
         return None
     bounds_var = ds.variables[declared]
     check_dtype(findings, bounds_var, declared, entry, family="bounds")
-    unexpected = sorted(set(bounds_var.ncattrs()) - set(allowed_attributes))
-    if unexpected:
-        findings.add(
-            "bounds",
-            f"Bounds variable '{declared}' has unexpected attributes {unexpected}; "
-            f"the {findings.severity_word('bounds')} allowed attributes are "
-            f"{list(allowed_attributes)}.",
-        )
 
     check_trailing_dimension(
         findings,
@@ -605,8 +802,13 @@ def check_bounds(
 
     if not scalar and pairs.shape[0] == coord_var.size:
         coordinates = numeric_values(coord_var)
-        lower = np.minimum(pairs[:, 0], pairs[:, 1])
-        upper = np.maximum(pairs[:, 0], pairs[:, 1])
+        comparison_pairs = (
+            _unwrap_longitude_pairs(pairs, coordinates)
+            if _is_longitude(coord_var, entry)
+            else pairs
+        )
+        lower = np.minimum(comparison_pairs[:, 0], comparison_pairs[:, 1])
+        upper = np.maximum(comparison_pairs[:, 0], comparison_pairs[:, 1])
         if (
             not time_coverage_owned_by_time002
             and coordinates is not None
@@ -635,7 +837,17 @@ def check_bounds(
     if expected_pairs:
         if scalar:
             expected_pair = np.asarray(expected_pairs[0])
-            if not np.array_equal(pairs[0], expected_pair):
+            actual_pair = (
+                expected_pair
+                + (
+                    (pairs[0] - expected_pair + 0.5 * _LONGITUDE_PERIOD)
+                    % _LONGITUDE_PERIOD
+                    - 0.5 * _LONGITUDE_PERIOD
+                )
+                if _is_longitude(coord_var, entry)
+                else pairs[0]
+            )
+            if not np.all(direct_numeric_equal(actual_pair, expected_pair)):
                 findings.add(
                     "requested_values",
                     f"Scalar bounds '{declared}'={pairs[0].tolist()}; the "
@@ -654,7 +866,14 @@ def check_bounds(
                     pair
                     for pair in pairs
                     if all(
-                        abs(float(pair[edge]) - expected_pair[edge]) <= tolerances[edge]
+                        (
+                            _cyclic_absolute_difference(
+                                float(pair[edge]), expected_pair[edge]
+                            )
+                            if _is_longitude(coord_var, entry)
+                            else abs(float(pair[edge]) - expected_pair[edge])
+                        )
+                        <= tolerances[edge]
                         for edge in (0, 1)
                     )
                 ]

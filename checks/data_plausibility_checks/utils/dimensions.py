@@ -24,34 +24,58 @@ def get_ds_dimensions(dataset):
 
     # Check for variables with axis attributes or common names
     for var_name, var in dataset.variables.items():
+        var_dims = tuple(getattr(var, 'dimensions', ()))
+        x_dim = var_dims[-1] if var_dims else var_name
+        y_dim = var_dims[-2] if len(var_dims) > 1 else (
+            var_dims[0] if var_dims else var_name
+        )
+        primary_dim = var_dims[0] if var_dims else var_name
         # Check axis attribute
         if hasattr(var, 'axis'):
             axis = var.axis
             if axis in AXIS_NAMES:
                 if axis == 'X':
-                    dimensions['x'] = var_name
+                    dimensions['x'] = x_dim
                 elif axis == 'Y':
-                    dimensions['y'] = var_name
+                    dimensions['y'] = y_dim
                 elif axis == 'T':
-                    dimensions['time'] = var_name
+                    dimensions['t'] = primary_dim
                 elif axis == 'Z':
-                    dimensions['z'] = var_name
+                    dimensions['z'] = primary_dim
+
+        # Curvilinear ocean grids generally expose auxiliary nav_lon/nav_lat
+        # variables. Use their CF identity and return the dimensions beneath
+        # them rather than the auxiliary-variable names.
+        standard_name = str(getattr(var, 'standard_name', '')).lower()
+        if dimensions['x'] is None and standard_name in {
+            'longitude', 'grid_longitude', 'projection_x_coordinate'
+        }:
+            dimensions['x'] = x_dim
+        if dimensions['y'] is None and standard_name in {
+            'latitude', 'grid_latitude', 'projection_y_coordinate'
+        }:
+            dimensions['y'] = y_dim
+        if dimensions['t'] is None and standard_name == 'time':
+            dimensions['t'] = primary_dim
+        if dimensions['z'] is None and str(
+            getattr(var, 'positive', '')
+        ).lower() in {'up', 'down'}:
+            dimensions['z'] = primary_dim
 
         # Check common dimension names if axis attribute is not present
         if dimensions['x'] is None and var_name.lower() in ['lon', 'longitude',"x"]:
-            dimensions['x'] = var_name
+            dimensions['x'] = x_dim
         if dimensions['y'] is None and var_name.lower() in ['lat', 'latitude',"y"]:
-            dimensions['y'] = var_name
+            dimensions['y'] = y_dim
         if dimensions['t'] is None and var_name.lower() in ['time']:
-            dimensions['t'] = var_name
-        if dimensions['z'] is None and var_name.lower() in ['z', 'depth', 'level']:
-            dimensions['z'] = var_name
+            dimensions['t'] = primary_dim
+        if dimensions['z'] is None and var_name.lower() in [
+            'z', 'depth', 'level', 'lev', 'olevel', 'plev'
+        ]:
+            dimensions['z'] = primary_dim
 
     if 'member' in dataset.dimensions:
         dimensions['member'] = 'member'
-    # Raise an error if any of the essential dimensions are not found
-    if None in [dimensions['x'], dimensions['y'], dimensions['time']]:
-        raise ValueError("Could not determine longitude, latitude, or time dimensions.")
     # Drop keys with None values before returning
     dimensions = {k: v for k, v in dimensions.items() if v is not None}
     return dimensions
@@ -74,14 +98,14 @@ def get_filtered_dimensions(dataset, variable_name):
 
     # Get the longitude, latitude, and time dimensions
     dimensions= get_ds_dimensions(dataset)
-    x_dim = dimensions['x']
-    y_dim = dimensions['y']
+    horizontal_dims = {dimensions.get('x'), dimensions.get('y')}
+    horizontal_dims.discard(None)
  
     # Get the list of dimension names for the variable
     dimension_names = list(variable.dimensions)
 
     # Filter out the longitude and latitude dimensions
-    filtered_dimensions = [dim for dim in dimension_names if dim not in [x_dim, y_dim]]
+    filtered_dimensions = [dim for dim in dimension_names if dim not in horizontal_dims]
 
     return filtered_dimensions
 
@@ -104,10 +128,6 @@ def get_var_dimensions(dataset,variable):
 
     var_dims=dataset.variables[variable].dimensions
     ds_dims=get_ds_dimensions(dataset)
-    # Check if variable dimensions are a subset of dataset dimensions
-    if not all(dim in ds_dims.values() for dim in var_dims):
-        raise ValueError("The variable dimensions are not a subset of the dataset dimensions.")
-
     # Create a dictionary with the same keys as dataset_dims but only with the dimensions that exist in the variable
     common_dims = {key: value for key, value in ds_dims.items() if value in var_dims}
 

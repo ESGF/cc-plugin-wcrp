@@ -9,7 +9,7 @@ severity = "H"
 [variable.type]
 # Checks VAR005
 severity = "H"
-data_type = "float"
+data_type = ["real", "double"]
 
 [variable.dimensions]
 # Checks VAR006 VAR002 DIM001 DIM002 DIM003

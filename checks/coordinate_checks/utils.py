@@ -9,6 +9,20 @@ from compliance_checker.cf import util as cfutil
 
 from checks.coordinate_checks.model import as_dict, reference_id, reference_ids
 
+_DIRECT_NUMERIC_RTOL = 1e-12
+_DIRECT_NUMERIC_ATOL = 1e-12
+
+
+def direct_numeric_equal(actual, expected):
+    """Compare direct values with only floating-point representation slack."""
+    return np.isclose(
+        actual,
+        expected,
+        rtol=_DIRECT_NUMERIC_RTOL,
+        atol=_DIRECT_NUMERIC_ATOL,
+        equal_nan=False,
+    )
+
 
 def ncattr(obj, name: str, default=""):
     try:

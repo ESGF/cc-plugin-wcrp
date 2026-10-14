@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any, Iterable, Optional
 
 import numpy as np
 from compliance_checker.base import TestCtx
 
 from checks.utils import severity_word
+
+
+_UNRESTRICTED_CELL_MEASURES = {"--MODEL", "--OPT", "--UGRID"}
 
 # ESGVOC
 try:
@@ -53,6 +57,48 @@ def _ci_attr_name_lookup(obj, attribute_name: str) -> str:
     return matches[0] if matches else attribute_name
 
 
+def _expected_term_value(expected_term: Any, key: Optional[str]):
+    """Return one expected metadata value from a normalized registry record."""
+    if expected_term is None or not key:
+        return None
+    if isinstance(expected_term, Mapping):
+        return expected_term.get(key)
+    return getattr(expected_term, key, None)
+
+
+def _has_expected_term_value(expected_term: Any, key: Optional[str]) -> bool:
+    """Whether a branded-variable attribute has a non-empty expected value."""
+    value = _expected_term_value(expected_term, key)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _expected_term_options(value: Any) -> list[str]:
+    """Return the permitted scalar values represented by registry metadata."""
+    if isinstance(value, (list, tuple, set)):
+        return [str(option).strip() for option in value if str(option).strip()]
+    option = str(value).strip()
+    return [option] if option else []
+
+
+def _has_unrestricted_cell_measures(
+    expected_term: Any,
+    key: Optional[str],
+) -> bool:
+    """Whether the registry delegates ``cell_measures`` to the producer."""
+    if key != "cell_measures":
+        return False
+    expected_options = _expected_term_options(
+        _expected_term_value(expected_term, key)
+    )
+    return bool(_UNRESTRICTED_CELL_MEASURES.intersection(expected_options))
+
+
 # -----------------------------------------------------------------------------
 # MAIN
 # -----------------------------------------------------------------------------
@@ -78,6 +124,8 @@ def check_attribute_suite(
     project_name: Optional[str] = None,
     # Registry expected-term rule (exclusive with everything else in ATTR004)
     cv_source_term_key: Optional[str] = None,
+    expected_term_comparison: str = "equal",
+    report_missing_expected_term: bool = False,
     expected_term: Any = None,
     # Location
     var_name: Optional[str] = None,
@@ -128,6 +176,25 @@ def check_attribute_suite(
     prefix = f"{context} " if context else ""
     label = f"{prefix}{where} '{attribute_name}'"
 
+    unrestricted_cell_measures = _has_unrestricted_cell_measures(
+        expected_term,
+        cv_source_term_key,
+    )
+
+    # A main-variable attribute backed by branded-variable metadata is only
+    # mandatory when that selected record actually defines an expected value.
+    # When registry lookup itself failed, an issue with the same configured
+    # severity is reported.
+    if (
+        cv_source_term_key
+        and expected_term is not None
+        and (
+            not _has_expected_term_value(expected_term, cv_source_term_key)
+            or unrestricted_cell_measures
+        )
+    ):
+        is_required = False
+
     # -------------------------------------------------------------------------
     # Dynamic is_required resolution
     # -------------------------------------------------------------------------
@@ -173,6 +240,24 @@ def check_attribute_suite(
                 f"Required {where.lower()} '{attribute_name}' is missing."
             )
             results.append(existence_ctx.to_result())
+        elif (
+            report_missing_expected_term
+            and cv_source_term_key
+            and not unrestricted_cell_measures
+            and _has_expected_term_value(expected_term, cv_source_term_key)
+        ):
+            expected_options = _expected_term_options(
+                _expected_term_value(expected_term, cv_source_term_key)
+            )
+            registry_ctx = TestCtx(
+                severity,
+                f"[ATTR004] {label} registry expected-term check",
+            )
+            registry_ctx.add_failure(
+                f"No {where.lower()} '{attribute_name}' is defined, so none of "
+                f"the registered values {expected_options!r} is included."
+            )
+            results.append(registry_ctx.to_result())
         return results  # stop here if missing
 
     # -------------------------------------------------------------------------
@@ -382,18 +467,41 @@ def check_attribute_suite(
             ctx.add_failure(
                 "Registry rule enabled but expected_term is None (registry not resolved)."
             )
+        elif unrestricted_cell_measures:
+            # These table markers delegate the choice of cell measure to the
+            # data producer. The CF checker validates any supplied value.
+            ctx.add_pass()
         else:
-            expected_val = getattr(expected_term, str(cv_source_term_key), None)
+            expected_val = _expected_term_value(expected_term, cv_source_term_key)
             if expected_val is None or str(expected_val).strip() == "":
                 ctx.add_failure(
-                    f"Registry has no value for key '{cv_source_term_key}'."
+                    f"{where} '{attribute_name}' is defined as {attr_value!r}, but "
+                    f"the selected CV entry does not define a value for "
+                    f"'{cv_source_term_key}'."
                 )
-            elif str(attr_value).strip() == str(expected_val).strip():
-                ctx.add_pass()
             else:
-                ctx.add_failure(
-                    f"Expected '{expected_val}' from registry key '{cv_source_term_key}', got '{attr_value}'."
+                actual = str(attr_value).strip()
+                expected_options = _expected_term_options(expected_val)
+                matches = (
+                    actual in expected_options
+                    if expected_term_comparison == "equal"
+                    else any(expected in actual for expected in expected_options)
                 )
+                if matches:
+                    ctx.add_pass()
+                else:
+                    relation = (
+                        "equal" if expected_term_comparison == "equal" else "contain"
+                    )
+                    expected_display = (
+                        repr(expected_options[0])
+                        if len(expected_options) == 1
+                        else f"one of {expected_options!r}"
+                    )
+                    ctx.add_failure(
+                        f"Expected '{attr_value}' to {relation} {expected_display} "
+                        f"from registry key '{cv_source_term_key}'."
+                    )
         results.append(ctx.to_result())
         return results
 

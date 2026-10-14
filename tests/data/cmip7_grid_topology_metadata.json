@@ -1,0 +1,53 @@
+{
+  "cubed_sphere|latitude_longitude": [
+    "g133", "g173", "g174", "g175", "g184", "g196", "g197", "g231",
+    "g234", "g254", "g255"
+  ],
+  "cubic_octahedral_spectral_reduced_gaussian|latitude_longitude": [
+    "g249", "g258"
+  ],
+  "displaced_pole|rotated_latitude_longitude": [
+    "g195", "g211", "g212", "g219", "g220", "g221"
+  ],
+  "hierarchical_discrete_global_grid|latitude_longitude": ["g117"],
+  "icosahedral_geodesic|latitude_longitude": [
+    "g136", "g142", "g243", "g246"
+  ],
+  "icosahedral_geodesic_dual|latitude_longitude": ["g187", "g188"],
+  "linear_spectral_gaussian|latitude_longitude": ["g101"],
+  "plane_projection|polar_stereographic": [
+    "g185", "g191", "g192", "g193", "g194", "g217", "g218"
+  ],
+  "reduced_gaussian|latitude_longitude": ["g122", "g235"],
+  "regular_gaussian|latitude_longitude": [
+    "g114", "g121", "g180", "g183", "g208", "g209", "g210"
+  ],
+  "regular_latitude_longitude|": ["g190"],
+  "regular_latitude_longitude|latitude_longitude": [
+    "g010", "g011", "g012", "g100", "g105", "g106", "g108", "g109",
+    "g110", "g111", "g113", "g115", "g123", "g129", "g131", "g134",
+    "g137", "g138", "g139", "g140", "g150", "g151", "g152", "g158",
+    "g159", "g163", "g167", "g179", "g189", "g198", "g200", "g201",
+    "g207", "g214", "g215", "g222", "g223", "g224", "g225", "g230",
+    "g239", "g242", "g244", "g245", "g253"
+  ],
+  "regular_latitude_longitude|polar_stereographic": ["g229"],
+  "spectral_gaussian|latitude_longitude": ["g120"],
+  "spectral_reduced_gaussian|latitude_longitude": [
+    "g141", "g176", "g177", "g178"
+  ],
+  "stretched|latitude_longitude": ["g232", "g251", "g252", "g257"],
+  "tripolar|latitude_longitude": [
+    "g102", "g103", "g104", "g107", "g112", "g116", "g118", "g119",
+    "g124", "g125", "g126", "g127", "g128", "g135", "g143", "g147",
+    "g148", "g149", "g153", "g154", "g155", "g156", "g157", "g160",
+    "g161", "g162", "g164", "g165", "g166", "g168", "g169", "g170",
+    "g171", "g172", "g181", "g182", "g186", "g202", "g203", "g204",
+    "g205", "g206", "g213", "g216", "g226", "g233", "g237", "g240",
+    "g241", "g247", "g248", "g250", "g256"
+  ],
+  "unstructured_triangular|latitude_longitude": [
+    "g130", "g132", "g236", "g238"
+  ],
+  "yin_yang|latitude_longitude": ["g144", "g145", "g146"]
+}

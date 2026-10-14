@@ -1,21 +1,21 @@
+"""Integration coverage for variable shape/dimension agreement."""
 
-import os
-from netCDF4 import Dataset
-from ...checks.variable_checks import check_variable_shape_vs_dimensions as checker
-from compliance_checker.tests import BaseTestCase
+import pytest
 from compliance_checker.base import BaseCheck
 
-class TestCheckVariableShape(BaseTestCase):
+from checks.variable_checks.check_variable_shape_vs_dimensions import check_variable_shape
+from tests.wcrp_cmip6_test_checks.conftest import result_passed
 
-    def test_check_variable_shape(self):
-        file_path = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), "..", "..", "data", "CMIP6", "CMIP", "IPSL", "IPSL-CM5A2-INCA",
-            "historical", "r1i1p1f1", "Amon", "pr", "gr", "v20240619",
-            "pr_Amon_IPSL-CM5A2-INCA_historical_r1i1p1f1_gr_185001-201412.nc"
-        ))
-        dataset = Dataset(file_path, mode="r")
-        results = checker.check_variable_shape("lat", dataset, severity=BaseCheck.MEDIUM)
-        assert len(results) == 1
-        for res in results:
-            self.assert_result_is_good(res) 
-        
+pytestmark = pytest.mark.remote_data
+
+
+def test_check_variable_shape(cmip6_reference_dataset):
+    results = check_variable_shape(
+        "lat",
+        cmip6_reference_dataset,
+        severity=BaseCheck.MEDIUM,
+    )
+
+    assert len(results) == 1
+    assert result_passed(results[0])
+    assert results[0].name.startswith("[VAR010]")

@@ -1,0 +1,27 @@
+[file.format]
+severity = "H"
+expected_format = "HDF5"
+allowed_data_models = ["NETCDF4_CLASSIC"]
+
+[file.compression]
+severity = "M"
+expected_complevel = 1
+expected_shuffle = true
+
+[file.internal_packing.metadata]
+# Check FILE004a - consolidated metadata
+severity = "M"
+
+[file.internal_packing.time]
+# Check FILE004b-c - time and time-bounds chunking
+severity = "M"
+
+[file.internal_packing.data]
+# Check FILE004d - data-variable chunking
+severity = "M"
+
+# Optional minimum uncompressed chunk size threshold in bytes; default is 4 MiB.
+# min_chunk_size_bytes = 4194304
+
+# Frequency-specific minimum time steps per chunk when the byte threshold is not reached.
+frequency_min_timesteps = { "mon" = 6, "day" = 1, "6hr" = 4, "3hr" = 1, "1hr" = 6 }

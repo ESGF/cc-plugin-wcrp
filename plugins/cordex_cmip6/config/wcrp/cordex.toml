@@ -1,0 +1,45 @@
+[cmor_tables]
+# Used only with the optional verification_against_tables route.
+base_url = "https://raw.githubusercontent.com/WCRP-CORDEX/cordex-cmip6-cmor-tables/main/Tables/"
+
+[variable_checks.check_lat_lon_bounds]
+severity = "M"
+
+[variable_checks.check_horizontal_axes_bounds]
+severity = "M"
+
+[variable_checks.check_lon_value_range]
+severity = "H"
+
+[time_checks.check_time_chunking_cordex]
+severity = "M"
+
+[time_checks.check_calendar_cordex]
+severity = "M"
+
+[time_checks.check_time_units_cordex]
+severity = "H"
+
+[attribute_checks.check_grid_mapping]
+severity = "H"
+missing_severity = "M"
+[attribute_checks.check_domain_id]
+severity = "H"
+
+[attribute_checks.check_institution]
+severity = "H"
+
+[attribute_checks.check_references]
+severity = "M"
+
+[attribute_checks.check_version_realization]
+severity = "H"
+
+[attribute_checks.check_version_realization_info]
+severity = "M"
+
+[attribute_checks.check_grid]
+severity = "M"
+
+[attribute_checks.check_driving_attributes]
+severity = "H"

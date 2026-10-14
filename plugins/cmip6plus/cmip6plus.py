@@ -36,6 +36,7 @@ from checks.consistency_checks.check_experiment_consistency import (
     check_experiment_id_vs_experiment,
     check_experiment_id_vs_parent_experiment_id,
     check_experiment_id_vs_sub_experiment_id,
+    check_experiment_consistency_group,
 )
 from checks.consistency_checks.check_institution_source_consistency import (
     check_institution_consistency,
@@ -46,6 +47,7 @@ from checks.consistency_checks.check_variant_label_consistency import (
     check_variant_vs_initialization_index,
     check_variant_vs_physics_index,
     check_variant_vs_forcing_index,
+    check_variant_label_consistency_group,
 )
 from checks.consistency_checks.check_frequency_table_consistency import (
     check_frequency_table_id_consistency,
@@ -59,13 +61,15 @@ except Exception:
     check_time_range_vs_filename = None
 
 from checks.variable_checks.check_variable_existence import check_variable_existence
-from checks.variable_checks.check_variable_type import check_variable_type
+from checks.variable_checks.check_variable_type import (
+    check_variable_type,
+    configured_data_types,
+)
 
 from checks.dimension_checks.check_dimension_existence import check_dimension_existence
 from checks.dimension_checks.check_dimension_positive import check_dimension_positive
 
 from checks.time_checks.check_time_squareness import check_time_squareness
-import checks.time_checks.check_time_squareness as time_squareness_mod  
 from checks.time_checks.check_time_bounds import check_time_bounds
 from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from checks.variable_checks.check_coordinate_monotonicity import (
@@ -133,6 +137,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
     _cc_spec = "wcrp_cmip6plus"
     _cc_spec_version = "1.0"
     _cc_description = "WCRP CMIP6Plus Project Plugin"
+    _uses_esgvoc_project_specs = True
     supported_ds = [Dataset]
 
     def __init__(self, options=None):
@@ -249,8 +254,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
 
             mapping[(table_id, freq)] = (inc_val, inc_unit)
 
-        if mapping:
-            time_squareness_mod.FREQ_INC = mapping
+        self._time_increment_mapping = mapping
 
     def setup(self, ds):
         super().setup(ds)
@@ -265,9 +269,10 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
         )
         self._geo_var_cache = None
         self._expected_term_cache = None
+        self._expected_term_lookup_attempted = False
 
     # -------------------------------------------------------------------------
-    # CF-based geophysical variable identification 
+    # CF-based geophysical variable identification
     # -------------------------------------------------------------------------
     def _get_geo_var(
         self, ds: Dataset, severity: int
@@ -325,8 +330,9 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
     # Variable Registry expected_term lookup (CMIP6 mapping: table_id.variable_id)
     # -------------------------------------------------------------------------
     def _get_expected_from_registry(self, ds: Dataset, severity: int):
-        if self._expected_term_cache is not None:
+        if getattr(self, "_expected_term_lookup_attempted", False):
             return self._expected_term_cache, []
+        self._expected_term_lookup_attempted = True
 
         results = []
         if find_terms_in_data_descriptor is None:
@@ -402,26 +408,43 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
     # -------------------------------------------------------------------------
     # 3) DRS checks
     # -------------------------------------------------------------------------
-    
+
     def check_DRS(self, ds):
         res = []
+        if self._esgvoc_project_setup_error:
+            return res
         if not self.config or not self.config.drs:
             return res
 
         drs = self.config.drs
+        directory_structure_owner = self._drs_directory_structure_owner(drs)
         if drs.filename:
             sev = self.get_severity(drs.filename.severity)
             res.extend(check_drs_filename(ds, sev, project_id=self.project_name))
 
         if drs.directory:
             sev = self.get_severity(drs.directory.severity)
-            res.extend(check_drs_directory(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_drs_directory(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "directory"
+                    ),
+                )
+            )
 
         if drs.attributes_vs_directory:
             sev = self.get_severity(drs.attributes_vs_directory.severity)
             res.extend(
                 check_attributes_match_directory_structure(
-                    ds, sev, project_id=self.project_name
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "attributes_vs_directory"
+                    ),
                 )
             )
 
@@ -429,7 +452,12 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             sev = self.get_severity(drs.filename_vs_directory.severity)
             res.extend(
                 check_filename_matches_directory_structure(
-                    ds, sev, project_id=self.project_name
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    report_directory_structure_error=(
+                        directory_structure_owner == "filename_vs_directory"
+                    ),
                 )
             )
 
@@ -459,8 +487,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
         # type
         if vcfg.type:
             sev = self.get_severity(vcfg.type.severity)
-            dt = (vcfg.type.data_type or "").lower()
-            allowed = ["f"] if dt in {"float", "double", "real"} else None
+            allowed = configured_data_types(vcfg.type.data_type)
             if allowed:
                 res.extend(
                     check_variable_type(ds, geo, allowed_types=allowed, severity=sev)
@@ -488,6 +515,8 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             res.extend(vr_r)
 
         for attr_key, rule in vcfg.attributes.items():
+            if rule.cv_source_term_key and expected_term is None:
+                continue
             sev = self.get_severity(rule.severity)
             name_in_file = rule.attribute_name or attr_key
             res.extend(
@@ -511,6 +540,8 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                     project_name=self.project_name,
                     expected_term=expected_term,
                     cv_source_term_key=rule.cv_source_term_key,
+                    expected_term_comparison=rule.expected_term_comparison,
+                    report_missing_expected_term=rule.report_missing_expected_term,
                 )
             )
 
@@ -533,50 +564,92 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
         if c.filename_vs_attributes:
             sev = self.get_severity(c.filename_vs_attributes.severity)
             res.extend(
-                check_filename_vs_global_attrs(ds, sev, project_id=self.project_name)
+                check_filename_vs_global_attrs(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    filename_structure_delegated=bool(
+                        self.config.drs and self.config.drs.filename
+                    ),
+                )
             )
 
         # --- Experiment consistency (atomic ATTR007a-d) ---
-        if c.experiment_id_vs_activity_id:
-            sev = self.get_severity(c.experiment_id_vs_activity_id.severity)
-            res.extend(
-                check_experiment_id_vs_activity_id(
-                    ds, sev, project_id=self.project_name
-                )
+        experiment_checks = [
+            (rule, check, attribute)
+            for rule, check, attribute in (
+                (
+                    c.experiment_id_vs_activity_id,
+                    check_experiment_id_vs_activity_id,
+                    "activity_id",
+                ),
+                (
+                    c.experiment_id_vs_experiment,
+                    check_experiment_id_vs_experiment,
+                    "experiment",
+                ),
+                (
+                    c.experiment_id_vs_parent_experiment_id,
+                    check_experiment_id_vs_parent_experiment_id,
+                    "parent_experiment_id",
+                ),
+                (
+                    c.experiment_id_vs_sub_experiment_id,
+                    check_experiment_id_vs_sub_experiment_id,
+                    "sub_experiment_id",
+                ),
             )
-
-        if c.experiment_id_vs_experiment:
-            sev = self.get_severity(c.experiment_id_vs_experiment.severity)
-            res.extend(
-                check_experiment_id_vs_experiment(ds, sev, project_id=self.project_name)
+            if rule
+        ]
+        res.extend(
+            check_experiment_consistency_group(
+                ds,
+                self.project_name,
+                [
+                    (
+                        check,
+                        self.get_severity(rule.severity),
+                        {
+                            "report_missing": not self._global_attribute_rule_enabled(
+                                attribute
+                            )
+                        },
+                    )
+                    for rule, check, attribute in experiment_checks
+                ],
             )
-
-        if c.experiment_id_vs_parent_experiment_id:
-            sev = self.get_severity(c.experiment_id_vs_parent_experiment_id.severity)
-            res.extend(
-                check_experiment_id_vs_parent_experiment_id(
-                    ds, sev, project_id=self.project_name
-                )
-            )
-
-        if c.experiment_id_vs_sub_experiment_id:
-            sev = self.get_severity(c.experiment_id_vs_sub_experiment_id.severity)
-            res.extend(
-                check_experiment_id_vs_sub_experiment_id(
-                    ds, sev, project_id=self.project_name
-                )
-            )
+        )
 
         # --- Institution / source (ATTR009, ATTR010) ---
         if c.institution_id_vs_institution:
             sev = self.get_severity(c.institution_id_vs_institution.severity)
             res.extend(
-                check_institution_consistency(ds, sev, project_id=self.project_name)
+                check_institution_consistency(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    missing_attributes_delegated={
+                        name
+                        for name in ("institution_id", "institution")
+                        if self._global_attribute_rule_enabled(name)
+                    },
+                )
             )
 
         if c.source_id_vs_institution_id:
             sev = self.get_severity(c.source_id_vs_institution_id.severity)
-            res.extend(check_source_consistency(ds, sev, project_id=self.project_name))
+            res.extend(
+                check_source_consistency(
+                    ds,
+                    sev,
+                    project_id=self.project_name,
+                    missing_attributes_delegated={
+                        name
+                        for name in ("source_id", "institution_id")
+                        if self._global_attribute_rule_enabled(name)
+                    },
+                )
+            )
 
         # --- Frequency vs table (ATTR008) ---
         if c.frequency_vs_table_id:
@@ -588,21 +661,31 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             )
 
         # --- Variant label consistency (atomic ATTR006a-d) ---
-        if c.variant_label_vs_realization_index:
-            sev = self.get_severity(c.variant_label_vs_realization_index.severity)
-            res.extend(check_variant_vs_realization_index(ds, sev))
-
-        if c.variant_label_vs_initialization_index:
-            sev = self.get_severity(c.variant_label_vs_initialization_index.severity)
-            res.extend(check_variant_vs_initialization_index(ds, sev))
-
-        if c.variant_label_vs_physics_index:
-            sev = self.get_severity(c.variant_label_vs_physics_index.severity)
-            res.extend(check_variant_vs_physics_index(ds, sev))
-
-        if c.variant_label_vs_forcing_index:
-            sev = self.get_severity(c.variant_label_vs_forcing_index.severity)
-            res.extend(check_variant_vs_forcing_index(ds, sev))
+        variant_checks = [
+            (rule, check)
+            for rule, check in (
+                (
+                    c.variant_label_vs_realization_index,
+                    check_variant_vs_realization_index,
+                ),
+                (
+                    c.variant_label_vs_initialization_index,
+                    check_variant_vs_initialization_index,
+                ),
+                (c.variant_label_vs_physics_index, check_variant_vs_physics_index),
+                (c.variant_label_vs_forcing_index, check_variant_vs_forcing_index),
+            )
+            if rule
+        ]
+        res.extend(
+            check_variant_label_consistency_group(
+                ds,
+                [
+                    (check, self.get_severity(rule.severity))
+                    for rule, check in variant_checks
+                ],
+            )
+        )
 
         return res
 
@@ -625,7 +708,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
         def _sev(x, default=BaseCheck.HIGH) -> int:
             """
             Get numeric severity for compliance-checker.
-            
+
             """
             try:
                 v = self.get_severity(x)
@@ -639,7 +722,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             nc_name = rule.name.variable_name if rule.name else key
             rule_by_nc[str(nc_name)] = rule
 
-        # CF detected coords 
+        # CF detected coords
         try:
             cf_coords = set(get_coordinate_variables(ds) or [])
         except Exception:
@@ -695,8 +778,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             # type
             if getattr(rule, "type", None):
                 sev = _sev(rule.type.severity, default=BaseCheck.MEDIUM)
-                dt = (rule.type.data_type or "").lower()
-                allowed = ["f"] if dt in {"float", "double", "real"} else None
+                allowed = configured_data_types(rule.type.data_type)
                 if allowed:
                     res.extend(
                         check_variable_type(
@@ -728,21 +810,29 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             # TIME001
             if getattr(rule, "squareness", None):
                 sev = _sev(rule.squareness.severity, default=BaseCheck.MEDIUM)
-                res.extend(
-                    check_time_squareness(
-                        ds,
-                        severity=sev,
-                        calendar=rule.squareness.ref_calendar or "",
-                        ref_time_units=rule.squareness.ref_time_units or "",
-                        frequency=None,
+                expected, lookup_results = self._get_expected_from_registry(ds, sev)
+                res.extend(lookup_results)
+                if expected is not None:
+                    res.extend(
+                        check_time_squareness(
+                            ds,
+                            severity=sev,
+                            calendar=rule.squareness.ref_calendar or "",
+                            ref_time_units=rule.squareness.ref_time_units or "",
+                            frequency=None,
+                            expected_cell_methods=expected.cell_methods,
+                            increment_mapping=self._time_increment_mapping,
+                            filename_structure_delegated=bool(
+                                self.config.drs and self.config.drs.filename
+                            ),
+                        )
                     )
-                )
 
             # TIME002
             if getattr(rule, "coverage", None):
                 sev = _sev(rule.coverage.severity, default=BaseCheck.MEDIUM)
                 res.extend(check_time_bounds(ds, severity=sev))
-            
+
             # TIME003a (calendar recommendation)
             if getattr(rule, "calendar_recommendation", None):
                 sev = _sev(
@@ -779,6 +869,10 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                 )
 
         if check_time_range_vs_filename is not None:
+            expected, lookup_results = self._get_expected_from_registry(
+                ds, BaseCheck.HIGH
+            )
+            res.extend(lookup_results)
             precision_map = None
             climatology_suffix = ""
             severity = BaseCheck.HIGH
@@ -787,13 +881,22 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                 precision_map = time_range.label_precision
                 climatology_suffix = time_range.climatology_suffix
                 severity = self.get_severity(time_range.severity, "HIGH")
-            res.extend(
-                check_time_range_vs_filename(
-                    ds,
-                    severity,
-                    precision_by_frequency=precision_map,
-                    climatology_suffix=climatology_suffix,
+            if expected is not None and expected.time_is_climatology is not None:
+                res.extend(
+                    check_time_range_vs_filename(
+                        ds,
+                        severity,
+                        precision_by_frequency=precision_map,
+                        climatology_suffix=climatology_suffix,
+                        expected_is_climatology=expected.time_is_climatology,
+                        report_time_units_prerequisite=False,
+                        report_time_values_prerequisite=False,
+                        report_climatology_bounds_prerequisite=False,
+                        report_frequency_prerequisite=False,
+                        filename_structure_delegated=bool(
+                            self.config.drs and self.config.drs.filename
+                        ),
+                    )
                 )
-            )
 
         return res

@@ -46,9 +46,11 @@ def select_model_level(findings: Findings, ds, catalog, generic_id: str):
         if reference_id(entry.get("generic_level_name")) == generic_id
     ]
     if out_name not in ds.variables:
-        findings.add(
+        findings.add_prerequisite(
             "identity",
             f"{expectation} Variable {out_name!r} does not exist in the file.",
+            issue=("missing_coordinate", out_name),
+            fallbacks=("formula",),
         )
         return None
     var = ds.variables[out_name]
@@ -392,14 +394,7 @@ def validate_model_level(
     elif check_direct_physical_values and not expected_formula:
         check_direct_vertical_values(findings, var, name, level)
 
-    allowed_attributes = tuple(
-        attribute
-        for attribute in ("formula", "formula_terms")
-        if attribute in var.ncattrs()
-    )
-    bounds_var = check_bounds(
-        findings, ds, var, name, level, allowed_attributes=allowed_attributes
-    )
+    bounds_var = check_bounds(findings, ds, var, name, level)
     if bounds_var is not None and "formula" in bounds_var.ncattrs():
         if ncattr(bounds_var, "formula") != actual_formula:
             findings.add(

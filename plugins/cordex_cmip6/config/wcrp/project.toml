@@ -1,0 +1,3 @@
+# CORDEX-CMIP6 project configuration
+project_name = "cordex-cmip6"
+project_version = "1.0"

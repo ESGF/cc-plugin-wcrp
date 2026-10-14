@@ -102,6 +102,21 @@ class DatapluginProjectCheck(WCRPBaseCheck):
             )
         
         
+    @staticmethod
+    def _run_data_check(check_function, *args, **kwargs):
+        """Run one DATA check without aborting the remaining checks."""
+        try:
+            return check_function(*args, **kwargs)
+        except Exception as exc:
+            ctx = TestCtx(
+                kwargs.get("severity", BaseCheck.MEDIUM),
+                description="Data plausibility check execution",
+            )
+            ctx.add_failure(
+                f"Internal check error: {type(exc).__name__}: {exc}"
+            )
+            return ctx
+
     def check_Data_Plausibility(self, ds):
         """
         Runs all DATAxxx plausibility checks on CMIP6 variables.
@@ -122,7 +137,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA001: NaN check ===
         if config.get("check_nan", {}).get("enabled", False):
-            ctx = check_nan_inf(
+            ctx = self._run_data_check(check_nan_inf,
                 dataset=ds,
                 variable=variable_id,
                 parameter=config["check_nan"].get("parameter", "NaN"),
@@ -133,7 +148,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA002: Inf check ===
         if config.get("check_inf", {}).get("enabled", False):
-            ctx = check_nan_inf(
+            ctx = self._run_data_check(check_nan_inf,
                 dataset=ds,
                 variable=variable_id,
                 parameter=config["check_inf"].get("parameter", "Inf"),
@@ -144,7 +159,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA003: Fill value check ===
         if config.get("check_fill", {}).get("enabled", False):
-            ctx = check_fillvalues_timeseries(
+            ctx = self._run_data_check(check_fillvalues_timeseries,
                 dataset=ds,
                 variable=variable_id,
                 parameter=config["check_fill"].get("parameter", "FillValue"),
@@ -155,7 +170,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA004: Missing value check ===
         if config.get("check_missing", {}).get("enabled", False):
-            ctx = check_fillvalues_timeseries(
+            ctx = self._run_data_check(check_fillvalues_timeseries,
                 dataset=ds,
                 variable=variable_id,
                 parameter=config["check_missing"].get("parameter", "MissingValue"),
@@ -166,7 +181,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA005: Constant value check ===
         if config.get("check_constant", {}).get("enabled", False):
-            ctx = check_constants(
+            ctx = self._run_data_check(check_constants,
                 dataset=ds,
                 variable=variable_id,
                 severity=self.get_severity(config["check_constant"].get("severity"))
@@ -176,7 +191,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA006: Physically impossible outlier check ===
         if config.get("check_physically_impossible_outlier", {}).get("enabled", False):
-            ctx = check_outliers(
+            ctx = self._run_data_check(check_outliers,
                 dataset=ds,
                 thresholds_file='outliers_thresholds.json',
                 severity=self.get_severity(config["check_physically_impossible_outlier"].get("severity"))
@@ -186,7 +201,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA007: Spatial statistical outlier check Z-Score===
         if config.get("check_spatial_statistical_outliers_Z-Score", {}).get("enabled", False):
-            ctx = check_spatial_statistical_outliers(
+            ctx = self._run_data_check(check_spatial_statistical_outliers,
                 dataset=ds,
                 variable=variable_id,
                 severity=self.get_severity(config["check_spatial_statistical_outliers_Z-Score"].get("severity")),
@@ -198,7 +213,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA008: Spatial statistical outlier check IQR===
         if config.get("check_spatial_statistical_outliers_IQR", {}).get("enabled", False):
-            ctx = check_spatial_statistical_outliers(
+            ctx = self._run_data_check(check_spatial_statistical_outliers,
                 dataset=ds,
                 variable=variable_id,
                 severity=self.get_severity(config["check_spatial_statistical_outliers_IQR"].get("severity")),
@@ -211,7 +226,7 @@ class DatapluginProjectCheck(WCRPBaseCheck):
 
         # === DATA009: Chunk size check ===
         if config.get("check_chunk_size", {}).get("enabled", False):
-            ctx = check_chunk_size(
+            ctx = self._run_data_check(check_chunk_size,
                 dataset=ds,
                 severity=self.get_severity(config["check_chunk_size"].get("severity"))
             )
