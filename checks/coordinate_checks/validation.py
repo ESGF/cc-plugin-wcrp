@@ -199,6 +199,9 @@ class Findings:
             "grid_cell_count_consistency": (
                 "[COORD011] Horizontal grid cell count"
             ),
+            "nominal_resolution": (
+                "[COORD011] Nominal horizontal resolution"
+            ),
             "requested_values": "[COORD007] Requested coordinate values",
             "bounds": "[COORD008] Coordinate bounds",
             "bounds_name": "[COORD009] Coordinate bounds naming",

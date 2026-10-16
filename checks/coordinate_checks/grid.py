@@ -151,6 +151,56 @@ def _configured_grid_type(config, catalog, horizontal_label):
     return config.recommended_grid_types_by_horizontal_label.get(selector, "")
 
 
+def check_nominal_resolution(
+    findings,
+    ds,
+    catalog,
+    policy,
+    *,
+    attribute_presence_delegated=True,
+):
+    """Reject the not-applicable resolution for configured horizontal layouts."""
+    family = "nominal_resolution"
+    if policy is None or family not in findings.messages:
+        return
+
+    if "nominal_resolution" not in ds.ncattrs():
+        if not attribute_presence_delegated:
+            findings.add(
+                family,
+                "Global attribute 'nominal_resolution' is missing, so the "
+                "configured nominal-resolution policy could not be evaluated.",
+            )
+        return
+
+    raw_label = catalog.branded_variable.get("horizontal_label")
+    labels = reference_ids(
+        raw_label if isinstance(raw_label, (list, tuple)) else [raw_label]
+    )
+    if len(labels) != 1:
+        findings.add(
+            family,
+            f"Known branded variable {catalog.branded_variable_id!r} does not "
+            "provide one usable horizontal_label, so its nominal_resolution "
+            "policy could not be verified.",
+        )
+        return
+
+    horizontal_label = labels[0]
+    if horizontal_label not in policy.none_forbidden_horizontal_labels:
+        return
+    actual = ncattr(ds, "nominal_resolution")
+    if actual == policy.none_value:
+        findings.add(
+            family,
+            f"Global nominal_resolution={actual!r} is not permitted for known "
+            f"branded variable {catalog.branded_variable_id!r}, whose expected "
+            f"horizontal_label is {horizontal_label!r}. It is "
+            f"{findings.severity_word(family)} to select an applicable nominal "
+            "resolution from the controlled vocabulary.",
+        )
+
+
 def check_grid_label_recommendation(
     findings,
     ds,

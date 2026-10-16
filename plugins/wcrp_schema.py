@@ -315,6 +315,33 @@ class CoordinateDirectionRule(CoordinateGlobalRule):
     check_formula_derived_profile: bool = True
 
 
+class CoordinateNominalResolutionRule(CoordinateGlobalRule):
+    """Restrict the not-applicable resolution value by horizontal layout."""
+
+    none_value: str = "None"
+    none_forbidden_horizontal_labels: list[str] = Field(default_factory=list)
+
+    @field_validator("none_value")
+    @classmethod
+    def validate_none_value(cls, value):
+        if not value:
+            raise ValueError("none_value must be a non-empty string")
+        return value
+
+    @field_validator("none_forbidden_horizontal_labels")
+    @classmethod
+    def validate_horizontal_labels(cls, values):
+        if any(not value for value in values):
+            raise ValueError(
+                "none_forbidden_horizontal_labels may not contain empty values"
+            )
+        if len(set(values)) != len(values):
+            raise ValueError(
+                "none_forbidden_horizontal_labels may not contain duplicates"
+            )
+        return values
+
+
 class CoordinateAttributesRule(CoordinateGlobalRule):
     """Controls exceptions to strict coordinate-attribute absence rules."""
 
@@ -433,6 +460,7 @@ class CoordinateRegistrySection(BaseModel):
     grid_label_recommendation: Optional[CoordinateGlobalRule] = None
     grid_cell_count_availability: Optional[CoordinateGlobalRule] = None
     grid_cell_count_consistency: Optional[CoordinateGlobalRule] = None
+    nominal_resolution: Optional[CoordinateNominalResolutionRule] = None
     requested_values: Optional[CoordinateGlobalRule] = None
     bounds: Optional[CoordinateGlobalRule] = None
     bounds_name: Optional[CoordinateBoundsNameRule] = None

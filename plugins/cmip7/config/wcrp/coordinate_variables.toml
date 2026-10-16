@@ -84,6 +84,14 @@ severity = "L"
 [coordinates.registry.grid_cell_count_consistency]
 severity = "M"
 
+# The not-applicable value remains allowed for reduced output, including output
+# that retains the parent grid's nominal resolution as an alternative. It is
+# invalid only for ordinary gridded hxy output.
+[coordinates.registry.nominal_resolution]
+severity = "H"
+none_value = "None"
+none_forbidden_horizontal_labels = ["hxy"]
+
 # Further coordinate CV driven checks
 [coordinates.registry.requested_values]
 severity = "H"

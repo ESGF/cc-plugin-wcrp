@@ -9,6 +9,7 @@ from checks.coordinate_checks.grid import (
     check_grid_label_recommendation,
     check_grid_mapping_consistency,
     check_grid_region_consistency,
+    check_nominal_resolution,
     validate_horizontal_grid,
 )
 from checks.coordinate_checks.model import Catalog
@@ -35,6 +36,7 @@ _REGISTRY_FAMILIES = (
     "grid_label_recommendation",
     "grid_cell_count_availability",
     "grid_cell_count_consistency",
+    "nominal_resolution",
     "requested_values",
     "bounds",
     "bounds_name",
@@ -266,6 +268,8 @@ def check_coordinate_catalog(
     check_formula_derived_profile=True,
     attributes_allowed_when_unset=(),
     missing_value_attribute_policy=None,
+    nominal_resolution_policy=None,
+    nominal_resolution_presence_delegated=True,
 ):
     """Validate all coordinate IDs required by one known branded variable."""
     findings = Findings(
@@ -349,6 +353,13 @@ def check_coordinate_catalog(
         registered_grid_metadata=registered_grid_metadata,
         grid_topology_config=grid_topology_config,
         allow_standard_name_fallback=allow_standard_name_fallback,
+    )
+    check_nominal_resolution(
+        findings,
+        ds,
+        catalog,
+        nominal_resolution_policy,
+        attribute_presence_delegated=nominal_resolution_presence_delegated,
     )
     for identifier in catalog.coordinate_ids:
         entry = catalog.data_coordinates[identifier]

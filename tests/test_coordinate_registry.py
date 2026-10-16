@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from compliance_checker.base import BaseCheck
+from esgvoc.apps.ncattvalid import GAReport
 from netCDF4 import Dataset
 
 from checks.attribute_checks.check_attribute_suite import check_attribute_suite
@@ -38,7 +40,10 @@ from checks.coordinate_checks.validation import (
 )
 from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from plugins.cmip7.cmip7 import Cmip7ProjectCheck
-from plugins.wcrp_schema import CoordinateMissingValueAttributesRule
+from plugins.wcrp_schema import (
+    CoordinateMissingValueAttributesRule,
+    CoordinateNominalResolutionRule,
+)
 
 
 FAMILIES = {
@@ -158,12 +163,14 @@ def test_catalog_reads_each_coordinate_collection_once():
             assert project == "cmip7"
             assert descriptor == "branded_variable"
             assert "cell_methods" in fields
+            assert "horizontal_label" in fields
             self.calls.append(("one", descriptor))
             return {
                 "id": identifier,
                 "out_name": "ta",
                 "dimensions": ["time1"],
                 "cell_methods": ["area: time: mean", "area: mean time: mean"],
+                "horizontal_label": {"id": "hxy"},
             }
 
         def get_all_terms_in_collection(self, project, descriptor, fields):
@@ -179,6 +186,7 @@ def test_catalog_reads_each_coordinate_collection_once():
         "area: time: mean",
         "area: mean time: mean",
     ]
+    assert result.branded_variable["horizontal_label"] == {"id": "hxy"}
     assert api.calls.count(("one", "branded_variable")) == 1
     assert api.calls.count(("all", "data_coordinate")) == 1
     assert [call for call in api.calls if call[0] == "all"] == [
@@ -611,6 +619,180 @@ def test_cmip7_config_sets_optional_auxiliary_missing_value_policy():
         "real": 1.0e20,
         "double": 1.0e20,
     }
+
+
+def test_cmip7_config_rejects_none_nominal_resolution_only_for_hxy():
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    rule = checker.config.coordinates.registry.nominal_resolution
+
+    assert rule.severity == "H"
+    assert rule.none_value == "None"
+    assert rule.none_forbidden_horizontal_labels == ["hxy"]
+
+
+@pytest.mark.parametrize(
+    ("horizontal_label", "nominal_resolution", "fails"),
+    [
+        ("hxy", "None", True),
+        ("hxy", "100 km", False),
+        ("hy", "None", False),
+        ("hy", "100 km", False),
+        ("hm", "None", False),
+        ("hm", "100 km", False),
+    ],
+)
+def test_nominal_resolution_none_policy_uses_branded_horizontal_label(
+    nc,
+    horizontal_label,
+    nominal_resolution,
+    fails,
+):
+    nc.nominal_resolution = nominal_resolution
+    nc.horizontal_label = "hy" if horizontal_label == "hxy" else "hxy"
+    cv = catalog({})
+    cv.branded_variable["horizontal_label"] = {"id": horizontal_label}
+    policy = CoordinateNominalResolutionRule(
+        severity="H",
+        none_value="None",
+        none_forbidden_horizontal_labels=["hxy"],
+    )
+
+    results = check_coordinate_catalog(
+        nc,
+        cv,
+        severities={"nominal_resolution": BaseCheck.HIGH},
+        nominal_resolution_policy=policy,
+    )
+    result = next(
+        result
+        for result in results
+        if result.name == "[COORD011] Nominal horizontal resolution"
+    )
+
+    assert bool(result.msgs) is fails
+    if fails:
+        assert "expected horizontal_label is 'hxy'" in result.msgs[0]
+
+
+def test_nominal_resolution_policy_leaves_missing_attribute_to_attr001(nc):
+    cv = catalog({})
+    cv.branded_variable["horizontal_label"] = {"id": "hxy"}
+    policy = CoordinateNominalResolutionRule(
+        severity="H",
+        none_value="None",
+        none_forbidden_horizontal_labels=["hxy"],
+    )
+
+    results = check_coordinate_catalog(
+        nc,
+        cv,
+        severities={"nominal_resolution": BaseCheck.HIGH},
+        nominal_resolution_policy=policy,
+        nominal_resolution_presence_delegated=True,
+    )
+
+    assert messages(results) == []
+
+
+def test_attr001_owns_missing_nominal_resolution_while_coord011_is_enabled(
+    nc,
+    monkeypatch,
+):
+    class NominalResolutionValidator:
+        _specs = [
+            SimpleNamespace(
+                source_collection="nominal_resolution",
+                attr_field_name=None,
+                attr_field_value_type="string",
+            )
+        ]
+
+        @staticmethod
+        def validate(attributes, filename=None):
+            return GAReport(
+                project_id="cmip7",
+                filename=filename or "",
+                missing=["nominal_resolution"],
+                results=[],
+            )
+
+    monkeypatch.setattr(
+        "plugins.wcrp_base.get_global_attribute_validator",
+        lambda project_id: NominalResolutionValidator(),
+    )
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    nominal_rule = checker.config.global_.attributes["nominal_resolution"]
+    checker.config.global_.attributes.clear()
+    checker.config.global_.attributes["nominal_resolution"] = nominal_rule
+    checker._coordinate_catalog = catalog({})
+    checker._coordinate_catalog.branded_variable["horizontal_label"] = {
+        "id": "hxy"
+    }
+
+    attribute_results = checker.check_Global_Attributes(nc)
+    coordinate_results = checker.check_Coordinate_Standard(nc)
+
+    attr001 = next(
+        result
+        for result in attribute_results
+        if result.name == "[ATTR001] Global attribute 'nominal_resolution' existence"
+    )
+    coord011 = next(
+        result
+        for result in coordinate_results
+        if result.name == "[COORD011] Nominal horizontal resolution"
+    )
+    assert attr001.msgs == ["Required global attribute 'nominal_resolution' is missing."]
+    assert coord011.msgs == []
+
+
+def test_nominal_resolution_policy_owns_missing_attribute_when_attr001_is_disabled(
+    nc,
+):
+    cv = catalog({})
+    cv.branded_variable["horizontal_label"] = {"id": "hxy"}
+    policy = CoordinateNominalResolutionRule(
+        severity="H",
+        none_value="None",
+        none_forbidden_horizontal_labels=["hxy"],
+    )
+
+    results = check_coordinate_catalog(
+        nc,
+        cv,
+        severities={"nominal_resolution": BaseCheck.HIGH},
+        nominal_resolution_policy=policy,
+        nominal_resolution_presence_delegated=False,
+    )
+
+    assert messages(results) == [
+        "Global attribute 'nominal_resolution' is missing, so the configured "
+        "nominal-resolution policy could not be evaluated."
+    ]
+
+
+def test_cmip7_nominal_resolution_uses_coord011_when_attr001_rule_is_disabled(nc):
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    checker.config.global_.attributes.pop("nominal_resolution")
+    checker._coordinate_catalog = catalog({})
+    checker._coordinate_catalog.branded_variable["horizontal_label"] = {
+        "id": "hxy"
+    }
+
+    results = checker.check_Coordinate_Standard(nc)
+    result = next(
+        result
+        for result in results
+        if result.name == "[COORD011] Nominal horizontal resolution"
+    )
+
+    assert result.msgs == [
+        "Global attribute 'nominal_resolution' is missing, so the configured "
+        "nominal-resolution policy could not be evaluated."
+    ]
 
 
 def test_cmip7_config_allows_unset_computed_standard_name():

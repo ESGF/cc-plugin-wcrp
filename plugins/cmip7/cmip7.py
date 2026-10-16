@@ -920,6 +920,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 "grid_label_recommendation",
                 "grid_cell_count_availability",
                 "grid_cell_count_consistency",
+                "nominal_resolution",
                 "requested_values",
                 "bounds",
                 "bounds_name",
@@ -1005,6 +1006,10 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 attributes.allowed_when_unset if attributes is not None else ()
             ),
             missing_value_attribute_policy=missing_values,
+            nominal_resolution_policy=registry.nominal_resolution,
+            nominal_resolution_presence_delegated=(
+                self._global_attribute_rule_enabled("nominal_resolution")
+            ),
         )
 
         if coverage_rule is not None:
