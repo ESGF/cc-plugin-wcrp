@@ -9,6 +9,7 @@ from checks.coordinate_checks.grid import (
     check_grid_label_recommendation,
     check_grid_mapping_consistency,
     check_grid_region_consistency,
+    check_nominal_resolution,
     validate_horizontal_grid,
 )
 from checks.coordinate_checks.model import Catalog
@@ -25,6 +26,8 @@ _REGISTRY_FAMILIES = (
     "recommendations",
     "direction",
     "valid_range",
+    "missing_value_attributes",
+    "grid_geometry_missing_values",
     "grid_latitude_valid_range",
     "grid_longitude_valid_range",
     "grid_longitude_single_cycle",
@@ -33,6 +36,7 @@ _REGISTRY_FAMILIES = (
     "grid_label_recommendation",
     "grid_cell_count_availability",
     "grid_cell_count_consistency",
+    "nominal_resolution",
     "requested_values",
     "bounds",
     "bounds_name",
@@ -82,6 +86,7 @@ def coordinate_metadata_setup_result(
         dependent_rules.extend(
             rule
             for family in _REGISTRY_FAMILIES
+            if family != "missing_value_attributes"
             if (rule := getattr(registry, family, None)) is not None
         )
     for rule in (getattr(coordinates, "variables", {}) or {}).values():
@@ -96,6 +101,23 @@ def coordinate_metadata_setup_result(
         get_severity(getattr(rule, "severity", None), "HIGH")
         for rule in dependent_rules
     ]
+    missing_value_rule = (
+        getattr(registry, "missing_value_attributes", None)
+        if registry is not None
+        else None
+    )
+    if (
+        missing_value_rule is not None
+    ):
+        dependent_severities.extend(
+            get_severity(severity, default)
+            for severity, default in (
+                (missing_value_rule.severity, "MEDIUM"),
+                (missing_value_rule.integrity_severity, "HIGH"),
+                (missing_value_rule.prohibited_severity, "HIGH"),
+            )
+            if severity is not None
+        )
     setup_severity = (
         get_severity(setup_rule.severity, "HIGH")
         if setup_rule is not None
@@ -245,6 +267,10 @@ def check_coordinate_catalog(
     check_direct_physical_values=True,
     check_formula_derived_profile=True,
     attributes_allowed_when_unset=(),
+    unstructured_latitude_longitude_for=(),
+    missing_value_attribute_policy=None,
+    nominal_resolution_policy=None,
+    nominal_resolution_presence_delegated=True,
 ):
     """Validate all coordinate IDs required by one known branded variable."""
     findings = Findings(
@@ -253,6 +279,7 @@ def check_coordinate_catalog(
         vertices_dimension_name=vertices_dimension_name,
         climatology_bounds_name=climatology_bounds_name,
         time_bounds_delegated=time_bounds_delegated,
+        missing_value_attribute_policy=missing_value_attribute_policy,
     )
     data_var = _data_variable(ds, catalog)
     if data_var is None and not data_variable_presence_delegated:
@@ -293,6 +320,7 @@ def check_coordinate_catalog(
         data_var,
         check_direct_physical_values=check_direct_physical_values,
         attributes_allowed_when_unset=attributes_allowed_when_unset,
+        unstructured_latitude_longitude_for=unstructured_latitude_longitude_for,
     )
     horizontal_dimensions = validate_horizontal_grid(
         findings,
@@ -327,6 +355,13 @@ def check_coordinate_catalog(
         registered_grid_metadata=registered_grid_metadata,
         grid_topology_config=grid_topology_config,
         allow_standard_name_fallback=allow_standard_name_fallback,
+    )
+    check_nominal_resolution(
+        findings,
+        ds,
+        catalog,
+        nominal_resolution_policy,
+        attribute_presence_delegated=nominal_resolution_presence_delegated,
     )
     for identifier in catalog.coordinate_ids:
         entry = catalog.data_coordinates[identifier]

@@ -13,6 +13,13 @@ _DIRECT_NUMERIC_RTOL = 1e-12
 _DIRECT_NUMERIC_ATOL = 1e-12
 
 
+def direct_numeric_slack(expected):
+    """Return the absolute representation slack for direct comparisons."""
+    return _DIRECT_NUMERIC_ATOL + _DIRECT_NUMERIC_RTOL * np.abs(
+        np.asarray(expected, dtype="float64")
+    )
+
+
 def direct_numeric_equal(actual, expected):
     """Compare direct values with only floating-point representation slack."""
     return np.isclose(

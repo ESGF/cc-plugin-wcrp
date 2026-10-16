@@ -795,6 +795,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             "recommendations",
             "direction",
             "valid_range",
+            "grid_geometry_missing_values",
             "grid_latitude_valid_range",
             "grid_longitude_valid_range",
             "grid_longitude_single_cycle",
@@ -812,6 +813,23 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             for family in families
             if (rule := getattr(registry, family)) is not None
         }
+        missing_values = registry.missing_value_attributes
+        if missing_values is not None:
+            if missing_values.severity is not None:
+                severities["missing_value_attributes"] = self.get_severity(
+                    missing_values.severity,
+                    "MEDIUM",
+                )
+            if missing_values.integrity_severity is not None:
+                severities["missing_value_integrity"] = self.get_severity(
+                    missing_values.integrity_severity,
+                    "HIGH",
+                )
+            if missing_values.prohibited_severity is not None:
+                severities["missing_value_prohibited"] = self.get_severity(
+                    missing_values.prohibited_severity,
+                    "HIGH",
+                )
         naming = registry.bounds_name
         direction = registry.direction
         attributes = registry.attributes
@@ -861,6 +879,12 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             attributes_allowed_when_unset=(
                 attributes.allowed_when_unset if attributes else ()
             ),
+            unstructured_latitude_longitude_for=(
+                registry.associations.unstructured_latitude_longitude_for
+                if registry.associations
+                else ()
+            ),
+            missing_value_attribute_policy=missing_values,
         )
         if coverage_rule is not None:
             severity = self.get_severity(coverage_rule.severity, "HIGH")

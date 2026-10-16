@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from compliance_checker.base import BaseCheck
+from esgvoc.apps.ncattvalid import GAReport
 from netCDF4 import Dataset
 
 from checks.attribute_checks.check_attribute_suite import check_attribute_suite
@@ -33,19 +35,28 @@ from checks.coordinate_checks.utils import expected_formula_terms
 from checks.coordinate_checks.validation import (
     Findings,
     check_direct_vertical_values,
+    check_missing_value_attributes,
     check_single_longitude_cycle,
 )
 from checks.time_checks.check_time_calendar import check_calendar_recommendation
 from plugins.cmip7.cmip7 import Cmip7ProjectCheck
+from plugins.wcrp_schema import (
+    CoordinateMissingValueAttributesRule,
+    CoordinateNominalResolutionRule,
+)
 
 
 FAMILIES = {
     "identity": BaseCheck.HIGH,
     "dimension_order": BaseCheck.HIGH,
     "attributes": BaseCheck.HIGH,
+    "missing_value_attributes": BaseCheck.MEDIUM,
+    "missing_value_integrity": BaseCheck.HIGH,
+    "missing_value_prohibited": BaseCheck.HIGH,
     "recommendations": BaseCheck.MEDIUM,
     "direction": BaseCheck.HIGH,
     "valid_range": BaseCheck.HIGH,
+    "grid_geometry_missing_values": BaseCheck.HIGH,
     "grid_latitude_valid_range": BaseCheck.HIGH,
     "grid_longitude_valid_range": BaseCheck.HIGH,
     "grid_longitude_single_cycle": BaseCheck.HIGH,
@@ -71,6 +82,16 @@ def nc(tmp_path):
 
 def messages(results):
     return [message for result in results for message in result.msgs]
+
+
+def missing_value_policy(*, required=False):
+    return CoordinateMissingValueAttributesRule(
+        severity="M",
+        integrity_severity="H",
+        prohibited_severity="H",
+        required_for_auxiliary=required,
+        expected_values_by_data_type={"real": 1.0e20, "double": 1.0e20},
+    )
 
 
 def assert_coordinate_families_pass(results, *codes):
@@ -142,12 +163,14 @@ def test_catalog_reads_each_coordinate_collection_once():
             assert project == "cmip7"
             assert descriptor == "branded_variable"
             assert "cell_methods" in fields
+            assert "horizontal_label" in fields
             self.calls.append(("one", descriptor))
             return {
                 "id": identifier,
                 "out_name": "ta",
                 "dimensions": ["time1"],
                 "cell_methods": ["area: time: mean", "area: mean time: mean"],
+                "horizontal_label": {"id": "hxy"},
             }
 
         def get_all_terms_in_collection(self, project, descriptor, fields):
@@ -163,6 +186,7 @@ def test_catalog_reads_each_coordinate_collection_once():
         "area: time: mean",
         "area: mean time: mean",
     ]
+    assert result.branded_variable["horizontal_label"] == {"id": "hxy"}
     assert api.calls.count(("one", "branded_variable")) == 1
     assert api.calls.count(("all", "data_coordinate")) == 1
     assert [call for call in api.calls if call[0] == "all"] == [
@@ -470,6 +494,10 @@ def test_default_grid_topology_mapping_is_loaded_from_toml():
         ("hs", "glb"): "g013",
         ("ht", "glb"): "g014",
     }
+    assert config.accepted_grid_labels_by_horizontal_label_and_region == {}
+    assert config.recommended_grid_types_by_horizontal_label == {
+        "hyb": "basin_by_latitude"
+    }
     assert config.reduced_horizontal_labels == frozenset(
         {"hm", "hy", "hyb", "hys"}
     )
@@ -575,6 +603,196 @@ def test_cmip7_config_sets_registered_grid_cell_count_severities():
     assert registry.grid_cell_count_consistency.severity == "M"
     assert registry.grid_mapping_consistency.severity == "M"
     assert registry.grid_region_consistency.severity == "M"
+    assert registry.grid_geometry_missing_values.severity == "H"
+
+
+def test_cmip7_config_sets_optional_auxiliary_missing_value_policy():
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    rule = checker.config.coordinates.registry.missing_value_attributes
+
+    assert rule.severity == "M"
+    assert rule.integrity_severity == "H"
+    assert rule.prohibited_severity == "H"
+    assert rule.required_for_auxiliary is False
+    assert rule.expected_values_by_data_type == {
+        "real": 1.0e20,
+        "double": 1.0e20,
+    }
+
+
+def test_cmip7_config_rejects_none_nominal_resolution_only_for_hxy():
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    rule = checker.config.coordinates.registry.nominal_resolution
+
+    assert rule.severity == "H"
+    assert rule.none_value == "None"
+    assert rule.none_forbidden_horizontal_labels == ["hxy"]
+
+
+@pytest.mark.parametrize(
+    ("horizontal_label", "nominal_resolution", "fails"),
+    [
+        ("hxy", "None", True),
+        ("hxy", "100 km", False),
+        ("hy", "None", False),
+        ("hy", "100 km", False),
+        ("hm", "None", False),
+        ("hm", "100 km", False),
+    ],
+)
+def test_nominal_resolution_none_policy_uses_branded_horizontal_label(
+    nc,
+    horizontal_label,
+    nominal_resolution,
+    fails,
+):
+    nc.nominal_resolution = nominal_resolution
+    nc.horizontal_label = "hy" if horizontal_label == "hxy" else "hxy"
+    cv = catalog({})
+    cv.branded_variable["horizontal_label"] = {"id": horizontal_label}
+    policy = CoordinateNominalResolutionRule(
+        severity="H",
+        none_value="None",
+        none_forbidden_horizontal_labels=["hxy"],
+    )
+
+    results = check_coordinate_catalog(
+        nc,
+        cv,
+        severities={"nominal_resolution": BaseCheck.HIGH},
+        nominal_resolution_policy=policy,
+    )
+    result = next(
+        result
+        for result in results
+        if result.name == "[COORD011] Nominal horizontal resolution"
+    )
+
+    assert bool(result.msgs) is fails
+    if fails:
+        assert "expected horizontal_label is 'hxy'" in result.msgs[0]
+
+
+def test_nominal_resolution_policy_leaves_missing_attribute_to_attr001(nc):
+    cv = catalog({})
+    cv.branded_variable["horizontal_label"] = {"id": "hxy"}
+    policy = CoordinateNominalResolutionRule(
+        severity="H",
+        none_value="None",
+        none_forbidden_horizontal_labels=["hxy"],
+    )
+
+    results = check_coordinate_catalog(
+        nc,
+        cv,
+        severities={"nominal_resolution": BaseCheck.HIGH},
+        nominal_resolution_policy=policy,
+        nominal_resolution_presence_delegated=True,
+    )
+
+    assert messages(results) == []
+
+
+def test_attr001_owns_missing_nominal_resolution_while_coord011_is_enabled(
+    nc,
+    monkeypatch,
+):
+    class NominalResolutionValidator:
+        _specs = [
+            SimpleNamespace(
+                source_collection="nominal_resolution",
+                attr_field_name=None,
+                attr_field_value_type="string",
+            )
+        ]
+
+        @staticmethod
+        def validate(attributes, filename=None):
+            return GAReport(
+                project_id="cmip7",
+                filename=filename or "",
+                missing=["nominal_resolution"],
+                results=[],
+            )
+
+    monkeypatch.setattr(
+        "plugins.wcrp_base.get_global_attribute_validator",
+        lambda project_id: NominalResolutionValidator(),
+    )
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    nominal_rule = checker.config.global_.attributes["nominal_resolution"]
+    checker.config.global_.attributes.clear()
+    checker.config.global_.attributes["nominal_resolution"] = nominal_rule
+    checker._coordinate_catalog = catalog({})
+    checker._coordinate_catalog.branded_variable["horizontal_label"] = {
+        "id": "hxy"
+    }
+
+    attribute_results = checker.check_Global_Attributes(nc)
+    coordinate_results = checker.check_Coordinate_Standard(nc)
+
+    attr001 = next(
+        result
+        for result in attribute_results
+        if result.name == "[ATTR001] Global attribute 'nominal_resolution' existence"
+    )
+    coord011 = next(
+        result
+        for result in coordinate_results
+        if result.name == "[COORD011] Nominal horizontal resolution"
+    )
+    assert attr001.msgs == ["Required global attribute 'nominal_resolution' is missing."]
+    assert coord011.msgs == []
+
+
+def test_nominal_resolution_policy_owns_missing_attribute_when_attr001_is_disabled(
+    nc,
+):
+    cv = catalog({})
+    cv.branded_variable["horizontal_label"] = {"id": "hxy"}
+    policy = CoordinateNominalResolutionRule(
+        severity="H",
+        none_value="None",
+        none_forbidden_horizontal_labels=["hxy"],
+    )
+
+    results = check_coordinate_catalog(
+        nc,
+        cv,
+        severities={"nominal_resolution": BaseCheck.HIGH},
+        nominal_resolution_policy=policy,
+        nominal_resolution_presence_delegated=False,
+    )
+
+    assert messages(results) == [
+        "Global attribute 'nominal_resolution' is missing, so the configured "
+        "nominal-resolution policy could not be evaluated."
+    ]
+
+
+def test_cmip7_nominal_resolution_uses_coord011_when_attr001_rule_is_disabled(nc):
+    checker = Cmip7ProjectCheck()
+    checker._load_split_config()
+    checker.config.global_.attributes.pop("nominal_resolution")
+    checker._coordinate_catalog = catalog({})
+    checker._coordinate_catalog.branded_variable["horizontal_label"] = {
+        "id": "hxy"
+    }
+
+    results = checker.check_Coordinate_Standard(nc)
+    result = next(
+        result
+        for result in results
+        if result.name == "[COORD011] Nominal horizontal resolution"
+    )
+
+    assert result.msgs == [
+        "Global attribute 'nominal_resolution' is missing, so the configured "
+        "nominal-resolution policy could not be evaluated."
+    ]
 
 
 def test_cmip7_config_allows_unset_computed_standard_name():
@@ -586,6 +804,10 @@ def test_cmip7_config_allows_unset_computed_standard_name():
     assert (
         checker.config.coordinates.registry.attributes.allowed_when_unset_severity
         == "L"
+    )
+    assert (
+        checker.config.coordinates.registry.associations.unstructured_latitude_longitude_for
+        == ["site"]
     )
 
 
@@ -1420,6 +1642,347 @@ def test_scalar_direct_values_allow_only_float_precision_noise(nc):
     )
 
 
+def test_scalar_missing_value_attributes_are_prohibited_independently(nc):
+    height = nc.createVariable("height", "f8", fill_value=np.float64(1.0e20))
+    height.assignValue(2.0)
+    height.missing_value = np.float64(1.0e20)
+    ta = nc.createVariable("ta", "f4")
+    ta.coordinates = "height"
+    entry = coordinate(
+        "height2m",
+        "scalar",
+        "height",
+        coordinate_values=[2.0],
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"height2m": entry}),
+        severities=FAMILIES,
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    configured = next(
+        item
+        for item in result
+        if "Prohibited coordinate missing-value attributes" in item.name
+    )
+    requested = next(item for item in result if "COORD007" in item.name)
+    assert configured.weight == BaseCheck.HIGH
+    assert len(configured.msgs) == 1
+    assert "Scalar coordinate 'height'" in configured.msgs[0]
+    assert "['_FillValue', 'missing_value']" in configured.msgs[0]
+    assert requested.value == (1, 1)
+
+
+def test_scalar_nan_missing_value_is_owned_by_high_integrity_check(nc):
+    height = nc.createVariable("height", "f8", fill_value=np.float64(np.nan))
+    height.assignValue(2.0)
+    ta = nc.createVariable("ta", "f4")
+    ta.coordinates = "height"
+    entry = coordinate(
+        "height2m",
+        "scalar",
+        "height",
+        coordinate_values=[2.0],
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"height2m": entry}),
+        severities=FAMILIES,
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    integrity = next(
+        item for item in result if "missing-value attribute integrity" in item.name
+    )
+    configured = next(
+        item
+        for item in result
+        if "Prohibited coordinate missing-value attributes" in item.name
+    )
+    assert integrity.weight == BaseCheck.HIGH
+    assert "Coordinate 'height' defines NaN" in integrity.msgs[0]
+    assert configured.value == (1, 1)
+
+
+def test_character_coordinate_missing_value_attributes_are_prohibited(nc):
+    nc.createDimension("basin", 1)
+    nc.createDimension("strlen", 1)
+    sector = nc.createVariable(
+        "sector",
+        "S1",
+        ("basin", "strlen"),
+        fill_value=b"X",
+    )
+    sector[0, 0] = b"a"
+    sector.missing_value = b"X"
+    ta = nc.createVariable("ta", "f4", ("basin",))
+    ta.coordinates = "sector"
+    entry = coordinate(
+        "basin",
+        "auxiliary",
+        "basin",
+        data_type="character",
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"basin": entry}),
+        severities=FAMILIES,
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    configured = next(
+        item
+        for item in result
+        if "Prohibited coordinate missing-value attributes" in item.name
+    )
+    assert configured.weight == BaseCheck.HIGH
+    assert len(configured.msgs) == 1
+    assert "Character coordinate 'sector'" in configured.msgs[0]
+
+
+@pytest.mark.parametrize(
+    ("data_type", "dtype", "value"),
+    [
+        ("real", "f4", np.float32(1.0e20)),
+        ("double", "f8", np.float64(1.0e20)),
+    ],
+)
+def test_auxiliary_missing_value_attributes_use_storage_type(
+    nc,
+    data_type,
+    dtype,
+    value,
+):
+    nc.createDimension("cell", 1)
+    variable = nc.createVariable("latitude", dtype, ("cell",), fill_value=value)
+    variable.missing_value = value
+    findings = Findings(
+        {
+            "missing_value_attributes": BaseCheck.MEDIUM,
+            "missing_value_integrity": BaseCheck.HIGH,
+        },
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    check_missing_value_attributes(
+        findings,
+        variable,
+        "latitude",
+        {"data_type": data_type},
+        role="auxiliary",
+    )
+
+    assert all(result.value == (1, 1) for result in findings.results())
+
+
+def test_auxiliary_missing_value_attributes_are_optional(nc):
+    nc.createDimension("cell", 1)
+    variable = nc.createVariable("latitude", "f8", ("cell",))
+    findings = Findings(
+        {
+            "missing_value_attributes": BaseCheck.MEDIUM,
+            "missing_value_integrity": BaseCheck.HIGH,
+        },
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    check_missing_value_attributes(
+        findings,
+        variable,
+        "latitude",
+        {"data_type": "double"},
+        role="auxiliary",
+    )
+
+    assert all(result.value == (1, 1) for result in findings.results())
+
+
+def test_auxiliary_missing_value_attributes_can_be_required(nc):
+    nc.createDimension("cell", 1)
+    variable = nc.createVariable("latitude", "f8", ("cell",))
+    findings = Findings(
+        {
+            "missing_value_attributes": BaseCheck.MEDIUM,
+            "missing_value_integrity": BaseCheck.HIGH,
+        },
+        missing_value_attribute_policy=missing_value_policy(required=True),
+    )
+
+    check_missing_value_attributes(
+        findings,
+        variable,
+        "latitude",
+        {"data_type": "double"},
+        role="auxiliary",
+    )
+
+    configured, integrity = findings.results()
+    assert configured.weight == BaseCheck.MEDIUM
+    assert "does not define ['_FillValue', 'missing_value']" in configured.msgs[0]
+    assert integrity.value == (1, 1)
+
+
+def test_auxiliary_configured_missing_value_mismatch_is_medium(nc):
+    nc.createDimension("cell", 1)
+    variable = nc.createVariable(
+        "latitude", "f8", ("cell",), fill_value=np.float64(-999.0)
+    )
+    variable.missing_value = np.float64(-999.0)
+    findings = Findings(
+        {
+            "missing_value_attributes": BaseCheck.MEDIUM,
+            "missing_value_integrity": BaseCheck.HIGH,
+        },
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    check_missing_value_attributes(
+        findings,
+        variable,
+        "latitude",
+        {"data_type": "double"},
+        role="auxiliary",
+    )
+
+    configured, integrity = findings.results()
+    assert configured.weight == BaseCheck.MEDIUM
+    assert "_FillValue=np.float64(-999.0)" in configured.msgs[0]
+    assert "missing_value=np.float64(-999.0)" in configured.msgs[0]
+    assert integrity.value == (1, 1)
+
+
+def test_vertex_missing_value_attributes_use_auxiliary_value_policy(nc):
+    nc.createDimension("cell", 1)
+    nc.createDimension("vertices", 3)
+    variable = nc.createVariable(
+        "vertices_longitude",
+        "f8",
+        ("cell", "vertices"),
+        fill_value=np.float64(-999.0),
+    )
+    findings = Findings(
+        {
+            "missing_value_attributes": BaseCheck.MEDIUM,
+            "missing_value_integrity": BaseCheck.HIGH,
+            "missing_value_prohibited": BaseCheck.HIGH,
+        },
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    check_missing_value_attributes(
+        findings,
+        variable,
+        "vertices_longitude",
+        {"data_type": "double"},
+        role="vertex",
+    )
+
+    configured = next(
+        item
+        for item in findings.results()
+        if "Coordinate missing-value attributes" in item.name
+    )
+    assert configured.weight == BaseCheck.MEDIUM
+    assert "Vertex variable 'vertices_longitude'" in configured.msgs[0]
+    assert "_FillValue=np.float64(-999.0)" in configured.msgs[0]
+    assert "value for data type 'double' is 1e+20" in configured.msgs[0]
+
+
+@pytest.mark.parametrize(
+    ("fill_value", "missing_value", "message"),
+    [
+        (np.float64(1.0e20), np.float64(-999.0), "both attributes to agree"),
+        (np.float64(np.nan), np.float64(np.nan), "defines NaN"),
+    ],
+)
+def test_auxiliary_missing_value_integrity_owns_root_cause(
+    nc,
+    fill_value,
+    missing_value,
+    message,
+):
+    nc.createDimension("cell", 1)
+    variable = nc.createVariable(
+        "latitude", "f8", ("cell",), fill_value=fill_value
+    )
+    variable.missing_value = missing_value
+    findings = Findings(
+        {
+            "missing_value_attributes": BaseCheck.MEDIUM,
+            "missing_value_integrity": BaseCheck.HIGH,
+        },
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    check_missing_value_attributes(
+        findings,
+        variable,
+        "latitude",
+        {"data_type": "double"},
+        role="auxiliary",
+    )
+
+    configured, integrity = findings.results()
+    assert configured.value == (1, 1)
+    assert integrity.weight == BaseCheck.HIGH
+    assert len(integrity.msgs) == 1
+    assert message in integrity.msgs[0]
+
+
+def test_numeric_coordinate_variable_missing_metadata_remains_cf_owned(nc):
+    nc.createDimension("lat", 1)
+    variable = nc.createVariable(
+        "lat", "f8", ("lat",), fill_value=np.float64(-999.0)
+    )
+    variable.missing_value = np.float64(-999.0)
+    findings = Findings(
+        {
+            "missing_value_attributes": BaseCheck.MEDIUM,
+            "missing_value_integrity": BaseCheck.HIGH,
+        },
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    check_missing_value_attributes(
+        findings,
+        variable,
+        "lat",
+        {"data_type": "double"},
+        role="coordinate",
+    )
+
+    assert all(result.value == (1, 1) for result in findings.results())
+
+
+def test_missing_coordinate_routes_to_enabled_missing_value_prerequisite(nc):
+    entry = coordinate("height2m", "scalar", "height")
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"height2m": entry}),
+        severities={
+            "missing_value_attributes": BaseCheck.MEDIUM,
+            "missing_value_integrity": BaseCheck.HIGH,
+        },
+        missing_value_attribute_policy=missing_value_policy(),
+    )
+
+    integrity = next(
+        item for item in result if "missing-value attribute integrity" in item.name
+    )
+    configured = next(
+        item
+        for item in result
+        if "Coordinate missing-value attributes" in item.name
+    )
+    assert integrity.weight == BaseCheck.HIGH
+    assert "scalar coordinate 'height' is absent" in integrity.msgs[0]
+    assert configured.value == (1, 1)
+
+
 def test_direct_1d_values_allow_only_float_precision_noise(nc):
     nc.createDimension("level", 2)
     level = nc.createVariable("level", "f8", ("level",))
@@ -1445,9 +2008,67 @@ def test_direct_1d_values_allow_only_float_precision_noise(nc):
     )
     assert any(
         "'level' does not contain requested value(s)" in message
-        and "(550.0, 0.0)" in message
+        and "(550.0, 5.51e-10)" in message
         for message in messages(result)
     )
+
+
+def test_direct_1d_bounds_allow_only_float_precision_noise(nc):
+    nc.createDimension("level", 2)
+    nc.createDimension("bnds", 2)
+    level = nc.createVariable("level", "f8", ("level",))
+    level[:] = [550.0, 650.0]
+    level.bounds = "level_bnds"
+    bounds = nc.createVariable("level_bnds", "f8", ("level", "bnds"))
+    bounds[:] = [
+        [500.0000000001, 599.9999999999],
+        [600.0000000001, 699.9999999999],
+    ]
+    nc.createVariable("ta", "f4", ("level",))
+    entry = coordinate(
+        "level",
+        "standard_1d",
+        "level",
+        stored_direction="increasing",
+        coordinate_bounds=[500.0, 600.0, 700.0],
+        bounds_required=True,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"level": entry}), severities=FAMILIES
+    )
+    requested_values = next(item for item in result if "COORD007" in item.name)
+    assert requested_values.value == (1, 1)
+
+    bounds[1, 1] = 699.99
+    result = check_coordinate_catalog(
+        nc, catalog({"level": entry}), severities=FAMILIES
+    )
+    assert any(
+        "'level_bnds' does not contain requested bound pair [600.0, 700.0]"
+        in message
+        for message in messages(result)
+    )
+
+
+def test_configured_requested_tolerance_keeps_representation_slack_at_zero(nc):
+    nc.createDimension("level", 1)
+    level = nc.createVariable("level", "f8", ("level",))
+    level[:] = [5.0e-13]
+    nc.createVariable("ta", "f4", ("level",))
+    entry = coordinate(
+        "level",
+        "standard_1d",
+        "level",
+        coordinate_values=[0.0],
+        tolerance=1.0,
+    )
+
+    result = check_coordinate_catalog(
+        nc, catalog({"level": entry}), severities=FAMILIES
+    )
+    requested_values = next(item for item in result if "COORD007" in item.name)
+    assert requested_values.value == (1, 1)
 
 
 def test_data_dimensions_follow_reverse_esgvoc_cmor_order(nc):
@@ -1536,8 +2157,113 @@ def test_site_requires_linked_latitude_and_longitude(nc):
     lon.units = "degrees_east"
     ta.coordinates = "station_lat"
     entry = coordinate("site", "site", "site", data_type="integer")
-    result = check_coordinate_catalog(nc, catalog({"site": entry}), severities=FAMILIES)
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"site": entry}),
+        severities=FAMILIES,
+        unstructured_latitude_longitude_for=("site",),
+    )
     assert any("standard_name='longitude'" in msg for msg in messages(result))
+
+
+def test_unrequested_horizontal_coordinates_are_reported_from_coordinates(nc):
+    nc.createDimension("sample", 2)
+    for role, name, units in (
+        ("latitude", "lat", "degrees_north"),
+        ("longitude", "lon", "degrees_east"),
+    ):
+        variable = nc.createVariable(name, "f8", ("sample",))
+        variable.standard_name = role
+        variable.units = units
+    nc.createVariable("sector", "i4", ("sample",))
+    data = nc.createVariable("ta", "f4", ("sample",))
+    data.coordinates = "sector lat lon"
+
+    results = check_coordinate_catalog(nc, catalog({}), severities=FAMILIES)
+
+    associations = next(result for result in results if "COORD010" in result.name)
+    assert len(associations.msgs) == 2
+    assert any(
+        "horizontal latitude coordinate 'lat'" in msg
+        for msg in associations.msgs
+    )
+    assert any(
+        "horizontal longitude coordinate 'lon'" in msg
+        for msg in associations.msgs
+    )
+    assert not any("sector" in msg for msg in associations.msgs)
+
+
+def test_zonal_output_reports_only_unrequested_longitude_association(nc):
+    nc.createDimension("lat", 2)
+    latitude = nc.createVariable("lat", "f8", ("lat",))
+    latitude[:] = [-45.0, 45.0]
+    latitude.axis = "Y"
+    latitude.standard_name = "latitude"
+    latitude.units = "degrees_north"
+    longitude = nc.createVariable("lon", "f8", ("lat",))
+    longitude.standard_name = "longitude"
+    longitude.units = "degrees_east"
+    data = nc.createVariable("ta", "f4", ("lat",))
+    data.coordinates = "lat lon"
+    cv = catalog(
+        {
+            "latitude": coordinate(
+                "latitude",
+                "generic_horizontal",
+                "lat",
+                axis="Y",
+                cf_standard_name="latitude",
+                units="degrees_north",
+            )
+        },
+        dimensions=["latitude"],
+    )
+
+    results = check_coordinate_catalog(
+        nc, cv, severities=FAMILIES, grid_topology="rectilinear"
+    )
+
+    associations = next(result for result in results if "COORD010" in result.name)
+    assert len(associations.msgs) == 1
+    assert "horizontal longitude coordinate 'lon'" in associations.msgs[0]
+
+
+def test_site_output_allows_required_latitude_and_longitude_associations(nc):
+    nc.createDimension("site", 2)
+    data = nc.createVariable("ta", "f4", ("site",))
+    for role, name, units in (
+        ("latitude", "station_lat", "degrees_north"),
+        ("longitude", "station_lon", "degrees_east"),
+    ):
+        variable = nc.createVariable(name, "f8", ("site",))
+        variable.standard_name = role
+        variable.units = units
+    data.coordinates = "station_lat station_lon"
+    entry = coordinate("site", "site", "site", data_type="integer")
+
+    results = check_coordinate_catalog(
+        nc,
+        catalog({"site": entry}),
+        severities=FAMILIES,
+        unstructured_latitude_longitude_for=("site",),
+    )
+
+    associations = next(result for result in results if "COORD010" in result.name)
+    assert associations.msgs == []
+
+
+def test_unconfigured_site_type_does_not_require_auxiliary_latitude_longitude(nc):
+    nc.createDimension("site", 2)
+    nc.createVariable("ta", "f4", ("site",))
+    entry = coordinate("site", "site", "site", data_type="integer")
+
+    results = check_coordinate_catalog(
+        nc, catalog({"site": entry}), severities=FAMILIES
+    )
+
+    associations = next(result for result in results if "COORD010" in result.name)
+    assert associations.msgs == []
 
 
 def test_climatology_rejects_regular_bounds_unless_climatology_names_them(nc):
@@ -1767,6 +2493,122 @@ def _rectilinear_cell_count_file(nc):
     nc.createVariable("ta", "f4", ("lat", "lon"))
 
 
+def _one_cell_rectilinear_file(nc, *, data_dimensions=("lat", "lon")):
+    nc.createDimension("lat", 1)
+    nc.createDimension("lon", 1)
+    nc.createDimension("bnds", 2)
+    latitude = nc.createVariable("lat", "f8", ("lat",))
+    latitude[:] = [0.0]
+    latitude.axis = "Y"
+    latitude.standard_name = "latitude"
+    latitude.units = "degrees_north"
+    latitude.bounds = "lat_bnds"
+    latitude_bounds = nc.createVariable("lat_bnds", "f8", ("lat", "bnds"))
+    latitude_bounds[0, :] = np.asarray([-90.0, 90.0])
+    longitude = nc.createVariable("lon", "f8", ("lon",))
+    longitude[:] = [180.0]
+    longitude.axis = "X"
+    longitude.standard_name = "longitude"
+    longitude.units = "degrees_east"
+    longitude.bounds = "lon_bnds"
+    longitude_bounds = nc.createVariable("lon_bnds", "f8", ("lon", "bnds"))
+    longitude_bounds[0, :] = np.asarray([0.0, 360.0])
+    return nc.createVariable("ta", "f4", data_dimensions)
+
+
+def _g190_metadata():
+    return {
+        "id": "g190",
+        "grid_type": {"id": "regular_latitude_longitude"},
+        "region": {"drs_name": "glb"},
+        "n_cells": 1,
+    }
+
+
+def _g190_results(nc, cv):
+    root = Path(__file__).parents[1]
+    topology_config = load_grid_topology_config(
+        root / "plugins/cmip7/config/wcrp/mappings/grid_topology.toml"
+    )
+    return check_coordinate_catalog(
+        nc,
+        cv,
+        severities={
+            **FAMILIES,
+            "grid_mapping_consistency": BaseCheck.MEDIUM,
+            "grid_region_consistency": BaseCheck.MEDIUM,
+            "grid_label_recommendation": BaseCheck.MEDIUM,
+            "grid_cell_count_availability": BaseCheck.LOW,
+            "grid_cell_count_consistency": BaseCheck.MEDIUM,
+        },
+        grid_topology="rectilinear",
+        registered_grid_metadata=_g190_metadata(),
+        grid_topology_config=topology_config,
+    )
+
+
+def test_g190_hxy_one_cell_coordinates_and_registered_cell_count_pass(nc):
+    nc.horizontal_label = "hxy"
+    nc.region = "glb"
+    _one_cell_rectilinear_file(nc)
+
+    cv = grid_catalog()
+    for entry in cv.data_coordinates.values():
+        entry["stored_direction"] = "increasing"
+    results = _g190_results(nc, cv)
+    failures = [result for result in results if result.msgs]
+
+    assert failures == []
+    direction = next(result for result in results if "COORD005" in result.name)
+    bounds = next(result for result in results if "COORD008" in result.name)
+    cell_count = next(
+        result for result in results if result.name.endswith("grid cell count")
+    )
+    assert direction.value == (1, 1)
+    assert bounds.value == (1, 1)
+    assert cell_count.value == (1, 1)
+
+
+def test_g190_hxy_scalar_coordinates_fail_structure_before_monotonicity(nc):
+    nc.horizontal_label = "hxy"
+    nc.region = "glb"
+    for name, axis, standard_name, units in (
+        ("lat", "Y", "latitude", "degrees_north"),
+        ("lon", "X", "longitude", "degrees_east"),
+    ):
+        variable = nc.createVariable(name, "f8")
+        variable.assignValue(0.0)
+        variable.axis = axis
+        variable.standard_name = standard_name
+        variable.units = units
+    nc.createVariable("ta", "f4").coordinates = "lat lon"
+
+    results = _g190_results(nc, grid_catalog())
+    grid = next(result for result in results if result.name.endswith("coordinates"))
+    direction = next(result for result in results if "COORD005" in result.name)
+
+    assert grid.weight == BaseCheck.HIGH
+    assert len(grid.msgs) == 2
+    assert all("configured rectilinear grid" in message for message in grid.msgs)
+    assert not direction.msgs
+
+
+def test_g190_hm_recommends_canonical_registered_global_mean_grid(nc):
+    nc.horizontal_label = "hm"
+    nc.region = "glb"
+    _one_cell_rectilinear_file(nc, data_dimensions=())
+
+    results = _g190_results(nc, catalog({}, dimensions=()))
+    failures = [result for result in results if result.msgs]
+
+    assert len(failures) == 1
+    assert failures[0].weight == BaseCheck.MEDIUM
+    assert failures[0].msgs == [
+        "The file uses grid_label='g190', but for horizontal_label='hm' and "
+        "region='glb' it is recommended to use the registered grid_label='g010'."
+    ]
+
+
 @pytest.mark.parametrize("actual", [None, "latitude_longitude"])
 def test_registered_grid_mapping_accepts_omitted_or_matching_file_value(nc, actual):
     data = nc.createVariable("ta", "f4")
@@ -1922,7 +2764,7 @@ def test_registered_grid_cell_count_uses_rectilinear_dimensions(
     if not passes:
         assert "defines n_cells=12" in consistency.msgs[0]
         assert "contain 6 cells" in consistency.msgs[0]
-        assert "use or register an appropriate grid_label" in consistency.msgs[0]
+        assert "register and/or use an appropriate grid_label" in consistency.msgs[0]
 
 
 @pytest.mark.parametrize(
@@ -1954,7 +2796,7 @@ def test_grid_cell_count_guidance_uses_configured_horizontal_layout(
         result for result in results if result.name.endswith("grid cell count")
     )
     message = consistency.msgs[0]
-    assert "use or register an appropriate grid_label" in message
+    assert "register and/or use an appropriate grid_label" in message
     assert ("For reduced spatial output" in message) is reduced
 
 
@@ -1991,6 +2833,46 @@ def test_special_layout_recommends_grid_label_without_cell_count(
     result = findings.results()[0]
     assert result.value == (0, 1)
     assert f"registered grid_label='{expected}'" in result.msgs[0]
+
+
+def test_configured_alternative_grid_label_suppresses_canonical_recommendation(
+    nc, tmp_path
+):
+    config_path = tmp_path / "grid_topology.toml"
+    config_path.write_text(
+        "[grid_label_recommendation.horizontal_label_and_region]\n"
+        '"hm|glb" = "g010"\n'
+        "[grid_label_recommendation.accepted_horizontal_label_and_region]\n"
+        '"hm|glb" = ["g190"]\n',
+        encoding="utf-8",
+    )
+    config = load_grid_topology_config(config_path)
+    assert config.accepted_grid_labels_by_horizontal_label_and_region == {
+        ("hm", "glb"): frozenset({"g190"})
+    }
+    nc.horizontal_label = "hm"
+    nc.region = "glb"
+
+    accepted = Findings({"grid_label_recommendation": BaseCheck.MEDIUM})
+    check_grid_label_recommendation(
+        accepted,
+        nc,
+        catalog({}, dimensions=("time",)),
+        {"id": "g190"},
+        config,
+    )
+    assert accepted.results()[0].value == (1, 1)
+
+    unlisted = Findings({"grid_label_recommendation": BaseCheck.MEDIUM})
+    check_grid_label_recommendation(
+        unlisted,
+        nc,
+        catalog({}, dimensions=("time",)),
+        {"id": "g191"},
+        config,
+    )
+    assert unlisted.results()[0].value == (0, 1)
+    assert "registered grid_label='g010'" in unlisted.results()[0].msgs[0]
 
 
 @pytest.mark.parametrize(
@@ -2084,13 +2966,55 @@ def test_basin_layout_does_not_inherit_false_ht_grid_recommendation(nc):
         catalog(
             {}, dimensions=("gridlatitude", "olevel", "basin", "time")
         ),
-        {"id": "parent_grid", "n_cells": None},
+        {
+            "id": "basin_grid",
+            "grid_type": {"id": "basin_by_latitude"},
+            "n_cells": None,
+        },
         config,
     )
 
     result = findings.results()[0]
     assert result.value == (1, 1)
     assert not result.msgs
+
+
+@pytest.mark.parametrize(
+    ("axis", "declared_label", "expected_label"),
+    [
+        ("latitude", "hyb", "hyb"),
+        ("gridlatitude", "ht", "ht"),
+    ],
+)
+def test_basin_layout_recommends_basin_by_latitude_grid_type(
+    nc, axis, declared_label, expected_label
+):
+    nc.horizontal_label = declared_label
+    nc.region = "glb"
+    root = Path(__file__).parents[1]
+    config = load_grid_topology_config(
+        root / "plugins/cmip7/config/wcrp/mappings/grid_topology.toml"
+    )
+    findings = Findings({"grid_label_recommendation": BaseCheck.MEDIUM})
+
+    check_grid_label_recommendation(
+        findings,
+        nc,
+        catalog({}, dimensions=(axis, "olevel", "basin", "time")),
+        {
+            "id": "parent_grid",
+            "grid_type": {"id": "regular_latitude_longitude"},
+            "n_cells": None,
+        },
+        config,
+    )
+
+    result = findings.results()[0]
+    assert result.value == (0, 1)
+    assert "registered grid_type='regular_latitude_longitude'" in result.msgs[0]
+    assert f"horizontal_label='{expected_label}'" in result.msgs[0]
+    assert "grid_type='basin_by_latitude'" in result.msgs[0]
+    assert "g014" not in result.msgs[0]
 
 
 @pytest.mark.parametrize(
@@ -2134,7 +3058,7 @@ def test_non_latitude_longitude_layout_skips_grid_cell_count(nc, dimensions):
         (("siline", "time"), "hxy", "ht"),
         (("site", "time"), "hxy", "hs"),
         (("latitude", "basin", "time"), "ht", "hyb"),
-        (("gridlatitude", "basin", "time"), "ht", "hyb"),
+        (("gridlatitude", "basin", "time"), "ht", "ht"),
         (("latitude", "time"), "hy", "hy"),
     ],
 )
@@ -2504,6 +3428,150 @@ def test_zonal_mean_cell_count_uses_the_retained_latitude_dimension(nc):
     assert "contain 2 cells" in consistency.msgs[0]
 
 
+def _basin_by_latitude_cell_count_case(
+    nc, axis_identifier, basin_name="basin"
+):
+    axis_name = "lat" if axis_identifier == "latitude" else "rlat"
+    nc.createDimension(axis_name, 4)
+    nc.createDimension(basin_name, 3)
+    nc.createDimension("strlen", 16)
+    nc.createDimension("lev", 2)
+    nc.createVariable(axis_name, "f8", (axis_name,))
+    nc.createVariable(basin_name, "S1", (basin_name, "strlen"))
+    data_var = nc.createVariable("ta", "f4", (axis_name, basin_name, "lev"))
+    cv = catalog(
+        {
+            axis_identifier: coordinate(
+                axis_identifier,
+                "standard_1d",
+                axis_name,
+                cf_standard_name=(
+                    "latitude"
+                    if axis_identifier == "latitude"
+                    else "grid_latitude"
+                ),
+            ),
+            "basin": coordinate(
+                "basin",
+                "auxiliary",
+                basin_name,
+                data_type="character",
+                cf_standard_name="region",
+            ),
+        },
+        dimensions=(axis_identifier, "olevel", "basin", "time"),
+    )
+    root = Path(__file__).parents[1]
+    config = load_grid_topology_config(
+        root / "plugins/cmip7/config/wcrp/mappings/grid_topology.toml"
+    )
+    return cv, data_var, config
+
+
+@pytest.mark.parametrize(
+    ("axis_identifier", "basin_name"),
+    [("latitude", "basin"), ("gridlatitude", "sector")],
+)
+@pytest.mark.parametrize("registered_count", [4, 12])
+def test_basin_by_latitude_cell_count_accepts_axis_or_axis_times_basin(
+    nc, axis_identifier, basin_name, registered_count
+):
+    cv, data_var, config = _basin_by_latitude_cell_count_case(
+        nc, axis_identifier, basin_name
+    )
+    findings = Findings(
+        {
+            "grid_cell_count_availability": BaseCheck.LOW,
+            "grid_cell_count_consistency": BaseCheck.MEDIUM,
+        }
+    )
+
+    check_grid_cell_count(
+        findings,
+        nc,
+        cv,
+        data_var,
+        topology=None,
+        registered_grid_metadata={
+            "id": "basin_grid",
+            "grid_type": {"id": "basin_by_latitude"},
+            "n_cells": registered_count,
+        },
+        grid_topology_config=config,
+        allow_standard_name_fallback=False,
+    )
+
+    assert all(not result.msgs for result in findings.results())
+
+
+def test_basin_by_latitude_cell_count_reports_neither_permitted_interpretation(nc):
+    cv, data_var, config = _basin_by_latitude_cell_count_case(
+        nc, "gridlatitude", "sector"
+    )
+    findings = Findings(
+        {
+            "grid_cell_count_availability": BaseCheck.LOW,
+            "grid_cell_count_consistency": BaseCheck.MEDIUM,
+        }
+    )
+
+    check_grid_cell_count(
+        findings,
+        nc,
+        cv,
+        data_var,
+        topology=None,
+        registered_grid_metadata={
+            "id": "basin_grid",
+            "grid_type": {"id": "basin_by_latitude"},
+            "n_cells": 10,
+        },
+        grid_topology_config=config,
+        allow_standard_name_fallback=False,
+    )
+
+    consistency = next(
+        result for result in findings.results() if result.name.endswith("grid cell count")
+    )
+    assert consistency.value == (0, 1)
+    assert (
+        "either 4 latitude-axis cells or 12 latitude-by-basin/sector positions"
+        in consistency.msgs[0]
+    )
+
+
+@pytest.mark.parametrize("axis_identifier", ["latitude", "gridlatitude"])
+def test_basin_layout_skips_cell_count_for_permitted_parent_grid_label(
+    nc, axis_identifier
+):
+    cv, data_var, config = _basin_by_latitude_cell_count_case(
+        nc, axis_identifier
+    )
+    findings = Findings(
+        {
+            "grid_cell_count_availability": BaseCheck.LOW,
+            "grid_cell_count_consistency": BaseCheck.MEDIUM,
+        }
+    )
+
+    check_grid_cell_count(
+        findings,
+        nc,
+        cv,
+        data_var,
+        topology=None,
+        registered_grid_metadata={
+            "id": "parent_grid",
+            "grid_type": {"id": "tripolar"},
+            "n_cells": None,
+        },
+        grid_topology_config=config,
+        allow_standard_name_fallback=False,
+    )
+
+    assert all(not result.msgs for result in findings.results())
+
+
 def test_global_mean_skips_grid_cell_count(nc):
     nc.createVariable("ta", "f4")
 
@@ -2744,10 +3812,14 @@ def test_curvilinear_grid_uses_esgvoc_grid_variables_axes_and_vertices(nc):
         var[:] = np.arange(len(nc.dimensions[name]), dtype="float64")
     for role, units in (("latitude", "degrees_north"), ("longitude", "degrees_east")):
         var = nc.createVariable(role, "f8", ("y", "x"))
+        var[:] = 0.0
         var.standard_name = role
         var.units = units
         var.bounds = f"vertices_{role}"
-        nc.createVariable(f"vertices_{role}", "f8", ("y", "x", "vertices"))
+        vertices = nc.createVariable(
+            f"vertices_{role}", "f8", ("y", "x", "vertices")
+        )
+        vertices[:] = 0.0
     ta = nc.createVariable("ta", "f4", ("y", "x"))
     ta.coordinates = "latitude longitude"
     result = check_coordinate_catalog(
@@ -2918,10 +3990,14 @@ def test_curvilinear_grid_accepts_angular_and_index_axes(
         ("longitude", "degrees_east"),
     ):
         variable = nc.createVariable(role, "f8", (y_name, x_name))
+        variable[:] = 0.0
         variable.standard_name = role
         variable.units = role_units
         variable.bounds = f"vertices_{role}"
-        nc.createVariable(f"vertices_{role}", "f8", (y_name, x_name, "vertices"))
+        vertices = nc.createVariable(
+            f"vertices_{role}", "f8", (y_name, x_name, "vertices")
+        )
+        vertices[:] = 0.0
     ta = nc.createVariable("ta", "f4", (y_name, x_name))
     ta.coordinates = "latitude longitude"
     result = check_coordinate_catalog(
@@ -2954,15 +4030,17 @@ def test_unstructured_grid_requires_shared_cell_dimension_and_vertices(nc):
     assert messages(result) == []
 
 
-def test_unstructured_vertex_padding_is_ignored_but_finite_vertices_are_checked(nc):
+def test_unstructured_geometry_allows_void_cells_and_paired_vertex_padding(nc):
     nc.createDimension("cell", 4)
     nc.createDimension("vertices", 5)
     for role, units, values in (
-        ("latitude", "degrees_north", [0.0, 0.0, 0.0, 0.0]),
-        ("longitude", "degrees_east", [1.0, 9.0, 5.0, 5.0]),
+        ("latitude", "degrees_north", [0.0, 0.0, 0.0, np.nan]),
+        ("longitude", "degrees_east", [1.0, 9.0, 5.0, np.nan]),
     ):
-        variable = nc.createVariable(role, "f8", ("cell",))
-        variable[:] = values
+        variable = nc.createVariable(
+            role, "f8", ("cell",), fill_value=np.float64(1.0e20)
+        )
+        variable[:] = np.ma.masked_invalid(values)
         variable.standard_name = role
         variable.units = units
         variable.bounds = f"vertices_{role}"
@@ -3017,22 +4095,21 @@ def test_unstructured_vertex_padding_is_ignored_but_finite_vertices_are_checked(
         and "at index (1,)" in message
         for message in valid_range.msgs
     )
-    grid = next(item for item in result if "COORD011" in item.name)
-    assert any(
-        "'vertices_latitude': 1 of 4 grid cells have all vertex values missing. "
-        "First incident at index (3,)." in message
-        for message in grid.msgs
+    missing = next(
+        item
+        for item in result
+        if "Horizontal grid geometry completeness" in item.name
     )
-    assert any(
-        "'vertices_longitude': 1 of 4 grid cells have all vertex values missing. "
-        "First incident at index (3,)." in message
-        for message in grid.msgs
+    assert missing.weight == BaseCheck.HIGH
+    assert len(missing.msgs) == 1
+    assert "1 of 4 grid positions" in missing.msgs[0]
+    assert "First incident at index (2,)" in missing.msgs[0]
+    assert "2 of 5 vertex pairs are finite" in missing.msgs[0]
+    assert not any("duplicate" in message.lower() for message in messages(result))
+    grid = next(
+        item for item in result if item.name.endswith("Horizontal grid coordinates")
     )
-    assert sum(
-        "1 of 4 grid cells have fewer than 3 finite vertex values" in message
-        and "index (2,) has 2 finite vertex values" in message
-        for message in grid.msgs
-    ) == 2
+    assert grid.msgs == []
 
     for entry in cv.grid_variables.values():
         entry.pop("valid_min", None)
@@ -3040,20 +4117,21 @@ def test_unstructured_vertex_padding_is_ignored_but_finite_vertices_are_checked(
     result_without_ranges = check_coordinate_catalog(
         nc, cv, severities=FAMILIES, grid_topology="unstructured"
     )
-    grid_without_ranges = next(
-        item for item in result_without_ranges if "COORD011" in item.name
+    missing_without_ranges = next(
+        item
+        for item in result_without_ranges
+        if "Horizontal grid geometry completeness" in item.name
     )
-    assert sum(
-        "1 of 4 grid cells have all vertex values missing" in message
-        for message in grid_without_ranges.msgs
-    ) == 2
-    assert sum(
-        "1 of 4 grid cells have fewer than 3 finite vertex values" in message
-        for message in grid_without_ranges.msgs
-    ) == 2
+    assert missing_without_ranges.msgs == missing.msgs
+    grid_without_ranges = next(
+        item
+        for item in result_without_ranges
+        if item.name.endswith("Horizontal grid coordinates")
+    )
+    assert grid_without_ranges.msgs == []
 
 
-def test_curvilinear_vertex_values_may_repeat_but_may_not_be_missing(nc):
+def test_curvilinear_geometry_allows_duplicates_but_rejects_partial_vertices(nc):
     nc.createDimension("y", 1)
     nc.createDimension("x", 2)
     nc.createDimension("vertices", 4)
@@ -3092,12 +4170,19 @@ def test_curvilinear_vertex_values_may_repeat_but_may_not_be_missing(nc):
     valid_range = next(
         item for item in result if "Grid-longitude valid range" in item.name
     )
-    assert valid_range.msgs == [
-        (
-            "'vertices_longitude' contains missing or non-finite vertex values, so "
-            "its explicit valid range could not be checked completely."
-        )
-    ]
+    assert valid_range.msgs == []
+    missing = next(
+        item
+        for item in result
+        if "Horizontal grid geometry completeness" in item.name
+    )
+    assert missing.weight == BaseCheck.HIGH
+    assert len(missing.msgs) == 1
+    assert "1 of 2 grid positions" in missing.msgs[0]
+    assert "First incident at index (0, 1)" in missing.msgs[0]
+    assert "3 of 4 vertex pairs are finite" in missing.msgs[0]
+    assert "1 vertex slots define only one" in missing.msgs[0]
+    assert not any("duplicate" in message.lower() for message in messages(result))
 
 
 def test_vertex_dimension_name_is_a_configurable_recommendation(nc):
@@ -3108,6 +4193,7 @@ def test_vertex_dimension_name_is_a_configurable_recommendation(nc):
         ("longitude", "degrees_east"),
     ):
         variable = nc.createVariable(role, "f8", ("cell",))
+        variable[:] = 0.0
         variable.standard_name = role
         variable.units = units
         variable.bounds = f"vertices_{role}"
@@ -3149,14 +4235,19 @@ def test_vertices_require_the_parent_coordinate_dimensions(nc):
         variable.units = units
         variable.bounds = f"vertices_{role}"
         dimension = "other" if role == "latitude" else "cell"
-        nc.createVariable(f"vertices_{role}", "f8", (dimension, "vertices"))
+        vertices = nc.createVariable(
+            f"vertices_{role}", "f8", (dimension, "vertices")
+        )
+        vertices[:] = 0.0
     ta = nc.createVariable("ta", "f4", ("cell",))
     ta.coordinates = "latitude longitude"
 
     result = check_coordinate_catalog(
         nc, grid_catalog(), severities=FAMILIES, grid_topology="unstructured"
     )
-    grid = next(item for item in result if "COORD011" in item.name)
+    grid = next(
+        item for item in result if item.name.endswith("Horizontal grid coordinates")
+    )
     assert grid.weight == BaseCheck.HIGH
     assert any(
         "required for vertex variable 'vertices_latitude' to have the coordinate dimensions ['cell']"
@@ -3215,10 +4306,14 @@ def test_curvilinear_grid_accepts_implicit_index_dimensions(nc):
         ("longitude", "degrees_east"),
     ):
         variable = nc.createVariable(role, "f8", ("row", "column"))
+        variable[:] = 0.0
         variable.standard_name = role
         variable.units = units
         variable.bounds = f"vertices_{role}"
-        nc.createVariable(f"vertices_{role}", "f8", ("row", "column", "vertices"))
+        vertices = nc.createVariable(
+            f"vertices_{role}", "f8", ("row", "column", "vertices")
+        )
+        vertices[:] = 0.0
     ta = nc.createVariable("ta", "f4", ("row", "column"))
     ta.coordinates = "latitude longitude"
     result = check_coordinate_catalog(
@@ -3301,10 +4396,14 @@ def test_rotated_grid_accepts_rlon_rlat_axis_pair(nc):
         ("longitude", "degrees_east"),
     ):
         variable = nc.createVariable(role, "f8", ("rlat", "rlon"))
+        variable[:] = 0.0
         variable.standard_name = role
         variable.units = units
         variable.bounds = f"vertices_{role}"
-        nc.createVariable(f"vertices_{role}", "f8", ("rlat", "rlon", "vertices"))
+        vertices = nc.createVariable(
+            f"vertices_{role}", "f8", ("rlat", "rlon", "vertices")
+        )
+        vertices[:] = 0.0
     mapping = nc.createVariable("rotated_pole", "i4")
     mapping.grid_mapping_name = "rotated_latitude_longitude"
     ta = nc.createVariable("ta", "f4", ("rlat", "rlon"))

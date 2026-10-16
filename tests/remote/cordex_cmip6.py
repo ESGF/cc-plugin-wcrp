@@ -143,7 +143,7 @@ TAS_REMO = RemoteDataset(
     ),
     checks=_checks(
         coordinate_results=5,
-        standard_results=16,
+        standard_results=20,
         variable_results=43,
         variable_name="tas",
         packing_time_results=2,
@@ -167,7 +167,7 @@ OROG_REMO = RemoteDataset(
     ),
     checks=_checks(
         coordinate_results=1,
-        standard_results=15,
+        standard_results=19,
         variable_results=37,
         variable_name="orog",
         packing_time_results=0,

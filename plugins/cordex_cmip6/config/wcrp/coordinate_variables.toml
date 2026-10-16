@@ -33,6 +33,26 @@ check_formula_derived_profile = true
 [coordinates.registry.valid_range]
 severity = "H"
 
+[coordinates.registry.missing_value_attributes]
+# Severity for values differing from expected_values_by_data_type and, when
+# required_for_auxiliary is true, for missing attributes.
+severity = "M"
+# Severity for NaN attributes or disagreement between _FillValue and
+# missing_value.
+integrity_severity = "H"
+# Severity when scalar or character coordinates define either attribute.
+prohibited_severity = "H"
+# If true, numeric auxiliary coordinates must define both attributes; if false,
+# the attributes are optional but checked when supplied.
+required_for_auxiliary = false
+# Expected finite value for each supported netCDF storage type.
+expected_values_by_data_type = { real = 1.0e20, double = 1.0e20 }
+
+# A horizontal position may be fully void. Otherwise latitude/longitude
+# centres and all curvilinear vertex pairs must define complete geometry.
+[coordinates.registry.grid_geometry_missing_values]
+severity = "H"
+
 [coordinates.registry.grid_latitude_valid_range]
 severity = "H"
 
@@ -55,6 +75,11 @@ climatology_bounds_name = "climatology_bnds"
 
 [coordinates.registry.associations]
 severity = "H"
+# List ESGVoc coordinate_type values that require auxiliary latitude and
+# longitude in the data variable's coordinates attribute. Each pair must be
+# one-dimensional on that coordinate entry's out_name dimension. Use [] when
+# the project has no such unstructured coordinate type.
+unstructured_latitude_longitude_for = []
 
 # CORDEX resolves topology from CF-discovered file coordinates and the
 # grid_mapping rather than from a unique grid label or project EMD record.
