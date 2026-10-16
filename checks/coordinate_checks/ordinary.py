@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+from compliance_checker.cf import util as cfutil
+
+# Compliance Checker 6 moved these helpers from compliance_checker.cfutil.
+if not hasattr(cfutil, "get_true_latitude_variables"):
+    from compliance_checker import cfutil
 
 from checks.coordinate_checks.utils import (
     coordinate_type,
@@ -30,6 +35,49 @@ from checks.coordinate_checks.validation import (
 def listed_coordinates(data_var) -> list[str]:
     value = ncattr(data_var, "coordinates")
     return value.split() if isinstance(value, str) else []
+
+
+def validate_horizontal_coordinate_associations(
+    findings,
+    ds,
+    data_var,
+    catalog,
+    unstructured_latitude_longitude_for=(),
+):
+    """Reject true latitude/longitude associations not requested by the data."""
+    if data_var is None:
+        return
+    listed = set(listed_coordinates(data_var))
+    if not listed:
+        return
+
+    unstructured_types = set(unstructured_latitude_longitude_for)
+    required = set()
+    for entry_id in catalog.coordinate_ids:
+        entry = catalog.data_coordinates[entry_id]
+        if coordinate_type(entry) in unstructured_types:
+            required.update(("latitude", "longitude"))
+            continue
+        standard_name = str(entry.get("cf_standard_name") or "")
+        for role in ("latitude", "longitude"):
+            if entry_id == role or standard_name == role:
+                required.add(role)
+
+    discovered = {
+        "latitude": cfutil.get_true_latitude_variables(ds),
+        "longitude": cfutil.get_true_longitude_variables(ds),
+    }
+    for role, names in discovered.items():
+        if role in required:
+            continue
+        for name in sorted(listed.intersection(names or [])):
+            findings.add(
+                "associations",
+                f"It is {findings.severity_word('associations')} for "
+                f"'{data_var.name}' coordinates attribute not to include "
+                f"horizontal {role} coordinate '{name}', because {role} is not "
+                f"required by branded variable {catalog.branded_variable_id!r}.",
+            )
 
 
 def validate_standard_1d(
@@ -334,14 +382,22 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
     return var
 
 
-def validate_site(findings, ds, data_var, entry_id, entry):
+def validate_unstructured_latitude_longitude(
+    findings,
+    ds,
+    data_var,
+    entry_id,
+    entry,
+):
+    """Require a 1-D auxiliary latitude/longitude pair for one coordinate type."""
     dimension_name = str(entry.get("out_name") or entry_id)
+    kind = coordinate_type(entry)
     if dimension_name not in ds.dimensions:
         findings.add_prerequisite(
             "identity",
             lambda family: (
-                f"The {findings.severity_word(family)} site dimension "
-                f"'{dimension_name}' is absent, so dependent site-coordinate "
+                f"The {findings.severity_word(family)} dimension "
+                f"'{dimension_name}' is absent, so dependent auxiliary-coordinate "
                 "checks may be incomplete."
             ),
             issue=("missing_dimension", dimension_name),
@@ -363,8 +419,9 @@ def validate_site(findings, ds, data_var, entry_id, entry):
             findings.add(
                 "associations",
                 f"It is {findings.severity_word('associations')} for "
-                f"'{data_var.name}' coordinates to include a site auxiliary "
-                f"coordinate with standard_name={standard_name!r}.",
+                f"'{data_var.name}' coordinates to include an auxiliary "
+                f"coordinate with standard_name={standard_name!r} for "
+                f"coordinate type {kind!r}.",
             )
             continue
         variable = ds.variables[candidates[0]]
@@ -378,16 +435,18 @@ def validate_site(findings, ds, data_var, entry_id, entry):
         if variable.dimensions != (dimension_name,):
             findings.add(
                 "associations",
-                f"It is {findings.severity_word('associations')} for site "
+                f"It is {findings.severity_word('associations')} for "
                 f"{standard_name} coordinate '{variable.name}' to have "
-                f"dimension '{dimension_name}'; found {list(variable.dimensions)}.",
+                f"the single unstructured dimension '{dimension_name}' for "
+                f"coordinate type {kind!r}; found {list(variable.dimensions)}.",
             )
         if ncattr(variable, "units") != units:
             findings.add(
                 "attributes",
-                f"It is {findings.severity_word('attributes')} for site "
+                f"It is {findings.severity_word('attributes')} for "
                 f"{standard_name} coordinate '{variable.name}' to have "
-                f"units={units!r}; found {ncattr(variable, 'units')!r}.",
+                f"units={units!r} for coordinate type {kind!r}; found "
+                f"{ncattr(variable, 'units')!r}.",
             )
 
 
@@ -399,7 +458,16 @@ def validate_ordinary(
     *,
     check_direct_physical_values=True,
     attributes_allowed_when_unset=(),
+    unstructured_latitude_longitude_for=(),
 ):
+    validate_horizontal_coordinate_associations(
+        findings,
+        ds,
+        data_var,
+        catalog,
+        unstructured_latitude_longitude_for,
+    )
+    unstructured_types = set(unstructured_latitude_longitude_for)
     resolved = {}
     for entry_id in catalog.coordinate_ids:
         entry = catalog.data_coordinates[entry_id]
@@ -421,6 +489,12 @@ def validate_ordinary(
             resolved[entry_id] = validate_text_auxiliary(
                 findings, ds, data_var, entry_id, entry
             )
-        elif kind == "site":
-            validate_site(findings, ds, data_var, entry_id, entry)
+        if kind in unstructured_types:
+            validate_unstructured_latitude_longitude(
+                findings,
+                ds,
+                data_var,
+                entry_id,
+                entry,
+            )
     return resolved

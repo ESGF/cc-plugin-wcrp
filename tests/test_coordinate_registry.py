@@ -805,6 +805,10 @@ def test_cmip7_config_allows_unset_computed_standard_name():
         checker.config.coordinates.registry.attributes.allowed_when_unset_severity
         == "L"
     )
+    assert (
+        checker.config.coordinates.registry.associations.unstructured_latitude_longitude_for
+        == ["site"]
+    )
 
 
 def test_grid_without_resolvable_metadata_reports_one_decisive_failure(nc):
@@ -2153,8 +2157,113 @@ def test_site_requires_linked_latitude_and_longitude(nc):
     lon.units = "degrees_east"
     ta.coordinates = "station_lat"
     entry = coordinate("site", "site", "site", data_type="integer")
-    result = check_coordinate_catalog(nc, catalog({"site": entry}), severities=FAMILIES)
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"site": entry}),
+        severities=FAMILIES,
+        unstructured_latitude_longitude_for=("site",),
+    )
     assert any("standard_name='longitude'" in msg for msg in messages(result))
+
+
+def test_unrequested_horizontal_coordinates_are_reported_from_coordinates(nc):
+    nc.createDimension("sample", 2)
+    for role, name, units in (
+        ("latitude", "lat", "degrees_north"),
+        ("longitude", "lon", "degrees_east"),
+    ):
+        variable = nc.createVariable(name, "f8", ("sample",))
+        variable.standard_name = role
+        variable.units = units
+    nc.createVariable("sector", "i4", ("sample",))
+    data = nc.createVariable("ta", "f4", ("sample",))
+    data.coordinates = "sector lat lon"
+
+    results = check_coordinate_catalog(nc, catalog({}), severities=FAMILIES)
+
+    associations = next(result for result in results if "COORD010" in result.name)
+    assert len(associations.msgs) == 2
+    assert any(
+        "horizontal latitude coordinate 'lat'" in msg
+        for msg in associations.msgs
+    )
+    assert any(
+        "horizontal longitude coordinate 'lon'" in msg
+        for msg in associations.msgs
+    )
+    assert not any("sector" in msg for msg in associations.msgs)
+
+
+def test_zonal_output_reports_only_unrequested_longitude_association(nc):
+    nc.createDimension("lat", 2)
+    latitude = nc.createVariable("lat", "f8", ("lat",))
+    latitude[:] = [-45.0, 45.0]
+    latitude.axis = "Y"
+    latitude.standard_name = "latitude"
+    latitude.units = "degrees_north"
+    longitude = nc.createVariable("lon", "f8", ("lat",))
+    longitude.standard_name = "longitude"
+    longitude.units = "degrees_east"
+    data = nc.createVariable("ta", "f4", ("lat",))
+    data.coordinates = "lat lon"
+    cv = catalog(
+        {
+            "latitude": coordinate(
+                "latitude",
+                "generic_horizontal",
+                "lat",
+                axis="Y",
+                cf_standard_name="latitude",
+                units="degrees_north",
+            )
+        },
+        dimensions=["latitude"],
+    )
+
+    results = check_coordinate_catalog(
+        nc, cv, severities=FAMILIES, grid_topology="rectilinear"
+    )
+
+    associations = next(result for result in results if "COORD010" in result.name)
+    assert len(associations.msgs) == 1
+    assert "horizontal longitude coordinate 'lon'" in associations.msgs[0]
+
+
+def test_site_output_allows_required_latitude_and_longitude_associations(nc):
+    nc.createDimension("site", 2)
+    data = nc.createVariable("ta", "f4", ("site",))
+    for role, name, units in (
+        ("latitude", "station_lat", "degrees_north"),
+        ("longitude", "station_lon", "degrees_east"),
+    ):
+        variable = nc.createVariable(name, "f8", ("site",))
+        variable.standard_name = role
+        variable.units = units
+    data.coordinates = "station_lat station_lon"
+    entry = coordinate("site", "site", "site", data_type="integer")
+
+    results = check_coordinate_catalog(
+        nc,
+        catalog({"site": entry}),
+        severities=FAMILIES,
+        unstructured_latitude_longitude_for=("site",),
+    )
+
+    associations = next(result for result in results if "COORD010" in result.name)
+    assert associations.msgs == []
+
+
+def test_unconfigured_site_type_does_not_require_auxiliary_latitude_longitude(nc):
+    nc.createDimension("site", 2)
+    nc.createVariable("ta", "f4", ("site",))
+    entry = coordinate("site", "site", "site", data_type="integer")
+
+    results = check_coordinate_catalog(
+        nc, catalog({"site": entry}), severities=FAMILIES
+    )
+
+    associations = next(result for result in results if "COORD010" in result.name)
+    assert associations.msgs == []
 
 
 def test_climatology_rejects_regular_bounds_unless_climatology_names_them(nc):

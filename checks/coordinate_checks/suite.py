@@ -267,6 +267,7 @@ def check_coordinate_catalog(
     check_direct_physical_values=True,
     check_formula_derived_profile=True,
     attributes_allowed_when_unset=(),
+    unstructured_latitude_longitude_for=(),
     missing_value_attribute_policy=None,
     nominal_resolution_policy=None,
     nominal_resolution_presence_delegated=True,
@@ -319,6 +320,7 @@ def check_coordinate_catalog(
         data_var,
         check_direct_physical_values=check_direct_physical_values,
         attributes_allowed_when_unset=attributes_allowed_when_unset,
+        unstructured_latitude_longitude_for=unstructured_latitude_longitude_for,
     )
     horizontal_dimensions = validate_horizontal_grid(
         findings,

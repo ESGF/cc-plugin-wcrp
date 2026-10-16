@@ -1005,6 +1005,11 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
             attributes_allowed_when_unset=(
                 attributes.allowed_when_unset if attributes is not None else ()
             ),
+            unstructured_latitude_longitude_for=(
+                registry.associations.unstructured_latitude_longitude_for
+                if registry.associations is not None
+                else ()
+            ),
             missing_value_attribute_policy=missing_values,
             nominal_resolution_policy=registry.nominal_resolution,
             nominal_resolution_presence_delegated=(

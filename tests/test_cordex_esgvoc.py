@@ -607,6 +607,10 @@ def test_cordex_catalogue_topology_check_is_enabled_in_toml():
     assert checker.config.coordinates.registry.grid.severity == "H"
     assert checker.config.coordinates.registry.grid.require_explicit_grid_axes is True
     assert checker.config.coordinates.registry.grid_geometry_missing_values.severity == "H"
+    assert (
+        checker.config.coordinates.registry.associations.unstructured_latitude_longitude_for
+        == []
+    )
 
 
 def test_cordex_config_sets_optional_auxiliary_missing_value_policy():

@@ -349,6 +349,25 @@ class CoordinateAttributesRule(CoordinateGlobalRule):
     allowed_when_unset_severity: Optional[str] = "L"
 
 
+class CoordinateAssociationRule(CoordinateGlobalRule):
+    """Controls auxiliary-coordinate associations required by coordinate types."""
+
+    unstructured_latitude_longitude_for: list[str] = Field(default_factory=list)
+
+    @field_validator("unstructured_latitude_longitude_for")
+    @classmethod
+    def validate_coordinate_types(cls, values):
+        if any(not value for value in values):
+            raise ValueError(
+                "unstructured_latitude_longitude_for may not contain empty values"
+            )
+        if len(set(values)) != len(values):
+            raise ValueError(
+                "unstructured_latitude_longitude_for may not contain duplicates"
+            )
+        return values
+
+
 class CoordinateMissingValueAttributesRule(BaseModel):
     """Policy for missing-value attributes on verified coordinates."""
 
@@ -464,7 +483,7 @@ class CoordinateRegistrySection(BaseModel):
     requested_values: Optional[CoordinateGlobalRule] = None
     bounds: Optional[CoordinateGlobalRule] = None
     bounds_name: Optional[CoordinateBoundsNameRule] = None
-    associations: Optional[CoordinateGlobalRule] = None
+    associations: Optional[CoordinateAssociationRule] = None
     grid: Optional[CoordinateGridRule] = None
     formula: Optional[CoordinateGlobalRule] = None
 

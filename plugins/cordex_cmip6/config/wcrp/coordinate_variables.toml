@@ -75,6 +75,11 @@ climatology_bounds_name = "climatology_bnds"
 
 [coordinates.registry.associations]
 severity = "H"
+# List ESGVoc coordinate_type values that require auxiliary latitude and
+# longitude in the data variable's coordinates attribute. Each pair must be
+# one-dimensional on that coordinate entry's out_name dimension. Use [] when
+# the project has no such unstructured coordinate type.
+unstructured_latitude_longitude_for = []
 
 # CORDEX resolves topology from CF-discovered file coordinates and the
 # grid_mapping rather than from a unique grid label or project EMD record.
