@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 
 import numpy as np
 
@@ -14,6 +14,7 @@ from checks.coordinate_checks.validation import (
     check_bounds,
     check_direction,
     check_dtype,
+    check_missing_value_attributes,
     check_single_longitude_cycle,
     check_trailing_dimension,
     check_valid_range,
@@ -100,11 +101,10 @@ def _inferred_horizontal_label(catalog):
         return "ht"
     if "site" in coordinate_ids:
         return "hs"
-    if "basin" in coordinate_ids and coordinate_ids & {
-        "latitude",
-        "gridlatitude",
-    }:
+    if "basin" in coordinate_ids and "latitude" in coordinate_ids:
         return "hyb"
+    if "basin" in coordinate_ids and "gridlatitude" in coordinate_ids:
+        return "ht"
     if coordinate_ids & {"latitude", "gridlatitude"} and not coordinate_ids & {
         "longitude",
         "gridlongitude",
@@ -132,6 +132,25 @@ def _configured_grid_label(config, horizontal_label, region):
     )
 
 
+def _basin_by_latitude_axis(catalog):
+    """Return the sole latitude-like axis in a basin-by-latitude layout."""
+    coordinate_ids = set(catalog.coordinate_ids)
+    if "basin" not in coordinate_ids:
+        return ""
+    axes = coordinate_ids & {"latitude", "gridlatitude"}
+    return next(iter(axes)) if len(axes) == 1 else ""
+
+
+def _configured_grid_type(config, catalog, horizontal_label):
+    if config is None:
+        return ""
+    # Both latitude+basin (hyb) and gridlatitude+basin (ht) describe a
+    # basin-by-latitude output grid. Keep their horizontal labels distinct
+    # while using the shared configurable grid-type recommendation.
+    selector = "hyb" if _basin_by_latitude_axis(catalog) else horizontal_label
+    return config.recommended_grid_types_by_horizontal_label.get(selector, "")
+
+
 def check_grid_label_recommendation(
     findings,
     ds,
@@ -150,19 +169,51 @@ def check_grid_label_recommendation(
     recommended_label = _configured_grid_label(
         grid_topology_config, horizontal_label, region
     )
+    if _basin_by_latitude_axis(catalog):
+        # A declared ht with gridlatitude+basin is not the oline/siline
+        # transect represented by the fixed ht grid-label recommendation.
+        recommended_label = ""
     current_label = str(registered_grid_metadata.get("id") or "").strip()
-    if not recommended_label or recommended_label == current_label:
+    accepted_labels = (
+        grid_topology_config.accepted_grid_labels_by_horizontal_label_and_region.get(
+            (horizontal_label, region), frozenset()
+        )
+    )
+    if current_label in accepted_labels:
         return
-    selectors = f"horizontal_label={horizontal_label!r}"
-    if (horizontal_label, region) in (
-        grid_topology_config.recommended_grid_labels_by_horizontal_label_and_region
-    ):
-        selectors += f" and region={region!r}"
+    if recommended_label:
+        if recommended_label == current_label:
+            return
+        selectors = f"horizontal_label={horizontal_label!r}"
+        if (horizontal_label, region) in (
+            grid_topology_config.recommended_grid_labels_by_horizontal_label_and_region
+        ):
+            selectors += f" and region={region!r}"
+        findings.add(
+            "grid_label_recommendation",
+            f"The file uses grid_label='{current_label}', but for {selectors} it is "
+            f"{findings.severity_word('grid_label_recommendation')} to use the "
+            f"registered grid_label='{recommended_label}'.",
+        )
+        return
+
+    recommended_type = _configured_grid_type(
+        grid_topology_config, catalog, horizontal_label
+    )
+    current_type = reference_id(registered_grid_metadata.get("grid_type"))
+    if not recommended_type or recommended_type == current_type:
+        return
+    current_description = (
+        f"registered grid_type='{current_type}'"
+        if current_type
+        else "no registered grid_type"
+    )
     findings.add(
         "grid_label_recommendation",
-        f"The file uses grid_label='{current_label}', but for {selectors} it is "
-        f"{findings.severity_word('grid_label_recommendation')} to use the "
-        f"registered grid_label='{recommended_label}'.",
+        f"The file uses grid_label='{current_label}' with {current_description}, "
+        f"but for horizontal_label={horizontal_label!r} it is "
+        f"{findings.severity_word('grid_label_recommendation')} to register and/or "
+        f"use a grid_label with grid_type='{recommended_type}'.",
     )
 
 
@@ -240,6 +291,53 @@ def _observed_grid_cell_count(
     return None
 
 
+def _observed_basin_by_latitude_cell_counts(
+    ds,
+    catalog,
+    data_var,
+    *,
+    allow_standard_name_fallback,
+):
+    """Return both permitted interpretations of basin-by-latitude n_cells."""
+    axis_identifier = _basin_by_latitude_axis(catalog)
+    if not axis_identifier or data_var is None:
+        return None
+
+    entries = {
+        identifier: catalog.data_coordinates.get(identifier, {})
+        for identifier in (axis_identifier, "basin")
+    }
+    variables = {}
+    for identifier, entry in entries.items():
+        expected_name = str(entry.get("out_name") or identifier)
+        standard_name = str(entry.get("cf_standard_name") or identifier)
+        variable = _identify_coordinate(
+            ds,
+            expected_name,
+            standard_name,
+            allow_standard_name_fallback,
+        )
+        if variable is None:
+            return None
+        variables[identifier] = variable
+
+    axis = variables[axis_identifier]
+    if axis.ndim != 1 or axis.dimensions[0] not in data_var.dimensions:
+        return None
+    axis_dimension = axis.dimensions[0]
+    basin_dimensions = [
+        dimension
+        for dimension in variables["basin"].dimensions
+        if dimension in data_var.dimensions
+    ]
+    if len(basin_dimensions) != 1 or basin_dimensions[0] == axis_dimension:
+        return None
+
+    axis_size = len(ds.dimensions[axis_dimension])
+    basin_size = len(ds.dimensions[basin_dimensions[0]])
+    return frozenset({axis_size, axis_size * basin_size})
+
+
 def check_grid_cell_count(
     findings,
     ds,
@@ -252,9 +350,23 @@ def check_grid_cell_count(
     allow_standard_name_fallback,
 ):
     """Compare a registered cell count when the file structure is reliable."""
-    if not set(catalog.coordinate_ids) & {"latitude", "longitude"}:
-        return
     if registered_grid_metadata is None:
+        return
+    declared_horizontal_label = str(ncattr(ds, "horizontal_label") or "").strip()
+    horizontal_label = _horizontal_label_for_grid_guidance(
+        catalog, declared_horizontal_label
+    )
+    basin_axis = _basin_by_latitude_axis(catalog)
+    if basin_axis:
+        recommended_type = _configured_grid_type(
+            grid_topology_config, catalog, horizontal_label
+        )
+        registered_type = reference_id(registered_grid_metadata.get("grid_type"))
+        if not recommended_type or registered_type != recommended_type:
+            # Parent grid labels are permitted for reduced output. Their cell
+            # count describes the parent grid and is not comparable here.
+            return
+    elif not set(catalog.coordinate_ids) & {"latitude", "longitude"}:
         return
     label = str(registered_grid_metadata.get("id") or "").strip() or "unknown"
     expected = registered_grid_metadata.get("n_cells")
@@ -267,30 +379,52 @@ def check_grid_cell_count(
             fallbacks=("grid_cell_count_consistency",),
         )
         return
-    observed = _observed_grid_cell_count(
-        ds,
-        catalog,
-        data_var,
-        topology=topology,
-        allow_standard_name_fallback=allow_standard_name_fallback,
-    )
-    if observed is None:
+    if basin_axis:
+        observed_counts = _observed_basin_by_latitude_cell_counts(
+            ds,
+            catalog,
+            data_var,
+            allow_standard_name_fallback=allow_standard_name_fallback,
+        )
+    else:
+        observed = _observed_grid_cell_count(
+            ds,
+            catalog,
+            data_var,
+            topology=topology,
+            allow_standard_name_fallback=allow_standard_name_fallback,
+        )
+        observed_counts = None if observed is None else frozenset({observed})
+    if observed_counts is None:
         # Structural COORD011 findings already explain why no reliable count
         # can be obtained; avoid adding a derivative failure.
         return
-    if observed != int(expected):
-        cell_word = "cell" if observed == 1 else "cells"
-        declared_horizontal_label = str(
-            ncattr(ds, "horizontal_label") or ""
-        ).strip()
-        horizontal_label = _horizontal_label_for_grid_guidance(
-            catalog, declared_horizontal_label
-        )
+    if int(expected) not in observed_counts:
+        if basin_axis:
+            permitted = sorted(observed_counts)
+            if len(permitted) == 1:
+                observed_description = f"{permitted[0]} cells"
+            else:
+                observed_description = (
+                    f"either {permitted[0]} latitude-axis cells or "
+                    f"{permitted[1]} latitude-by-basin/sector positions"
+                )
+            comparison = (
+                "the file's horizontal coordinate dimensions represent "
+                f"{observed_description}"
+            )
+        else:
+            observed = next(iter(observed_counts))
+            cell_word = "cell" if observed == 1 else "cells"
+            comparison = (
+                "the file's horizontal coordinate dimensions contain "
+                f"{observed} {cell_word}"
+            )
         reduced_labels = frozenset()
         if grid_topology_config is not None:
             reduced_labels = grid_topology_config.reduced_horizontal_labels
         guidance = (
-            "Please verify the horizontal dimensions and use or register an "
+            "Please verify the horizontal dimensions and register and/or use an "
             "appropriate grid_label for this grid."
         )
         if horizontal_label in reduced_labels:
@@ -303,8 +437,7 @@ def check_grid_cell_count(
         findings.add(
             "grid_cell_count_consistency",
             f"Registered grid '{label}' defines n_cells={int(expected)}, but "
-            f"the file's horizontal coordinate dimensions contain {observed} "
-            f"{cell_word}. {guidance}",
+            f"{comparison}. {guidance}",
         )
 
 
@@ -500,11 +633,20 @@ def _cell_circular_widths(cells: np.ndarray) -> np.ndarray:
     return widths
 
 
-def _check_grid_variable_valid_range(findings, variable, name, entry, *, family):
-    """Count invalid grid-cell centres and retain one extreme indexed example."""
+def _check_grid_variable_valid_range(
+    findings,
+    variable,
+    name,
+    entry,
+    *,
+    family,
+):
+    """Check explicit limits for the finite grid-cell centres."""
     lower = entry.get("valid_min")
     upper = entry.get("valid_max")
-    if lower is None and upper is None:
+    has_explicit_range = lower is not None or upper is not None
+    check_range = has_explicit_range and family in findings.messages
+    if not check_range:
         return
 
     total = int(np.prod(variable.shape))
@@ -513,15 +655,13 @@ def _check_grid_variable_valid_range(findings, variable, name, entry, *, family)
     lowest = highest = None
     lowest_index = highest_index = None
     saw_finite = False
-    saw_nonfinite = False
     try:
         for origin, chunk in _bounded_spatial_chunks(variable):
             values = np.ma.asarray(chunk, dtype="float64").filled(np.nan)
             values = np.asarray(values, dtype="float64")
             finite = np.isfinite(values)
             saw_finite = saw_finite or np.any(finite)
-            saw_nonfinite = saw_nonfinite or not np.all(finite)
-            if lower is not None:
+            if check_range and lower is not None:
                 below = finite & (values < float(lower) - slack)
                 below_count += int(np.count_nonzero(below))
                 if np.any(below):
@@ -532,7 +672,7 @@ def _check_grid_variable_valid_range(findings, variable, name, entry, *, family)
                         lowest_index = _global_cell_index(
                             origin, values.shape, flat
                         )
-            if upper is not None:
+            if check_range and upper is not None:
                 above = finite & (values > float(upper) + slack)
                 above_count += int(np.count_nonzero(above))
                 if np.any(above):
@@ -546,20 +686,13 @@ def _check_grid_variable_valid_range(findings, variable, name, entry, *, family)
     except (TypeError, ValueError, IndexError, OSError, RuntimeError) as exc:
         findings.add(
             family,
-            f"Could not check the explicit valid range of grid variable "
-            f"'{name}': {exc}.",
+            f"Could not inspect auxiliary grid coordinate '{name}' for "
+            f"its explicit valid range: {exc}.",
         )
         return
 
     if not saw_finite:
-        findings.add(family, f"'{name}' has no finite numeric values to check.")
         return
-    if saw_nonfinite:
-        findings.add(
-            family,
-            f"'{name}' contains missing or non-finite grid-cell values, so its "
-            "explicit valid range could not be checked completely.",
-        )
 
     qualifier = findings.severity_word(family)
     if below_count:
@@ -588,64 +721,32 @@ def _check_vertex_valid_range(
     *,
     longitude,
     family,
-    allow_missing_padding=False,
 ):
-    """Check explicit vertex limits in bounded chunks with local seam allowance."""
+    """Check explicit limits for the finite vertex values in bounded chunks."""
     lower = entry.get("valid_min")
     upper = entry.get("valid_max")
     has_explicit_range = lower is not None or upper is not None
+    check_range = has_explicit_range and family in findings.messages
+    if not check_range:
+        return
     slack = valid_range_slack(lower, upper)
     below_count = above_count = 0
-    fully_masked_count = 0
-    insufficient_count = 0
     lowest = highest = None
     lowest_width = highest_width = None
     lowest_cell = highest_cell = None
     lowest_index = highest_index = None
-    first_fully_masked_index = None
-    first_insufficient_index = None
-    first_insufficient_finite_count = None
     saw_finite = False
-    saw_nonfinite = False
     total = int(np.prod(vertices.shape[:-1]))
     try:
         for origin, chunk in _bounded_spatial_chunks(vertices, vertices=True):
             masked_cells = np.ma.asarray(chunk, dtype="float64")
-            missing = np.ma.getmaskarray(masked_cells).reshape(
-                -1, vertices.shape[-1]
-            )
             cells = masked_cells.filled(np.nan)
             cells = np.asarray(cells, dtype="float64").reshape(
                 -1, vertices.shape[-1]
             )
             finite = np.isfinite(cells)
-            complete_cells = np.all(finite, axis=1)
-            if allow_missing_padding:
-                finite_counts = np.count_nonzero(finite, axis=1)
-                fully_masked = np.all(missing, axis=1)
-                fully_masked_count += int(np.count_nonzero(fully_masked))
-                if first_fully_masked_index is None and np.any(fully_masked):
-                    flat = int(np.flatnonzero(fully_masked)[0])
-                    first_fully_masked_index = _global_cell_index(
-                        origin, chunk.shape[:-1], flat
-                    )
-                insufficient = (finite_counts < 3) & ~fully_masked
-                insufficient_count += int(np.count_nonzero(insufficient))
-                if first_insufficient_index is None and np.any(insufficient):
-                    flat = int(np.flatnonzero(insufficient)[0])
-                    first_insufficient_index = _global_cell_index(
-                        origin, chunk.shape[:-1], flat
-                    )
-                    first_insufficient_finite_count = int(finite_counts[flat])
-            unexpected_nonfinite = ~finite & ~missing
-            saw_nonfinite = saw_nonfinite or np.any(unexpected_nonfinite) or (
-                not allow_missing_padding and np.any(missing)
-            )
-            usable_cells = (
-                finite_counts >= 3
-                if allow_missing_padding
-                else complete_cells
-            )
+            finite_counts = np.count_nonzero(finite, axis=1)
+            usable_cells = finite_counts > 0
             if not np.any(usable_cells):
                 continue
             usable_rows = np.flatnonzero(usable_cells)
@@ -657,7 +758,7 @@ def _check_vertex_valid_range(
                 if longitude
                 else np.zeros(cells.shape[0], dtype="float64")
             )
-            if lower is not None:
+            if check_range and lower is not None:
                 below = finite & (
                     cells < float(lower) - slack - widths[:, None]
                 )
@@ -675,7 +776,7 @@ def _check_vertex_valid_range(
                         lowest_index = _global_cell_index(
                             origin, chunk.shape[:-1], int(usable_rows[row])
                         )
-            if upper is not None:
+            if check_range and upper is not None:
                 above = finite & (
                     cells > float(upper) + slack + widths[:, None]
                 )
@@ -696,46 +797,13 @@ def _check_vertex_valid_range(
     except (TypeError, ValueError, IndexError, OSError, RuntimeError) as exc:
         findings.add(
             family,
-            f"Could not check the explicit valid range of vertex variable "
-            f"'{name}': {exc}.",
+            f"Could not inspect vertex variable '{name}' for its explicit "
+            f"valid range: {exc}.",
         )
         return
 
-    if fully_masked_count:
-        findings.add_prerequisite(
-            "grid",
-            f"'{name}': {fully_masked_count} of {total} grid cells have all "
-            "vertex values missing. First incident at index "
-            f"{first_fully_masked_index}.",
-            issue=("fully_masked_vertices", name),
-            fallbacks=(family,),
-        )
-    if insufficient_count:
-        findings.add_prerequisite(
-            "grid",
-            f"'{name}': {insufficient_count} of {total} grid cells have fewer "
-            "than 3 finite vertex values after permitted masked padding. "
-            f"First incident at index {first_insufficient_index} has "
-            f"{first_insufficient_finite_count} finite vertex values.",
-            issue=("insufficient_vertices", name),
-            fallbacks=(family,),
-        )
     if not saw_finite:
-        if not has_explicit_range or (
-            allow_missing_padding
-            and fully_masked_count + insufficient_count == total
-        ):
-            return
-        findings.add(
-            family, f"'{name}' has no finite numeric values to check."
-        )
         return
-    if has_explicit_range and saw_nonfinite and not allow_missing_padding:
-        findings.add(
-            family,
-            f"'{name}' contains missing or non-finite vertex values, so its "
-            "explicit valid range could not be checked completely.",
-        )
 
     def allowance_text(width):
         return (
@@ -765,6 +833,198 @@ def _check_vertex_valid_range(
         )
 
 
+def _check_grid_geometry_missing_values(
+    findings,
+    latitude,
+    longitude,
+    latitude_vertices,
+    longitude_vertices,
+    *,
+    topology,
+):
+    """Require each grid position to be fully void or coherently geolocated."""
+    family = "grid_geometry_missing_values"
+    if family not in findings.messages:
+        return
+    if (
+        latitude.shape != longitude.shape
+        or latitude_vertices.shape != longitude_vertices.shape
+        or latitude_vertices.shape[:-1] != latitude.shape
+    ):
+        # Shape ownership remains with the structural grid check.
+        return
+
+    total = int(np.prod(latitude.shape))
+    invalid_count = 0
+    first_index = None
+    first_detail = None
+    nonfinite_count = 0
+    first_nonfinite_index = None
+    try:
+        variables = (
+            latitude,
+            longitude,
+            latitude_vertices,
+            longitude_vertices,
+        )
+        with ExitStack() as stack:
+            for variable in variables:
+                stack.enter_context(
+                    _bounded_variable_chunk_cache(
+                        variable,
+                        minimum_working_set_bytes=(
+                            _vertex_chunk_working_set_bytes(variable)
+                            if variable.ndim == latitude.ndim + 1
+                            else 0
+                        ),
+                    )
+                )
+            for origin, latitude_vertex_chunk in _spatial_chunks(
+                latitude_vertices, vertices=True
+            ):
+                spatial_shape = latitude_vertex_chunk.shape[:-1]
+                selection = tuple(
+                    slice(start, start + length)
+                    for start, length in zip(origin, spatial_shape)
+                )
+                vertex_selection = selection + (slice(None),)
+                latitude_values = np.ma.asarray(
+                    latitude[selection], dtype="float64"
+                )
+                longitude_values = np.ma.asarray(
+                    longitude[selection], dtype="float64"
+                )
+                latitude_vertex_values = np.ma.asarray(
+                    latitude_vertex_chunk, dtype="float64"
+                )
+                longitude_vertex_values = np.ma.asarray(
+                    longitude_vertices[vertex_selection], dtype="float64"
+                )
+
+                latitude_data = np.asarray(
+                    np.ma.getdata(latitude_values), dtype="float64"
+                )
+                longitude_data = np.asarray(
+                    np.ma.getdata(longitude_values), dtype="float64"
+                )
+                latitude_vertex_data = np.asarray(
+                    np.ma.getdata(latitude_vertex_values), dtype="float64"
+                )
+                longitude_vertex_data = np.asarray(
+                    np.ma.getdata(longitude_vertex_values), dtype="float64"
+                )
+                latitude_mask = np.ma.getmaskarray(latitude_values)
+                longitude_mask = np.ma.getmaskarray(longitude_values)
+                latitude_vertex_mask = np.ma.getmaskarray(latitude_vertex_values)
+                longitude_vertex_mask = np.ma.getmaskarray(longitude_vertex_values)
+
+                latitude_finite = (
+                    np.isfinite(latitude_data) & ~latitude_mask
+                ).reshape(-1)
+                longitude_finite = (
+                    np.isfinite(longitude_data) & ~longitude_mask
+                ).reshape(-1)
+                latitude_vertex_finite = (
+                    np.isfinite(latitude_vertex_data) & ~latitude_vertex_mask
+                ).reshape(-1, latitude_vertices.shape[-1])
+                longitude_vertex_finite = (
+                    np.isfinite(longitude_vertex_data) & ~longitude_vertex_mask
+                ).reshape(-1, longitude_vertices.shape[-1])
+                unmasked_nonfinite = (
+                    (~np.isfinite(latitude_data) & ~latitude_mask).reshape(-1)
+                    | (~np.isfinite(longitude_data) & ~longitude_mask).reshape(-1)
+                    | np.any(
+                        (~np.isfinite(latitude_vertex_data) & ~latitude_vertex_mask)
+                        .reshape(-1, latitude_vertices.shape[-1]),
+                        axis=1,
+                    )
+                    | np.any(
+                        (
+                            ~np.isfinite(longitude_vertex_data)
+                            & ~longitude_vertex_mask
+                        ).reshape(-1, longitude_vertices.shape[-1]),
+                        axis=1,
+                    )
+                )
+                nonfinite_count += int(np.count_nonzero(unmasked_nonfinite))
+                if first_nonfinite_index is None and np.any(unmasked_nonfinite):
+                    flat = int(np.flatnonzero(unmasked_nonfinite)[0])
+                    first_nonfinite_index = _global_cell_index(
+                        origin, spatial_shape, flat
+                    )
+
+                vertex_masks_match = np.all(
+                    latitude_vertex_finite == longitude_vertex_finite, axis=1
+                )
+                paired_vertices = latitude_vertex_finite & longitude_vertex_finite
+                paired_counts = np.count_nonzero(paired_vertices, axis=1)
+                all_vertices_void = ~np.any(
+                    latitude_vertex_finite | longitude_vertex_finite, axis=1
+                )
+                centres_complete = latitude_finite & longitude_finite
+                centres_void = ~latitude_finite & ~longitude_finite
+                void = centres_void & all_vertices_void
+                if topology == "unstructured":
+                    complete = (
+                        centres_complete
+                        & vertex_masks_match
+                        & (paired_counts >= 3)
+                    )
+                    vertex_requirement = "at least 3 paired finite vertices"
+                else:
+                    complete = (
+                        centres_complete
+                        & vertex_masks_match
+                        & (paired_counts == latitude_vertices.shape[-1])
+                    )
+                    vertex_requirement = "all vertex pairs finite"
+                invalid = ~(void | complete) & ~unmasked_nonfinite
+                invalid_count += int(np.count_nonzero(invalid))
+                if first_index is None and np.any(invalid):
+                    flat = int(np.flatnonzero(invalid)[0])
+                    first_index = _global_cell_index(origin, spatial_shape, flat)
+                    mismatched_slots = int(
+                        np.count_nonzero(
+                            latitude_vertex_finite[flat]
+                            != longitude_vertex_finite[flat]
+                        )
+                    )
+                    first_detail = (
+                        f"latitude centre is "
+                        f"{'finite' if latitude_finite[flat] else 'missing'}, "
+                        f"longitude centre is "
+                        f"{'finite' if longitude_finite[flat] else 'missing'}, "
+                        f"{int(paired_counts[flat])} of "
+                        f"{latitude_vertices.shape[-1]} vertex pairs are finite, "
+                        f"and {mismatched_slots} vertex slots define only one "
+                        "of latitude or longitude"
+                    )
+    except (TypeError, ValueError, IndexError, OSError, RuntimeError) as exc:
+        findings.add(
+            family,
+            "Could not inspect horizontal grid geometry for missing values: "
+            f"{exc}.",
+        )
+        return
+
+    if nonfinite_count:
+        findings.add(
+            family,
+            f"Horizontal grid geometry contains unmasked NaN or infinite values "
+            f"at {nonfinite_count} of {total} grid positions. First incident at "
+            f"index {first_nonfinite_index}. Missing grid geometry must use the "
+            "configured finite fill value rather than NaN or infinity.",
+        )
+    if invalid_count:
+        findings.add(
+            family,
+            f"Horizontal grid geometry is partially defined for {invalid_count} "
+            f"of {total} grid positions. First incident at index {first_index}: "
+            f"{first_detail}. Each position must either be fully void or define "
+            f"both centres with {vertex_requirement}.",
+        )
+
+
 def _validate_vertices(
     findings,
     ds,
@@ -772,8 +1032,6 @@ def _validate_vertices(
     role,
     entry,
     catalog,
-    *,
-    allow_missing_padding=False,
 ):
     declared = ncattr(coordinate, "bounds")
     vertex_entry = catalog.grid_variables.get(f"vertices_{role}", {})
@@ -789,7 +1047,7 @@ def _validate_vertices(
             issue=("missing_vertices_attribute", coordinate.name),
             fallbacks=(f"grid_{role}_valid_range",),
         )
-        return
+        return None
     if declared != recommended:
         findings.add(
             "bounds_name",
@@ -806,7 +1064,7 @@ def _validate_vertices(
             issue=("missing_vertices_variable", declared),
             fallbacks=(f"grid_{role}_valid_range",),
         )
-        return
+        return None
     vertices = ds.variables[declared]
     valid = (
         vertices.ndim == coordinate.ndim + 1
@@ -827,9 +1085,16 @@ def _validate_vertices(
             issue=("invalid_vertices_structure", declared),
             fallbacks=(f"grid_{role}_valid_range",),
         )
-        return
+        return None
 
     check_dtype(findings, vertices, declared, vertex_entry, family="grid")
+    check_missing_value_attributes(
+        findings,
+        vertices,
+        declared,
+        vertex_entry,
+        role="vertex",
+    )
     check_trailing_dimension(
         findings,
         vertices,
@@ -855,7 +1120,6 @@ def _validate_vertices(
         vertex_entry,
         longitude=role == "longitude",
         family=f"grid_{role}_valid_range",
-        allow_missing_padding=allow_missing_padding,
     )
     expected = _grid_dimensions(
         catalog, vertex_entry, coordinate.dimensions, vertices.dimensions[-1]
@@ -866,6 +1130,7 @@ def _validate_vertices(
             f"Vertex variable '{declared}' has dimensions {list(vertices.dimensions)}; "
             f"the {findings.severity_word('grid')} dimension order is {expected}.",
         )
+    return vertices
 
 
 def _validate_auxiliary(
@@ -892,7 +1157,7 @@ def _validate_auxiliary(
             f"The {findings.severity_word('grid')} {ndim}-D {role} grid variable "
             f"'{expected_name}' is absent.",
         )
-        return None
+        return None, None
     name = var.name
     if name != expected_name:
         findings.add(
@@ -911,8 +1176,9 @@ def _validate_auxiliary(
         )
         # The selected variable belongs to a different topology. Do not
         # compare it with this topology's coordinate or vertex records.
-        return var
+        return var, None
     check_dtype(findings, var, name, entry, family="grid")
+    check_missing_value_attributes(findings, var, name, entry, role="auxiliary")
     check_attributes(findings, var, name, entry)
     _check_grid_variable_valid_range(
         findings,
@@ -946,16 +1212,15 @@ def _validate_auxiliary(
                 f"'{data_var.name}' coordinates attribute to include auxiliary "
                 f"{role} coordinate '{name}'.",
             )
-    _validate_vertices(
+    vertices = _validate_vertices(
         findings,
         ds,
         var,
         role,
         entry,
         catalog,
-        allow_missing_padding=topology == "unstructured",
     )
-    return var
+    return var, vertices
 
 
 def _validate_grid_axes(findings, ds, dimensions, catalog, data_var):
@@ -1020,6 +1285,13 @@ def _validate_grid_axes(findings, ds, dimensions, catalog, data_var):
 
         identifier, entry = min(candidates, key=mismatch_score)
         check_dtype(findings, var, dimension, entry, family="grid")
+        check_missing_value_attributes(
+            findings,
+            var,
+            dimension,
+            entry,
+            role="coordinate",
+        )
         check_attributes(findings, var, dimension, entry, fallback_long_name=False)
         check_direction(findings, var, dimension, entry)
         matched[entry.get("axis") or "index"] = identifier
@@ -1171,6 +1443,13 @@ def validate_horizontal_grid(
         for role, var in discovered.items():
             entry = catalog.data_coordinates[role]
             check_dtype(findings, var, var.name, entry, family="grid")
+            check_missing_value_attributes(
+                findings,
+                var,
+                var.name,
+                entry,
+                role="coordinate",
+            )
             check_attributes(findings, var, var.name, entry)
             check_direction(findings, var, var.name, entry)
             check_valid_range(findings, var, var.name, entry)
@@ -1238,8 +1517,33 @@ def validate_horizontal_grid(
         )
         for role in requested
     }
-    available = [var for var in validated.values() if var is not None]
+    available = [pair[0] for pair in validated.values() if pair[0] is not None]
     if len(available) == len(requested):
+        latitude, latitude_vertices = validated["latitude"]
+        longitude, longitude_vertices = validated["longitude"]
+        if latitude_vertices is not None and longitude_vertices is not None:
+            if (
+                latitude_vertices.shape != longitude_vertices.shape
+                or latitude_vertices.dimensions != longitude_vertices.dimensions
+            ):
+                findings.add(
+                    "grid",
+                    "Latitude and longitude vertex variables must have identical "
+                    "dimensions and shapes; found "
+                    f"{latitude_vertices.name!r} with "
+                    f"{list(latitude_vertices.dimensions)} and "
+                    f"{longitude_vertices.name!r} with "
+                    f"{list(longitude_vertices.dimensions)}.",
+                )
+            else:
+                _check_grid_geometry_missing_values(
+                    findings,
+                    latitude,
+                    longitude,
+                    latitude_vertices,
+                    longitude_vertices,
+                    topology=topology,
+                )
         dimensions = list(available[0].dimensions)
         if topology in {"curvilinear", "unstructured"}:
             mapping_name = _grid_mapping_name(ds, data_var)

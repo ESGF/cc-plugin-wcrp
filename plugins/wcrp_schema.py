@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Literal, Union
 
 from pydantic import (
@@ -321,6 +322,52 @@ class CoordinateAttributesRule(CoordinateGlobalRule):
     allowed_when_unset_severity: Optional[str] = "L"
 
 
+class CoordinateMissingValueAttributesRule(BaseModel):
+    """Policy for missing-value attributes on verified coordinates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Presence/value policy for numeric auxiliary coordinates.
+    severity: Optional[str] = None
+    # NaN values and disagreement between the two attributes.
+    integrity_severity: Optional[str] = None
+    # Missing-value attributes prohibited for scalar/character coordinates.
+    prohibited_severity: Optional[str] = None
+    required_for_auxiliary: bool = False
+    expected_values_by_data_type: Dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("expected_values_by_data_type")
+    @classmethod
+    def validate_expected_values(cls, values):
+        allowed = {"real", "double"}
+        unexpected = set(values) - allowed
+        if unexpected:
+            raise ValueError(
+                "expected_values_by_data_type supports only "
+                f"{sorted(allowed)}; found {sorted(unexpected)}"
+            )
+        if any(not math.isfinite(value) for value in values.values()):
+            raise ValueError("configured missing values must be finite")
+        return values
+
+    @model_validator(mode="after")
+    def at_least_one_result_family(self):
+        if (
+            self.severity is None
+            and self.integrity_severity is None
+            and self.prohibited_severity is None
+        ):
+            raise ValueError(
+                "missing-value attribute checking requires severity or "
+                "integrity_severity or prohibited_severity"
+            )
+        if self.required_for_auxiliary and self.severity is None:
+            raise ValueError(
+                "required_for_auxiliary requires the configured-value severity"
+            )
+        return self
+
+
 class CoordinateBoundsNameRule(CoordinateGlobalRule):
     """Recommended names for bounds-related dimensions."""
 
@@ -376,6 +423,8 @@ class CoordinateRegistrySection(BaseModel):
     recommendations: Optional[CoordinateGlobalRule] = None
     direction: Optional[CoordinateDirectionRule] = None
     valid_range: Optional[CoordinateGlobalRule] = None
+    missing_value_attributes: Optional[CoordinateMissingValueAttributesRule] = None
+    grid_geometry_missing_values: Optional[CoordinateGlobalRule] = None
     grid_latitude_valid_range: Optional[CoordinateGlobalRule] = None
     grid_longitude_valid_range: Optional[CoordinateGlobalRule] = None
     grid_longitude_single_cycle: Optional[CoordinateGlobalRule] = None

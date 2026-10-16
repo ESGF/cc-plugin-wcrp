@@ -10,6 +10,7 @@ from checks.coordinate_checks.grid import (
     _GRID_SCAN_CACHE_BYTES,
     _bounded_variable_chunk_cache,
     _cell_circular_widths,
+    _check_grid_geometry_missing_values,
     _check_grid_variable_valid_range,
     _check_vertex_valid_range,
     _global_cell_index,
@@ -35,6 +36,7 @@ def _findings():
         {
             "valid_range": BaseCheck.HIGH,
             "grid": BaseCheck.HIGH,
+            "grid_geometry_missing_values": BaseCheck.HIGH,
             "grid_longitude_valid_range": BaseCheck.MEDIUM,
             "grid_longitude_single_cycle": BaseCheck.MEDIUM,
         }
@@ -291,7 +293,6 @@ def test_grid_variable_valid_range_counts_cells_and_reports_extreme_indices():
     )
 
     messages = findings.messages["grid_longitude_valid_range"]
-    assert any("missing or non-finite grid-cell values" in msg for msg in messages)
     assert any(
         "1 of 6 grid cells" in msg
         and "Lowest value: -2.0 at index (0, 1)" in msg
@@ -313,9 +314,7 @@ def test_grid_variable_valid_range_reports_nonfinite_and_read_failures():
         {"valid_min": 0.0, "valid_max": 360.0},
         family="grid_longitude_valid_range",
     )
-    assert nonfinite_findings.messages["grid_longitude_valid_range"] == [
-        "'longitude' has no finite numeric values to check."
-    ]
+    assert nonfinite_findings.messages["grid_longitude_valid_range"] == []
 
     unreadable_findings = _findings()
     _check_grid_variable_valid_range(
@@ -330,7 +329,128 @@ def test_grid_variable_valid_range_reports_nonfinite_and_read_failures():
     )
 
 
-def test_vertex_valid_range_accepts_padding_but_rejects_invalid_cells():
+def test_grid_geometry_allows_fully_void_curvilinear_positions():
+    latitude = np.ma.masked_invalid([[10.0, np.nan]])
+    longitude = np.ma.masked_invalid([[20.0, np.nan]])
+    latitude_vertices = np.ma.masked_invalid(
+        [[[9.0, 9.0, 11.0, 11.0], [np.nan] * 4]]
+    )
+    longitude_vertices = np.ma.masked_invalid(
+        [[[19.0, 21.0, 21.0, 19.0], [np.nan] * 4]]
+    )
+    findings = _findings()
+
+    _check_grid_geometry_missing_values(
+        findings,
+        latitude,
+        longitude,
+        latitude_vertices,
+        longitude_vertices,
+        topology="curvilinear",
+    )
+
+    assert findings.messages["grid_geometry_missing_values"] == []
+
+
+def test_grid_geometry_rejects_unmasked_nan_as_missing_value():
+    findings = _findings()
+
+    _check_grid_geometry_missing_values(
+        findings,
+        np.asarray([[10.0, np.nan]]),
+        np.asarray([[20.0, np.nan]]),
+        np.asarray([[[9.0, 9.0, 11.0, 11.0], [np.nan] * 4]]),
+        np.asarray([[[19.0, 21.0, 21.0, 19.0], [np.nan] * 4]]),
+        topology="curvilinear",
+    )
+
+    message = findings.messages["grid_geometry_missing_values"][0]
+    assert "unmasked NaN or infinite values" in message
+    assert "1 of 2 grid positions" in message
+    assert "index (0, 1)" in message
+    assert "configured finite fill value" in message
+
+
+@pytest.mark.parametrize(
+    ("latitude", "longitude", "latitude_vertices", "longitude_vertices"),
+    [
+        (
+            [[10.0, 11.0]],
+            [[20.0, np.nan]],
+            [[[9.0, 9.0, 11.0, 11.0], [10.0, 10.0, 12.0, 12.0]]],
+            [[[19.0, 21.0, 21.0, 19.0], [20.0, 22.0, 22.0, 20.0]]],
+        ),
+        (
+            [[10.0, 11.0]],
+            [[20.0, 21.0]],
+            [[[9.0, 9.0, 11.0, 11.0], [10.0, 10.0, 12.0, np.nan]]],
+            [[[19.0, 21.0, 21.0, 19.0], [20.0, 22.0, 22.0, 20.0]]],
+        ),
+        (
+            [[10.0, 11.0]],
+            [[20.0, 21.0]],
+            [[[9.0, 9.0, 11.0, 11.0], [10.0, 10.0, 12.0, np.nan]]],
+            [[[19.0, 21.0, 21.0, 19.0], [20.0, 22.0, 22.0, np.nan]]],
+        ),
+    ],
+)
+def test_grid_geometry_rejects_partial_curvilinear_positions(
+    latitude, longitude, latitude_vertices, longitude_vertices
+):
+    findings = _findings()
+
+    _check_grid_geometry_missing_values(
+        findings,
+        np.ma.masked_invalid(latitude),
+        np.ma.masked_invalid(longitude),
+        np.ma.masked_invalid(latitude_vertices),
+        np.ma.masked_invalid(longitude_vertices),
+        topology="curvilinear",
+    )
+
+    assert len(findings.messages["grid_geometry_missing_values"]) == 1
+    message = findings.messages["grid_geometry_missing_values"][0]
+    assert "1 of 2 grid positions" in message
+    assert "First incident at index (0, 1)" in message
+    assert "fully void or define both centres with all vertex pairs finite" in message
+
+
+def test_grid_geometry_allows_paired_unstructured_padding_but_requires_three_pairs():
+    latitude = np.ma.masked_invalid([10.0, np.nan, 30.0])
+    longitude = np.ma.masked_invalid([20.0, np.nan, 40.0])
+    latitude_vertices = np.ma.masked_invalid(
+        [
+            [9.0, 10.0, 11.0, np.nan, np.nan],
+            [np.nan] * 5,
+            [29.0, 31.0, np.nan, np.nan, np.nan],
+        ]
+    )
+    longitude_vertices = np.ma.masked_invalid(
+        [
+            [19.0, 21.0, 20.0, np.nan, np.nan],
+            [np.nan] * 5,
+            [39.0, 41.0, np.nan, np.nan, np.nan],
+        ]
+    )
+    findings = _findings()
+
+    _check_grid_geometry_missing_values(
+        findings,
+        latitude,
+        longitude,
+        latitude_vertices,
+        longitude_vertices,
+        topology="unstructured",
+    )
+
+    message = findings.messages["grid_geometry_missing_values"][0]
+    assert "1 of 3 grid positions" in message
+    assert "First incident at index (2,)" in message
+    assert "2 of 5 vertex pairs are finite" in message
+    assert "at least 3 paired finite vertices" in message
+
+
+def test_vertex_valid_range_ignores_padding_and_checks_finite_values():
     vertices = np.ma.masked_invalid(
         [
             [-1.0, 0.0, 1.0, np.nan, np.nan],
@@ -348,18 +468,8 @@ def test_vertex_valid_range_accepts_padding_but_rejects_invalid_cells():
         {"valid_min": 0.0, "valid_max": 10.0},
         longitude=True,
         family="grid_longitude_valid_range",
-        allow_missing_padding=True,
     )
 
-    assert any(
-        "all vertex values missing" in msg and "index (3,)" in msg
-        for msg in findings.messages["grid"]
-    )
-    assert any(
-        "fewer than 3 finite vertex values" in msg
-        and "index (2,) has 2 finite vertex values" in msg
-        for msg in findings.messages["grid"]
-    )
     assert any(
         "Highest value 12.0" in msg
         and "circular longitude width=0.0" in msg
@@ -382,9 +492,7 @@ def test_vertex_valid_range_reports_nonfinite_and_read_failures():
         longitude=True,
         family="grid_longitude_valid_range",
     )
-    assert nonfinite_findings.messages["grid_longitude_valid_range"] == [
-        "'vertices_longitude' has no finite numeric values to check."
-    ]
+    assert nonfinite_findings.messages["grid_longitude_valid_range"] == []
 
     unreadable_findings = _findings()
     _check_vertex_valid_range(
@@ -410,7 +518,6 @@ def test_vertex_valid_range_bounds_and_releases_netcdf_chunk_cache():
         {"valid_min": 0.0, "valid_max": 360.0},
         longitude=True,
         family="grid_longitude_valid_range",
-        allow_missing_padding=True,
     )
 
     assert [change[0] for change in vertices.cache_changes] == [
@@ -511,6 +618,24 @@ def test_unwrap_longitude_pairs_uses_parent_or_first_bound_as_reference():
 
     np.testing.assert_allclose(with_parents, [[-0.5, 0.5], [0.5, 1.5]])
     np.testing.assert_allclose(without_parents, [[359.5, 360.5], [0.5, 1.5]])
+
+
+@pytest.mark.parametrize(
+    ("pair", "parent", "expected"),
+    [
+        ([0.0, 360.0], 180.0, [0.0, 360.0]),
+        ([360.0, 0.0], 180.0, [360.0, 0.0]),
+        ([-180.0, 180.0], 0.0, [-180.0, 180.0]),
+    ],
+)
+def test_unwrap_longitude_pairs_preserves_full_cycle_direction(
+    pair, parent, expected
+):
+    actual = _unwrap_longitude_pairs(
+        np.asarray([pair]), np.asarray([parent])
+    )
+
+    np.testing.assert_allclose(actual, [expected])
 
 
 def test_cyclic_absolute_difference_uses_shortest_longitude_distance():

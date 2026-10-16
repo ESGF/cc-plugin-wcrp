@@ -20,6 +20,7 @@ from checks.coordinate_checks.validation import (
     check_direct_vertical_values,
     check_direction,
     check_dtype,
+    check_missing_value_attributes,
     check_requested_numeric,
     check_trailing_dimension,
     check_valid_range,
@@ -61,6 +62,7 @@ def validate_standard_1d(
             f"found dimensions {list(var.dimensions)}.",
         )
     check_dtype(findings, var, name, entry)
+    check_missing_value_attributes(findings, var, name, entry, role="coordinate")
     check_attributes(
         findings,
         var,
@@ -227,6 +229,7 @@ def validate_scalar(
             f"{list(var.dimensions)}.",
         )
     check_dtype(findings, var, name, entry)
+    check_missing_value_attributes(findings, var, name, entry, role="scalar")
     check_attributes(findings, var, name, entry)
     if not character:
         check_valid_range(findings, var, name, entry)
@@ -316,6 +319,7 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
             f"found {var.dimensions[1]!r}.",
         )
     check_dtype(findings, var, name, entry)
+    check_missing_value_attributes(findings, var, name, entry, role="auxiliary")
     check_attributes(findings, var, name, entry)
     requested = [str(value) for value in values(entry)]
     if requested:
@@ -364,6 +368,13 @@ def validate_site(findings, ds, data_var, entry_id, entry):
             )
             continue
         variable = ds.variables[candidates[0]]
+        check_missing_value_attributes(
+            findings,
+            variable,
+            variable.name,
+            None,
+            role="auxiliary",
+        )
         if variable.dimensions != (dimension_name,):
             findings.add(
                 "associations",

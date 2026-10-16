@@ -17,6 +17,7 @@ from checks.coordinate_checks.validation import (
     check_direct_vertical_values,
     check_direction,
     check_dtype,
+    check_missing_value_attributes,
     check_profile_direction,
     check_valid_range,
     report_allowed_when_unset,
@@ -242,6 +243,7 @@ def validate_model_level(
             f"'{var.name}({', '.join(var.dimensions)})'.",
         )
     check_dtype(findings, var, name, level)
+    check_missing_value_attributes(findings, var, name, level, role="coordinate")
     check_attributes(
         findings,
         var,
