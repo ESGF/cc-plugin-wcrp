@@ -1363,7 +1363,7 @@
 "Lmon.mrro" = "mrro_tavg-u-hxy-lnd"
 "Lmon.mrros" = "mrros_tavg-u-hxy-lnd"
 "Lmon.mrso" = "mrso_tavg-u-hxy-lnd"
-"Lmon.mrsos" = "mrsol_tavg-z10cm-hxy-lnd"
+"Lmon.mrsos" = "mrsol_tavg-d10cm-hxy-lnd"
 "Lmon.nbp" = "nbp_tavg-u-hxy-lnd"
 "Lmon.npp" = "npp_tavg-u-hxy-lnd"
 "Lmon.nppLeaf" = "nppLeaf_tavg-u-hxy-lnd"

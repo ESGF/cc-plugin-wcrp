@@ -68,8 +68,6 @@ def load_value_to_check(var_obj, parameter, ctx):
         ctx.messages.append("Warning: _FillValue and missing_value are the same.")
     if parameter == "FillValue":
         parameters_func = {'val': fill_value, "name": "FillValue"}
-        if fill_value is None:
-            raise ValueError("FillValue not found in the variable attributes.")  
     elif parameter == "MissingValue":
         parameters_func = {'val': missing_value, "name": "MissingValue"}
     else:

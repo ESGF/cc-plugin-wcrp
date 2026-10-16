@@ -17,6 +17,10 @@ import json
 from checks.data_plausibility_checks.utils.dimensions import get_dimension_info
 from checks.data_plausibility_checks.utils.auxiliar import ExtendedTestCtx, dump_data_file_extended,Coordinate
 
+class ThresholdNotAvailableError(ValueError):
+    """Raised when DATA006 has no configured threshold for a dataset."""
+
+
 def get_thresholds_variable(dataset, thresholds_file):
     """
     Get variables in the dataset that have a standard_name matching any field in the JSON file.
@@ -54,7 +58,9 @@ def get_thresholds_variable(dataset, thresholds_file):
                 standard_name = var.standard_name
 
     if not matching_vars:
-        raise ValueError("No matching variables found in the dataset.")
+        raise ThresholdNotAvailableError(
+            "No physical threshold is configured for this dataset."
+        )
     if len(matching_vars) > 1:
         raise ValueError("More than one matching variable found in the dataset.")
 
@@ -264,6 +270,10 @@ def check_outliers(dataset, thresholds_file='outliers_thresholds.json', severity
 
     try:
         thresholds, variable = get_thresholds_variable(dataset, thresholds_file)
+    except ThresholdNotAvailableError as e:
+        ctx.messages.append(f"DATA006 not applicable: {e}")
+        ctx.add_pass()
+        return ctx
     except ValueError as e:
         ctx.add_failure(f"Error getting thresholds: {str(e)}")
         return ctx
