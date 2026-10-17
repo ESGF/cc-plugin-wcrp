@@ -3641,7 +3641,7 @@ def test_grid_longitude_must_not_span_more_than_one_cycle(nc):
 def test_longitude_vertices_use_explicit_range_with_local_cell_allowance(
     nc, monkeypatch
 ):
-    monkeypatch.setattr("checks.coordinate_checks.grid._VERTEX_CHUNK_VALUES", 2)
+    monkeypatch.setattr("checks.coordinate_checks.scanning.DEFAULT_TARGET_VALUES", 2)
     nc.createDimension("y", 1)
     nc.createDimension("x", 4)
     nc.createDimension("vertices", 4)

@@ -7,18 +7,21 @@ import pytest
 from compliance_checker.base import BaseCheck
 
 from checks.coordinate_checks.grid import (
-    _GRID_SCAN_CACHE_BYTES,
-    _bounded_variable_chunk_cache,
     _cell_circular_widths,
     _check_grid_geometry_missing_values,
     _check_grid_variable_valid_range,
     _check_vertex_valid_range,
-    _global_cell_index,
     _grid_dimensions,
     _grid_mapping_name,
     _identify_coordinate,
-    _spatial_chunks,
-    _vertex_chunk_working_set_bytes,
+)
+from checks.coordinate_checks.scanning import (
+    DEFAULT_SCAN_CACHE_BYTES,
+    global_index,
+    iter_bounded_spatial_chunks,
+    iter_spatial_chunks,
+    storage_chunk_working_set_bytes,
+    temporary_chunk_cache,
 )
 from checks.coordinate_checks.validation import (
     Findings,
@@ -37,6 +40,7 @@ def _findings():
             "valid_range": BaseCheck.HIGH,
             "grid": BaseCheck.HIGH,
             "grid_geometry_missing_values": BaseCheck.HIGH,
+            "grid_latitude_valid_range": BaseCheck.MEDIUM,
             "grid_longitude_valid_range": BaseCheck.MEDIUM,
             "grid_longitude_single_cycle": BaseCheck.MEDIUM,
         }
@@ -88,11 +92,30 @@ class _CachedArray:
         return self.chunks if self.chunks is not None else "contiguous"
 
 
+class _FailingCacheArray(_CachedArray):
+    def __init__(self, values, *, fail_get=False, fail_set_calls=()):
+        super().__init__(values)
+        self.fail_get = fail_get
+        self.fail_set_calls = set(fail_set_calls)
+        self.set_calls = 0
+
+    def get_var_chunk_cache(self):
+        if self.fail_get:
+            raise RuntimeError("simulated cache read failure")
+        return super().get_var_chunk_cache()
+
+    def set_var_chunk_cache(self, size, nelems, preemption):
+        self.set_calls += 1
+        if self.set_calls in self.fail_set_calls:
+            raise RuntimeError("simulated cache update failure")
+        super().set_var_chunk_cache(size, nelems, preemption)
+
+
 def test_spatial_chunks_splits_one_dimensional_values(monkeypatch):
-    monkeypatch.setattr("checks.coordinate_checks.grid._VERTEX_CHUNK_VALUES", 4)
+    monkeypatch.setattr("checks.coordinate_checks.scanning.DEFAULT_TARGET_VALUES", 4)
     values = np.arange(10)
 
-    chunks = list(_spatial_chunks(values))
+    chunks = list(iter_spatial_chunks(values))
 
     assert [origin for origin, _ in chunks] == [(0,), (4,), (8,)]
     np.testing.assert_array_equal(
@@ -101,19 +124,19 @@ def test_spatial_chunks_splits_one_dimensional_values(monkeypatch):
 
 
 def test_spatial_chunks_handles_empty_and_exact_chunk_boundaries(monkeypatch):
-    monkeypatch.setattr("checks.coordinate_checks.grid._VERTEX_CHUNK_VALUES", 4)
+    monkeypatch.setattr("checks.coordinate_checks.scanning.DEFAULT_TARGET_VALUES", 4)
 
-    assert list(_spatial_chunks(np.asarray([]))) == []
-    chunks = list(_spatial_chunks(np.arange(8)))
+    assert list(iter_spatial_chunks(np.asarray([]))) == []
+    chunks = list(iter_spatial_chunks(np.arange(8)))
     assert [origin for origin, _ in chunks] == [(0,), (4,)]
     assert [chunk.shape for _, chunk in chunks] == [(4,), (4,)]
 
 
 def test_spatial_chunks_bounds_two_dimensional_blocks(monkeypatch):
-    monkeypatch.setattr("checks.coordinate_checks.grid._VERTEX_CHUNK_VALUES", 4)
+    monkeypatch.setattr("checks.coordinate_checks.scanning.DEFAULT_TARGET_VALUES", 4)
     values = np.arange(15).reshape(3, 5)
 
-    chunks = list(_spatial_chunks(values))
+    chunks = list(iter_spatial_chunks(values))
 
     assert [origin for origin, _ in chunks] == [
         (0, 0),
@@ -127,20 +150,20 @@ def test_spatial_chunks_bounds_two_dimensional_blocks(monkeypatch):
 
 
 def test_spatial_chunks_accounts_for_vertex_dimension(monkeypatch):
-    monkeypatch.setattr("checks.coordinate_checks.grid._VERTEX_CHUNK_VALUES", 8)
+    monkeypatch.setattr("checks.coordinate_checks.scanning.DEFAULT_TARGET_VALUES", 8)
     vertices = np.arange(20).reshape(5, 4)
 
-    chunks = list(_spatial_chunks(vertices, vertices=True))
+    chunks = list(iter_spatial_chunks(vertices, trailing_dimensions=1))
 
     assert [origin for origin, _ in chunks] == [(0,), (2,), (4,)]
     assert [chunk.shape for _, chunk in chunks] == [(2, 4), (2, 4), (1, 4)]
 
 
 def test_spatial_chunks_handles_scalar_and_higher_dimensional_grids(monkeypatch):
-    monkeypatch.setattr("checks.coordinate_checks.grid._VERTEX_CHUNK_VALUES", 4)
+    monkeypatch.setattr("checks.coordinate_checks.scanning.DEFAULT_TARGET_VALUES", 4)
 
-    scalar_chunks = list(_spatial_chunks(np.asarray(7.0)))
-    volume_chunks = list(_spatial_chunks(np.arange(12).reshape(3, 2, 2)))
+    scalar_chunks = list(iter_spatial_chunks(np.asarray(7.0)))
+    volume_chunks = list(iter_spatial_chunks(np.arange(12).reshape(3, 2, 2)))
 
     assert scalar_chunks[0][0] == ()
     assert scalar_chunks[0][1] == 7.0
@@ -151,20 +174,31 @@ def test_spatial_chunks_handles_scalar_and_higher_dimensional_grids(monkeypatch)
     ]
 
 
+def test_spatial_chunks_bound_every_dimension_of_an_arbitrary_grid():
+    values = np.arange(2 * 5 * 7).reshape(2, 5, 7)
+
+    chunks = list(iter_spatial_chunks(values, target_values=6))
+
+    assert all(chunk.size <= 6 for _, chunk in chunks)
+    assert {origin[0] for origin, _ in chunks} == {0, 1}
+    assert {origin[1] for origin, _ in chunks} == {0, 1, 2, 3, 4}
+    assert {origin[2] for origin, _ in chunks} == {0, 6}
+
+
 def test_bounded_variable_chunk_cache_caps_and_restores_after_errors():
     variable = _CachedArray(np.arange(4))
     original = variable.cache
 
     with (
         pytest.raises(RuntimeError, match="simulated check failure"),
-        _bounded_variable_chunk_cache(variable),
+        temporary_chunk_cache(variable),
     ):
-        assert variable.cache[0] == _GRID_SCAN_CACHE_BYTES
+        assert variable.cache[0] == DEFAULT_SCAN_CACHE_BYTES
         raise RuntimeError("simulated check failure")
 
     assert variable.cache == original
     assert [change[0] for change in variable.cache_changes] == [
-        _GRID_SCAN_CACHE_BYTES,
+        DEFAULT_SCAN_CACHE_BYTES,
         original[0],
     ]
 
@@ -172,12 +206,36 @@ def test_bounded_variable_chunk_cache_caps_and_restores_after_errors():
 def test_bounded_variable_chunk_cache_leaves_small_and_plain_arrays_unchanged():
     variable = _CachedArray(np.arange(4), cache_size=8 * 2**20)
 
-    with _bounded_variable_chunk_cache(variable):
+    with temporary_chunk_cache(variable):
         assert variable.cache[0] == 8 * 2**20
-    with _bounded_variable_chunk_cache(np.arange(4)):
+    with temporary_chunk_cache(np.arange(4)):
         pass
 
     assert variable.cache_changes == []
+
+
+@pytest.mark.parametrize(
+    ("fail_get", "fail_set_calls"),
+    [
+        (True, ()),
+        (False, (1,)),
+        (False, (2,)),
+    ],
+)
+def test_bounded_scan_survives_cache_api_failures(fail_get, fail_set_calls):
+    variable = _FailingCacheArray(
+        np.arange(7),
+        fail_get=fail_get,
+        fail_set_calls=fail_set_calls,
+    )
+
+    chunks = list(iter_bounded_spatial_chunks(variable, target_values=3))
+
+    np.testing.assert_array_equal(
+        np.concatenate([chunk for _, chunk in chunks]),
+        variable.values,
+    )
+    assert [origin for origin, _ in chunks] == [(0,), (3,), (6,)]
 
 
 def test_vertex_chunk_working_set_includes_all_trailing_storage_chunks():
@@ -186,20 +244,44 @@ def test_vertex_chunk_working_set_includes_all_trailing_storage_chunks():
         chunks=(25, 1),
     )
 
-    assert _vertex_chunk_working_set_bytes(vertices) == 25 * 16 * 8
+    assert storage_chunk_working_set_bytes(
+        vertices, trailing_dimensions=1
+    ) == 25 * 16 * 8
 
-    with _bounded_variable_chunk_cache(
+    with temporary_chunk_cache(
         vertices,
         maximum_bytes=128,
-        minimum_working_set_bytes=_vertex_chunk_working_set_bytes(vertices),
+        minimum_working_set_bytes=storage_chunk_working_set_bytes(
+            vertices, trailing_dimensions=1
+        ),
     ):
         assert vertices.cache[0] == 25 * 16 * 8
 
     assert vertices.cache[0] == 64 * 2**20
 
 
+def test_vertex_chunk_cache_grows_to_retain_one_oversized_storage_chunk():
+    vertices = _CachedArray(
+        np.zeros((100, 16), dtype="float64"),
+        cache_size=128,
+        chunks=(25, 16),
+    )
+    working_set = storage_chunk_working_set_bytes(
+        vertices, trailing_dimensions=1
+    )
+
+    with temporary_chunk_cache(
+        vertices,
+        maximum_bytes=128,
+        minimum_working_set_bytes=working_set,
+    ):
+        assert vertices.cache[0] == working_set
+
+    assert vertices.cache[0] == 128
+
+
 def test_global_cell_index_translates_flat_chunk_index():
-    assert _global_cell_index((10, 20), (2, 3), 4) == (11, 21)
+    assert global_index((10, 20), (2, 3), 4) == (11, 21)
 
 
 def test_identify_coordinate_prefers_name_and_controls_standard_name_fallback():
@@ -450,6 +532,153 @@ def test_grid_geometry_allows_paired_unstructured_padding_but_requires_three_pai
     assert "at least 3 paired finite vertices" in message
 
 
+def test_grid_geometry_reuses_compact_vertex_scan_summaries():
+    latitude_vertices = _CachedArray(
+        [[9.0, 10.0, 11.0, 10.0], [19.0, 20.0, 21.0, 20.0]]
+    )
+    longitude_vertices = _CachedArray(
+        [[19.0, 20.0, 21.0, 20.0], [29.0, 30.0, 31.0, 30.0]]
+    )
+    findings = _findings()
+    latitude_summary = _check_vertex_valid_range(
+        findings,
+        latitude_vertices,
+        "vertices_latitude",
+        {"valid_min": -90.0, "valid_max": 90.0},
+        longitude=False,
+        family="grid_latitude_valid_range",
+    )
+    longitude_summary = _check_vertex_valid_range(
+        findings,
+        longitude_vertices,
+        "vertices_longitude",
+        {"valid_min": 0.0, "valid_max": 360.0},
+        longitude=True,
+        family="grid_longitude_valid_range",
+    )
+    reads = (len(latitude_vertices.selections), len(longitude_vertices.selections))
+
+    _check_grid_geometry_missing_values(
+        findings,
+        np.asarray([10.0, 20.0]),
+        np.asarray([20.0, 30.0]),
+        _UnreadableArray((2, 4)),
+        _UnreadableArray((2, 4)),
+        topology="unstructured",
+        latitude_vertex_summary=latitude_summary,
+        longitude_vertex_summary=longitude_summary,
+    )
+
+    assert reads == (
+        len(latitude_vertices.selections),
+        len(longitude_vertices.selections),
+    )
+    assert latitude_summary.finite_slots.nbytes == 2
+    assert longitude_summary.finite_slots.nbytes == 2
+    assert findings.messages["grid_geometry_missing_values"] == []
+
+
+def test_grid_geometry_reuses_vertex_summaries_across_scan_chunks(monkeypatch):
+    monkeypatch.setattr("checks.coordinate_checks.scanning.DEFAULT_TARGET_VALUES", 8)
+    latitude_values = np.tile([9.0, 10.0, 11.0, 10.0], (5, 1))
+    longitude_values = np.tile([19.0, 20.0, 21.0, 20.0], (5, 1))
+    latitude_values = np.ma.asarray(latitude_values)
+    latitude_values[4, 3] = np.ma.masked
+    latitude_vertices = _CachedArray(latitude_values)
+    longitude_vertices = _CachedArray(longitude_values)
+    findings = _findings()
+
+    latitude_summary = _check_vertex_valid_range(
+        findings,
+        latitude_vertices,
+        "vertices_latitude",
+        {},
+        longitude=False,
+        family="grid_latitude_valid_range",
+    )
+    longitude_summary = _check_vertex_valid_range(
+        findings,
+        longitude_vertices,
+        "vertices_longitude",
+        {},
+        longitude=True,
+        family="grid_longitude_valid_range",
+    )
+
+    _check_grid_geometry_missing_values(
+        findings,
+        np.arange(5.0),
+        np.arange(5.0),
+        _UnreadableArray((5, 4)),
+        _UnreadableArray((5, 4)),
+        topology="curvilinear",
+        latitude_vertex_summary=latitude_summary,
+        longitude_vertex_summary=longitude_summary,
+    )
+
+    assert latitude_vertices.selections == [
+        (slice(0, 2), slice(None)),
+        (slice(2, 4), slice(None)),
+        (slice(4, 6), slice(None)),
+    ]
+    assert longitude_vertices.selections == latitude_vertices.selections
+    message = findings.messages["grid_geometry_missing_values"][0]
+    assert "1 of 5 grid positions" in message
+    assert "First incident at index (4,)" in message
+
+
+def test_grid_geometry_unpacks_vertex_summaries_larger_than_one_byte():
+    latitude_values = np.ma.asarray(
+        [
+            np.arange(10.0),
+            [20.0, 21.0, 22.0] + [np.nan] * 7,
+        ]
+    )
+    longitude_values = np.ma.asarray(
+        [
+            np.arange(10.0) + 30.0,
+            [40.0, 41.0, 42.0] + [np.nan] * 7,
+        ]
+    )
+    latitude_vertices = _CachedArray(np.ma.masked_invalid(latitude_values))
+    longitude_vertices = _CachedArray(np.ma.masked_invalid(longitude_values))
+    findings = _findings()
+
+    latitude_summary = _check_vertex_valid_range(
+        findings,
+        latitude_vertices,
+        "vertices_latitude",
+        {},
+        longitude=False,
+        family="grid_latitude_valid_range",
+    )
+    longitude_summary = _check_vertex_valid_range(
+        findings,
+        longitude_vertices,
+        "vertices_longitude",
+        {},
+        longitude=True,
+        family="grid_longitude_valid_range",
+    )
+
+    assert latitude_summary.vertex_count == 10
+    assert latitude_summary.finite_slots.shape == (2, 2)
+    assert longitude_summary.finite_slots.shape == (2, 2)
+
+    _check_grid_geometry_missing_values(
+        findings,
+        np.asarray([5.0, 21.0]),
+        np.asarray([35.0, 41.0]),
+        _UnreadableArray((2, 10)),
+        _UnreadableArray((2, 10)),
+        topology="unstructured",
+        latitude_vertex_summary=latitude_summary,
+        longitude_vertex_summary=longitude_summary,
+    )
+
+    assert findings.messages["grid_geometry_missing_values"] == []
+
+
 def test_vertex_valid_range_ignores_padding_and_checks_finite_values():
     vertices = np.ma.masked_invalid(
         [
@@ -521,7 +750,7 @@ def test_vertex_valid_range_bounds_and_releases_netcdf_chunk_cache():
     )
 
     assert [change[0] for change in vertices.cache_changes] == [
-        _GRID_SCAN_CACHE_BYTES,
+        DEFAULT_SCAN_CACHE_BYTES,
         64 * 2**20,
     ]
 
@@ -584,8 +813,8 @@ def test_single_longitude_cycle_uses_numerical_slack_and_configured_family():
     )
 
 
-def test_single_longitude_cycle_accepts_streamed_chunks(monkeypatch):
-    monkeypatch.setattr("checks.coordinate_checks.grid._VERTEX_CHUNK_VALUES", 2)
+def test_single_longitude_cycle_uses_shared_streaming_by_default(monkeypatch):
+    monkeypatch.setattr("checks.coordinate_checks.scanning.DEFAULT_TARGET_VALUES", 2)
     longitude = _CachedArray([-180.0, -90.0, 0.0, 180.001])
     findings = _findings()
 
@@ -594,7 +823,6 @@ def test_single_longitude_cycle_accepts_streamed_chunks(monkeypatch):
         longitude,
         "longitude",
         family="grid_longitude_single_cycle",
-        value_chunks=(chunk for _, chunk in _spatial_chunks(longitude)),
     )
 
     assert longitude.selections == [(slice(0, 2),), (slice(2, 4),)]

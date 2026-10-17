@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 from compliance_checker.base import TestCtx
 
+from checks.coordinate_checks.scanning import iter_bounded_spatial_chunks
 from checks.coordinate_checks.utils import (
     bound_tolerances,
     bounds_pairs,
@@ -604,7 +605,11 @@ def check_single_longitude_cycle(
 ):
     """Require a grid-longitude variable to use no more than one cycle."""
     minimum = maximum = None
-    chunks = value_chunks if value_chunks is not None else (var[...],)
+    chunks = (
+        value_chunks
+        if value_chunks is not None
+        else (chunk for _, chunk in iter_bounded_spatial_chunks(var))
+    )
     try:
         for chunk in chunks:
             array = np.ma.asarray(chunk, dtype="float64")

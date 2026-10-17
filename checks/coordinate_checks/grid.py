@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 
 import numpy as np
 
 from checks.coordinate_checks.model import as_dict, reference_id, reference_ids
+from checks.coordinate_checks.scanning import (
+    global_index,
+    iter_bounded_spatial_chunks,
+    scan_chunk_cache,
+    spatial_selection,
+)
 from checks.coordinate_checks.utils import ncattr, neutral_dtype
 from checks.coordinate_checks.validation import (
     Findings,
@@ -21,58 +27,14 @@ from checks.coordinate_checks.validation import (
     valid_range_slack,
 )
 
-# At float64 this is 2 MiB of source values. Temporary arrays keep the
-# per-process peak comfortably in the tens of MiB even for multi-million-cell grids.
-_VERTEX_CHUNK_VALUES = 262_144
-_GRID_SCAN_CACHE_BYTES = 32 * 2**20
 
+@dataclass
+class _VertexScanSummary:
+    """Compact vertex state retained for the paired geometry check."""
 
-def _vertex_chunk_working_set_bytes(variable):
-    """Estimate cache needed for all storage chunks across one vertex cell."""
-    try:
-        chunks = variable.chunking()
-        if not isinstance(chunks, (list, tuple)) or not chunks:
-            return 0
-        trailing_chunks = (
-            int(variable.shape[-1]) + int(chunks[-1]) - 1
-        ) // int(chunks[-1])
-        return int(np.prod(chunks)) * int(variable.dtype.itemsize) * trailing_chunks
-    except (AttributeError, TypeError, ValueError, OverflowError):
-        return 0
-
-
-@contextmanager
-def _bounded_variable_chunk_cache(
-    variable,
-    maximum_bytes=_GRID_SCAN_CACHE_BYTES,
-    *,
-    minimum_working_set_bytes=0,
-):
-    """Temporarily cap a netCDF variable's HDF5 cache during full-grid scans."""
-    try:
-        size, nelems, preemption = variable.get_var_chunk_cache()
-    except (AttributeError, TypeError, ValueError, OSError, RuntimeError):
-        yield
-        return
-    target_size = min(size, max(maximum_bytes, minimum_working_set_bytes))
-    if size <= target_size:
-        yield
-        return
-    try:
-        variable.set_var_chunk_cache(target_size, nelems, preemption)
-    except (AttributeError, TypeError, ValueError, OSError, RuntimeError):
-        yield
-        return
-    try:
-        yield
-    finally:
-        try:
-            # Resetting also releases the scan cache. netCDF4 allocates the
-            # restored cache lazily if a later consumer accesses the variable.
-            variable.set_var_chunk_cache(size, nelems, preemption)
-        except (AttributeError, TypeError, ValueError, OSError, RuntimeError):
-            pass
-
+    finite_slots: np.ndarray
+    unmasked_nonfinite: np.ndarray
+    vertex_count: int
 
 def _by_standard_name(ds, standard_name):
     return [
@@ -596,65 +558,6 @@ def _grid_dimensions(catalog, entry, dimensions, vertex_dimension=None):
     return expected
 
 
-def _spatial_chunks(variable, *, vertices=False):
-    """Yield origins and bounded spatial blocks without loading the full grid."""
-    if not variable.size:
-        return
-    trailing_size = int(variable.shape[-1]) if vertices else 1
-    spatial_shape = variable.shape[:-1] if vertices else variable.shape
-    target_cells = max(1, _VERTEX_CHUNK_VALUES // trailing_size)
-    if not spatial_shape:
-        yield (), variable[...]
-        return
-    if len(spatial_shape) == 1:
-        for start in range(0, spatial_shape[0], target_cells):
-            selection = (slice(start, start + target_cells),)
-            if vertices:
-                selection += (slice(None),)
-            yield (start,), variable[selection]
-        return
-
-    if len(spatial_shape) > 2:
-        cells_per_slice = int(np.prod(spatial_shape[1:]))
-        leading_block = max(1, target_cells // max(1, cells_per_slice))
-        for start in range(0, spatial_shape[0], leading_block):
-            selection = (slice(start, start + leading_block),) + tuple(
-                slice(None) for _ in spatial_shape[1:]
-            )
-            if vertices:
-                selection += (slice(None),)
-            yield (start,) + (0,) * (len(spatial_shape) - 1), variable[selection]
-        return
-
-    row_length = int(spatial_shape[1])
-    column_block = min(row_length, target_cells)
-    row_block = max(1, target_cells // max(1, column_block))
-    for row in range(0, spatial_shape[0], row_block):
-        for column in range(0, row_length, column_block):
-            selection = (
-                slice(row, row + row_block),
-                slice(column, column + column_block),
-            )
-            if vertices:
-                selection += (slice(None),)
-            yield (row, column), variable[selection]
-
-
-def _bounded_spatial_chunks(variable, *, vertices=False):
-    """Yield grid blocks while bounding and subsequently releasing I/O cache."""
-    working_set = _vertex_chunk_working_set_bytes(variable) if vertices else 0
-    with _bounded_variable_chunk_cache(
-        variable,
-        minimum_working_set_bytes=working_set,
-    ):
-        yield from _spatial_chunks(variable, vertices=vertices)
-
-
-def _global_cell_index(origin, local_shape, flat_index):
-    local = np.unravel_index(flat_index, local_shape)
-    return tuple(int(start + offset) for start, offset in zip(origin, local))
-
-
 def _cell_circular_widths(cells: np.ndarray) -> np.ndarray:
     """Return the shortest circular longitude arc containing each cell."""
     finite = np.isfinite(cells)
@@ -706,7 +609,7 @@ def _check_grid_variable_valid_range(
     lowest_index = highest_index = None
     saw_finite = False
     try:
-        for origin, chunk in _bounded_spatial_chunks(variable):
+        for origin, chunk in iter_bounded_spatial_chunks(variable):
             values = np.ma.asarray(chunk, dtype="float64").filled(np.nan)
             values = np.asarray(values, dtype="float64")
             finite = np.isfinite(values)
@@ -719,7 +622,7 @@ def _check_grid_variable_valid_range(
                     value = float(values.flat[flat])
                     if lowest is None or value < lowest:
                         lowest = value
-                        lowest_index = _global_cell_index(
+                        lowest_index = global_index(
                             origin, values.shape, flat
                         )
             if check_range and upper is not None:
@@ -730,7 +633,7 @@ def _check_grid_variable_valid_range(
                     value = float(values.flat[flat])
                     if highest is None or value > highest:
                         highest = value
-                        highest_index = _global_cell_index(
+                        highest_index = global_index(
                             origin, values.shape, flat
                         )
     except (TypeError, ValueError, IndexError, OSError, RuntimeError) as exc:
@@ -772,13 +675,26 @@ def _check_vertex_valid_range(
     longitude,
     family,
 ):
-    """Check explicit limits for the finite vertex values in bounded chunks."""
+    """Check vertex limits and retain compact state for geometry validation."""
     lower = entry.get("valid_min")
     upper = entry.get("valid_max")
     has_explicit_range = lower is not None or upper is not None
     check_range = has_explicit_range and family in findings.messages
-    if not check_range:
-        return
+    summarize_geometry = "grid_geometry_missing_values" in findings.messages
+    if not check_range and not summarize_geometry:
+        return None
+
+    vertex_count = int(vertices.shape[-1])
+    summary = None
+    if summarize_geometry:
+        summary = _VertexScanSummary(
+            finite_slots=np.empty(
+                vertices.shape[:-1] + ((vertex_count + 7) // 8,),
+                dtype="uint8",
+            ),
+            unmasked_nonfinite=np.empty(vertices.shape[:-1], dtype=bool),
+            vertex_count=vertex_count,
+        )
     slack = valid_range_slack(lower, upper)
     below_count = above_count = 0
     lowest = highest = None
@@ -788,13 +704,32 @@ def _check_vertex_valid_range(
     saw_finite = False
     total = int(np.prod(vertices.shape[:-1]))
     try:
-        for origin, chunk in _bounded_spatial_chunks(vertices, vertices=True):
+        for origin, chunk in iter_bounded_spatial_chunks(
+            vertices,
+            trailing_dimensions=1,
+        ):
             masked_cells = np.ma.asarray(chunk, dtype="float64")
-            cells = masked_cells.filled(np.nan)
-            cells = np.asarray(cells, dtype="float64").reshape(
-                -1, vertices.shape[-1]
+            data = np.asarray(np.ma.getdata(masked_cells), dtype="float64")
+            mask = np.ma.getmaskarray(masked_cells)
+            finite_values = np.isfinite(data) & ~mask
+            spatial_shape = chunk.shape[:-1]
+            selection = spatial_selection(origin, spatial_shape)
+            if summary is not None:
+                summary.finite_slots[selection] = np.packbits(
+                    finite_values,
+                    axis=-1,
+                )
+                summary.unmasked_nonfinite[selection] = np.any(
+                    ~np.isfinite(data) & ~mask,
+                    axis=-1,
+                )
+            if not check_range:
+                continue
+
+            cells = np.where(finite_values, data, np.nan).reshape(
+                -1, vertex_count
             )
-            finite = np.isfinite(cells)
+            finite = finite_values.reshape(-1, vertex_count)
             finite_counts = np.count_nonzero(finite, axis=1)
             usable_cells = finite_counts > 0
             if not np.any(usable_cells):
@@ -823,7 +758,7 @@ def _check_vertex_valid_range(
                         lowest = value
                         lowest_width = float(widths[row])
                         lowest_cell = cells[row].tolist()
-                        lowest_index = _global_cell_index(
+                        lowest_index = global_index(
                             origin, chunk.shape[:-1], int(usable_rows[row])
                         )
             if check_range and upper is not None:
@@ -841,19 +776,20 @@ def _check_vertex_valid_range(
                         highest = value
                         highest_width = float(widths[row])
                         highest_cell = cells[row].tolist()
-                        highest_index = _global_cell_index(
+                        highest_index = global_index(
                             origin, chunk.shape[:-1], int(usable_rows[row])
                         )
     except (TypeError, ValueError, IndexError, OSError, RuntimeError) as exc:
+        error_family = family if check_range else "grid_geometry_missing_values"
         findings.add(
-            family,
-            f"Could not inspect vertex variable '{name}' for its explicit "
-            f"valid range: {exc}.",
+            error_family,
+            f"Could not inspect vertex variable '{name}' for its configured "
+            f"grid checks: {exc}.",
         )
-        return
+        return None
 
-    if not saw_finite:
-        return
+    if not check_range or not saw_finite:
+        return summary
 
     def allowance_text(width):
         return (
@@ -881,6 +817,7 @@ def _check_vertex_valid_range(
             f"{allowance_text(highest_width)}. Highest value {highest} in cell "
             f"vertices {highest_cell} at index {highest_index}.",
         )
+    return summary
 
 
 def _check_grid_geometry_missing_values(
@@ -891,6 +828,8 @@ def _check_grid_geometry_missing_values(
     longitude_vertices,
     *,
     topology,
+    latitude_vertex_summary=None,
+    longitude_vertex_summary=None,
 ):
     """Require each grid position to be fully void or coherently geolocated."""
     family = "grid_geometry_missing_values"
@@ -904,6 +843,40 @@ def _check_grid_geometry_missing_values(
         # Shape ownership remains with the structural grid check.
         return
 
+    # The range checks already scan each potentially very large vertex array.
+    # Reuse their compact finite-value masks instead of decompressing the same
+    # storage chunks again. Direct callers may omit the summaries; in that case
+    # build each one once here.
+    if latitude_vertex_summary is None:
+        latitude_vertex_summary = _check_vertex_valid_range(
+            findings,
+            latitude_vertices,
+            getattr(latitude_vertices, "name", "latitude vertices"),
+            {},
+            longitude=False,
+            family="grid_latitude_valid_range",
+        )
+    if longitude_vertex_summary is None:
+        longitude_vertex_summary = _check_vertex_valid_range(
+            findings,
+            longitude_vertices,
+            getattr(longitude_vertices, "name", "longitude vertices"),
+            {},
+            longitude=True,
+            family="grid_longitude_valid_range",
+        )
+    if latitude_vertex_summary is None or longitude_vertex_summary is None:
+        return
+    if (
+        latitude_vertex_summary.vertex_count
+        != longitude_vertex_summary.vertex_count
+        or latitude_vertex_summary.vertex_count != latitude_vertices.shape[-1]
+        or latitude_vertex_summary.finite_slots.shape[:-1] != latitude.shape
+        or longitude_vertex_summary.finite_slots.shape[:-1] != longitude.shape
+    ):
+        # Summary shape ownership remains with the structural grid check.
+        return
+
     total = int(np.prod(latitude.shape))
     invalid_count = 0
     first_index = None
@@ -911,45 +884,31 @@ def _check_grid_geometry_missing_values(
     nonfinite_count = 0
     first_nonfinite_index = None
     try:
-        variables = (
-            latitude,
-            longitude,
-            latitude_vertices,
-            longitude_vertices,
-        )
-        with ExitStack() as stack:
-            for variable in variables:
-                stack.enter_context(
-                    _bounded_variable_chunk_cache(
-                        variable,
-                        minimum_working_set_bytes=(
-                            _vertex_chunk_working_set_bytes(variable)
-                            if variable.ndim == latitude.ndim + 1
-                            else 0
-                        ),
-                    )
-                )
-            for origin, latitude_vertex_chunk in _spatial_chunks(
-                latitude_vertices, vertices=True
-            ):
-                spatial_shape = latitude_vertex_chunk.shape[:-1]
-                selection = tuple(
-                    slice(start, start + length)
-                    for start, length in zip(origin, spatial_shape)
-                )
-                vertex_selection = selection + (slice(None),)
+        vertex_count = latitude_vertex_summary.vertex_count
+        with scan_chunk_cache(longitude):
+            for origin, latitude_chunk in iter_bounded_spatial_chunks(latitude):
+                spatial_shape = latitude_chunk.shape
+                selection = spatial_selection(origin, spatial_shape)
                 latitude_values = np.ma.asarray(
-                    latitude[selection], dtype="float64"
+                    latitude_chunk, dtype="float64"
                 )
                 longitude_values = np.ma.asarray(
                     longitude[selection], dtype="float64"
                 )
-                latitude_vertex_values = np.ma.asarray(
-                    latitude_vertex_chunk, dtype="float64"
-                )
-                longitude_vertex_values = np.ma.asarray(
-                    longitude_vertices[vertex_selection], dtype="float64"
-                )
+                latitude_vertex_finite = np.unpackbits(
+                    latitude_vertex_summary.finite_slots[selection],
+                    axis=-1,
+                    count=vertex_count,
+                ).reshape(-1, vertex_count).astype(bool, copy=False)
+                longitude_vertex_finite = np.unpackbits(
+                    longitude_vertex_summary.finite_slots[selection],
+                    axis=-1,
+                    count=vertex_count,
+                ).reshape(-1, vertex_count).astype(bool, copy=False)
+                vertex_nonfinite = (
+                    latitude_vertex_summary.unmasked_nonfinite[selection]
+                    | longitude_vertex_summary.unmasked_nonfinite[selection]
+                ).reshape(-1)
 
                 latitude_data = np.asarray(
                     np.ma.getdata(latitude_values), dtype="float64"
@@ -957,16 +916,8 @@ def _check_grid_geometry_missing_values(
                 longitude_data = np.asarray(
                     np.ma.getdata(longitude_values), dtype="float64"
                 )
-                latitude_vertex_data = np.asarray(
-                    np.ma.getdata(latitude_vertex_values), dtype="float64"
-                )
-                longitude_vertex_data = np.asarray(
-                    np.ma.getdata(longitude_vertex_values), dtype="float64"
-                )
                 latitude_mask = np.ma.getmaskarray(latitude_values)
                 longitude_mask = np.ma.getmaskarray(longitude_values)
-                latitude_vertex_mask = np.ma.getmaskarray(latitude_vertex_values)
-                longitude_vertex_mask = np.ma.getmaskarray(longitude_vertex_values)
 
                 latitude_finite = (
                     np.isfinite(latitude_data) & ~latitude_mask
@@ -974,32 +925,15 @@ def _check_grid_geometry_missing_values(
                 longitude_finite = (
                     np.isfinite(longitude_data) & ~longitude_mask
                 ).reshape(-1)
-                latitude_vertex_finite = (
-                    np.isfinite(latitude_vertex_data) & ~latitude_vertex_mask
-                ).reshape(-1, latitude_vertices.shape[-1])
-                longitude_vertex_finite = (
-                    np.isfinite(longitude_vertex_data) & ~longitude_vertex_mask
-                ).reshape(-1, longitude_vertices.shape[-1])
                 unmasked_nonfinite = (
                     (~np.isfinite(latitude_data) & ~latitude_mask).reshape(-1)
                     | (~np.isfinite(longitude_data) & ~longitude_mask).reshape(-1)
-                    | np.any(
-                        (~np.isfinite(latitude_vertex_data) & ~latitude_vertex_mask)
-                        .reshape(-1, latitude_vertices.shape[-1]),
-                        axis=1,
-                    )
-                    | np.any(
-                        (
-                            ~np.isfinite(longitude_vertex_data)
-                            & ~longitude_vertex_mask
-                        ).reshape(-1, longitude_vertices.shape[-1]),
-                        axis=1,
-                    )
+                    | vertex_nonfinite
                 )
                 nonfinite_count += int(np.count_nonzero(unmasked_nonfinite))
                 if first_nonfinite_index is None and np.any(unmasked_nonfinite):
                     flat = int(np.flatnonzero(unmasked_nonfinite)[0])
-                    first_nonfinite_index = _global_cell_index(
+                    first_nonfinite_index = global_index(
                         origin, spatial_shape, flat
                     )
 
@@ -1025,14 +959,14 @@ def _check_grid_geometry_missing_values(
                     complete = (
                         centres_complete
                         & vertex_masks_match
-                        & (paired_counts == latitude_vertices.shape[-1])
+                        & (paired_counts == vertex_count)
                     )
                     vertex_requirement = "all vertex pairs finite"
                 invalid = ~(void | complete) & ~unmasked_nonfinite
                 invalid_count += int(np.count_nonzero(invalid))
                 if first_index is None and np.any(invalid):
                     flat = int(np.flatnonzero(invalid)[0])
-                    first_index = _global_cell_index(origin, spatial_shape, flat)
+                    first_index = global_index(origin, spatial_shape, flat)
                     mismatched_slots = int(
                         np.count_nonzero(
                             latitude_vertex_finite[flat]
@@ -1045,7 +979,7 @@ def _check_grid_geometry_missing_values(
                         f"longitude centre is "
                         f"{'finite' if longitude_finite[flat] else 'missing'}, "
                         f"{int(paired_counts[flat])} of "
-                        f"{latitude_vertices.shape[-1]} vertex pairs are finite, "
+                        f"{vertex_count} vertex pairs are finite, "
                         f"and {mismatched_slots} vertex slots define only one "
                         "of latitude or longitude"
                     )
@@ -1097,7 +1031,7 @@ def _validate_vertices(
             issue=("missing_vertices_attribute", coordinate.name),
             fallbacks=(f"grid_{role}_valid_range",),
         )
-        return None
+        return None, None
     if declared != recommended:
         findings.add(
             "bounds_name",
@@ -1114,7 +1048,7 @@ def _validate_vertices(
             issue=("missing_vertices_variable", declared),
             fallbacks=(f"grid_{role}_valid_range",),
         )
-        return None
+        return None, None
     vertices = ds.variables[declared]
     valid = (
         vertices.ndim == coordinate.ndim + 1
@@ -1135,7 +1069,7 @@ def _validate_vertices(
             issue=("invalid_vertices_structure", declared),
             fallbacks=(f"grid_{role}_valid_range",),
         )
-        return None
+        return None, None
 
     check_dtype(findings, vertices, declared, vertex_entry, family="grid")
     check_missing_value_attributes(
@@ -1163,7 +1097,7 @@ def _validate_vertices(
             fallback_long_name=False,
             missing_ok=True,
         )
-    _check_vertex_valid_range(
+    vertex_summary = _check_vertex_valid_range(
         findings,
         vertices,
         declared,
@@ -1180,7 +1114,7 @@ def _validate_vertices(
             f"Vertex variable '{declared}' has dimensions {list(vertices.dimensions)}; "
             f"the {findings.severity_word('grid')} dimension order is {expected}.",
         )
-    return vertices
+    return vertices, vertex_summary
 
 
 def _validate_auxiliary(
@@ -1207,7 +1141,7 @@ def _validate_auxiliary(
             f"The {findings.severity_word('grid')} {ndim}-D {role} grid variable "
             f"'{expected_name}' is absent.",
         )
-        return None, None
+        return None, None, None
     name = var.name
     if name != expected_name:
         findings.add(
@@ -1226,7 +1160,7 @@ def _validate_auxiliary(
         )
         # The selected variable belongs to a different topology. Do not
         # compare it with this topology's coordinate or vertex records.
-        return var, None
+        return var, None, None
     check_dtype(findings, var, name, entry, family="grid")
     check_missing_value_attributes(findings, var, name, entry, role="auxiliary")
     check_attributes(findings, var, name, entry)
@@ -1243,7 +1177,6 @@ def _validate_auxiliary(
             var,
             name,
             family="grid_longitude_single_cycle",
-            value_chunks=(chunk for _, chunk in _bounded_spatial_chunks(var)),
         )
     if var.ndim == ndim:
         expected = _grid_dimensions(catalog, entry, var.dimensions)
@@ -1262,7 +1195,7 @@ def _validate_auxiliary(
                 f"'{data_var.name}' coordinates attribute to include auxiliary "
                 f"{role} coordinate '{name}'.",
             )
-    vertices = _validate_vertices(
+    vertices, vertex_summary = _validate_vertices(
         findings,
         ds,
         var,
@@ -1270,7 +1203,7 @@ def _validate_auxiliary(
         entry,
         catalog,
     )
-    return var, vertices
+    return var, vertices, vertex_summary
 
 
 def _validate_grid_axes(findings, ds, dimensions, catalog, data_var):
@@ -1569,8 +1502,10 @@ def validate_horizontal_grid(
     }
     available = [pair[0] for pair in validated.values() if pair[0] is not None]
     if len(available) == len(requested):
-        latitude, latitude_vertices = validated["latitude"]
-        longitude, longitude_vertices = validated["longitude"]
+        latitude, latitude_vertices, latitude_vertex_summary = validated["latitude"]
+        longitude, longitude_vertices, longitude_vertex_summary = validated[
+            "longitude"
+        ]
         if latitude_vertices is not None and longitude_vertices is not None:
             if (
                 latitude_vertices.shape != longitude_vertices.shape
@@ -1593,6 +1528,8 @@ def validate_horizontal_grid(
                     latitude_vertices,
                     longitude_vertices,
                     topology=topology,
+                    latitude_vertex_summary=latitude_vertex_summary,
+                    longitude_vertex_summary=longitude_vertex_summary,
                 )
         dimensions = list(available[0].dimensions)
         if topology in {"curvilinear", "unstructured"}:
