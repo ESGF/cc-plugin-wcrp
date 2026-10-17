@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from compliance_checker.base import BaseCheck
 from netCDF4 import Dataset
@@ -246,6 +247,155 @@ def test_registry_attribute_reports_allowed_values_from_expected_list(tmp_path):
         )
 
     assert not result_passed(results[-1])
-    assert "one of ['Air Temperature', 'Atmospheric Temperature']" in (
-        results[-1].msgs[0]
+    assert (
+        "one of ['Air Temperature', 'Atmospheric Temperature']" in (results[-1].msgs[0])
     )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_fragment"),
+    [
+        ({"pattern": "["}, "Invalid regex"),
+        ({"pattern": r"Amon", "constant": "Amon"}, "Multiple mutually exclusive"),
+        (
+            {"cv_source_collection_key": "description"},
+            "provided without cv_source_collection",
+        ),
+        ({"threshold": 1}, "requires 'is_above_threshold'"),
+        ({"threshold": 1, "is_above_threshold": True}, "is not numeric"),
+    ],
+)
+def test_attribute_suite_reports_invalid_rules_and_values(
+    tmp_path, kwargs, expected_fragment
+):
+    with Dataset(tmp_path / "invalid-rule.nc", "w") as dataset:
+        dataset.test_attribute = "not numeric"
+        results = checker.check_attribute_suite(
+            dataset,
+            "test_attribute",
+            severity=BaseCheck.HIGH,
+            **kwargs,
+        )
+
+    assert expected_fragment in results[-1].msgs[0]
+
+
+def test_attribute_suite_covers_constant_threshold_variable_and_positive_rules(
+    tmp_path,
+):
+    with Dataset(tmp_path / "rules.nc", "w") as dataset:
+        dataset.constant = "expected"
+        dataset.threshold = np.float32(2.0)
+        dataset.references = "lat missing"
+        dataset.positive = -1
+        dataset.createVariable("lat", "f8")
+
+        constant = checker.check_attribute_suite(
+            dataset, "constant", BaseCheck.HIGH, constant="expected"
+        )
+        threshold = checker.check_attribute_suite(
+            dataset,
+            "threshold",
+            BaseCheck.HIGH,
+            threshold=1,
+            is_above_threshold=True,
+        )
+        references = checker.check_attribute_suite(
+            dataset, "references", BaseCheck.HIGH, as_variable=True
+        )
+        positive = checker.check_attribute_suite(
+            dataset, "positive", BaseCheck.HIGH, is_positive=True
+        )
+
+    assert result_passed(constant[-1])
+    assert result_passed(threshold[-1])
+    assert "Referenced variables not found: ['missing']" in references[-1].msgs[0]
+    assert "Expected positive value" in positive[-1].msgs[0]
+
+
+def test_attribute_suite_handles_required_and_optional_not_applicable_values(tmp_path):
+    with Dataset(tmp_path / "na-value.nc", "w") as dataset:
+        dataset.parent_experiment_id = "no parent"
+        optional = checker.check_attribute_suite(
+            dataset,
+            "parent_experiment_id",
+            BaseCheck.HIGH,
+            is_required=False,
+            na_value="no parent",
+        )
+        required = checker.check_attribute_suite(
+            dataset,
+            "parent_experiment_id",
+            BaseCheck.HIGH,
+            is_required=True,
+            na_value="no parent",
+        )
+
+    assert optional == []
+    assert not result_passed(required[0])
+    assert "real value is expected" in required[0].msgs[0]
+
+
+def test_attribute_suite_dynamic_requirement_fails_safe(tmp_path, monkeypatch):
+    import checks.utils
+
+    monkeypatch.setattr(
+        checks.utils,
+        "has_parent_experiment_for_ds",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("registry unavailable")),
+    )
+    with Dataset(tmp_path / "dynamic.nc", "w") as dataset:
+        results = checker.check_attribute_suite(
+            dataset,
+            "parent_experiment_id",
+            BaseCheck.HIGH,
+            is_required="has_parent_experiment",
+        )
+    assert not result_passed(results[0])
+
+
+def test_attribute_suite_vocabulary_lookup_failures_are_results(tmp_path, monkeypatch):
+    monkeypatch.setattr(checker, "_ESGVOC_AVAILABLE", True)
+    monkeypatch.setattr(
+        checker.voc,
+        "get_all_terms_in_collection",
+        lambda **_kwargs: [],
+    )
+    with Dataset(tmp_path / "vocabulary.nc", "w") as dataset:
+        dataset.institution = "Institution"
+        empty = checker.check_attribute_suite(
+            dataset,
+            "institution",
+            BaseCheck.HIGH,
+            cv_source_collection="institution_id",
+            cv_source_collection_key="description",
+            project_name="cmip6",
+        )
+    assert "empty or could not be retrieved" in empty[-1].msgs[0]
+
+    monkeypatch.setattr(checker, "_ESGVOC_AVAILABLE", False)
+    with Dataset(tmp_path / "unavailable.nc", "w") as dataset:
+        dataset.source_id = "MODEL"
+        unavailable = checker.check_attribute_suite(
+            dataset,
+            "source_id",
+            BaseCheck.HIGH,
+            cv_source_collection="source_id",
+            project_name="cmip6",
+        )
+    assert unavailable[-1].msgs == ["ESGVOC library not available."]
+
+
+def test_gregorian_calendar_is_accepted_with_advisory(tmp_path):
+    with Dataset(tmp_path / "calendar.nc", "w") as dataset:
+        time = dataset.createVariable("time", "f8")
+        time.calendar = "gregorian"
+        results = checker.check_attribute_suite(
+            dataset,
+            "calendar",
+            BaseCheck.MEDIUM,
+            var_name="time",
+            enum=("standard", "gregorian", "proleptic_gregorian"),
+        )
+    assert result_passed(results[-1])
+    assert "proleptic_gregorian" in results[-1].msgs[0]

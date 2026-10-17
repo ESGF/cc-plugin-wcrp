@@ -698,6 +698,77 @@ def test_setup_warning_recording_deduplicates_identical_problems():
     assert checker.setup_warnings == ["Could not identify time: broken"]
 
 
+def test_consistency_error_recording_keeps_unique_problems():
+    checker = WCRPBaseCheck()
+    checker.consistency_output_error = None
+
+    checker._record_consistency_output_error("first")
+    checker._record_consistency_output_error("second", ValueError("detail"))
+    checker._record_consistency_output_error("first")
+
+    assert checker.consistency_output_error == "first; second: detail"
+
+
+def test_project_config_loading_reports_missing_and_invalid_files(tmp_path):
+    checker = WCRPBaseCheck()
+    checker.setup_warnings = []
+    checker.project_config_path = tmp_path / "missing.toml"
+    checker._load_project_config()
+    assert checker.config == {}
+    assert "not found" in checker.setup_warnings[0]
+
+    invalid = tmp_path / "invalid.toml"
+    invalid.write_text("[broken\n", encoding="utf-8")
+    checker.setup_warnings = []
+    checker.project_config_path = invalid
+    checker._load_project_config()
+    assert checker.config == {}
+    assert "Could not parse" in checker.setup_warnings[0]
+
+    valid = tmp_path / "valid.toml"
+    valid.write_text("[section]\nvalue = 3\n", encoding="utf-8")
+    checker.setup_warnings = []
+    checker.project_config_path = valid
+    checker._load_project_config()
+    assert checker.config == {"section": {"value": 3}}
+    assert checker.setup_warnings == []
+
+
+def test_legacy_cv_reader_and_drs_mapping(tmp_path):
+    table = tmp_path / "CMIP6_CV.json"
+    table.write_text('{"CV": {"required_global_attributes": []}}', encoding="utf-8")
+    checker = WCRPBaseCheck()
+    assert checker._read_CV(tmp_path, "CMIP6", "CV") == {
+        "CV": {"required_global_attributes": []}
+    }
+
+    with pytest.raises(Exception, match="Could not find or open table"):
+        checker._read_CV(tmp_path, "CMIP6", "missing")
+
+    dataset_path = tmp_path / "CMIP6" / "tas" / "tas_Amon_200001-200012.nc"
+    dataset_path.parent.mkdir(parents=True)
+    with Dataset(dataset_path, "w") as dataset:
+        dataset.variable_id = "tas"
+        checker.dataset = dataset
+        checker.filepath = str(dataset_path)
+        checker.CV = {
+            "DRS": {
+                "directory_path_template": "<mip_era>/<variable_id>",
+                "filename_template": "<variable_id>_<table_id>.nc",
+            },
+            "required_global_attributes": ["variable_id", "table_id"],
+        }
+        checker._map_drs_blocks()
+
+    assert checker.drs_dir == {"variable_id": "tas", "mip_era": "CMIP6"}
+    assert checker.drs_fn == {
+        "variable_id": "tas",
+        "table_id": "Amon",
+        "time_range": "200001-200012",
+    }
+    assert checker.drs_gatts == {"variable_id": "tas", "table_id": False}
+
+
 def test_setup_warning_check_passes_without_recorded_warnings():
     checker = WCRPBaseCheck()
     checker.setup_warnings = []
