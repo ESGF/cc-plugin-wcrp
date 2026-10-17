@@ -127,9 +127,9 @@ def check_time_chunking(CheckerObject, severity=BaseCheck.MEDIUM):
         nyears = 1
 
     # Apply calendar- and frequency-dependent adjustments
-    offset = 0
+    offset = 0.0
     if CheckerObject.calendar == "360_day" and CheckerObject.frequency == "mon":
-        offset = timedelta(hours=12)
+        offset = timedelta(hours=12).total_seconds()
 
     # Modify expected start and end dates based on cell_methods and above offset
     if bool(
