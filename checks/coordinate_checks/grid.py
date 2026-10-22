@@ -496,7 +496,13 @@ def check_grid_mapping_consistency(
     )
 
 
-def check_grid_region_consistency(findings, ds, registered_grid_metadata):
+def check_grid_region_consistency(
+    findings,
+    ds,
+    registered_grid_metadata,
+    *,
+    attribute_presence_delegated=True,
+):
     """Compare the file region with the registered grid's DRS region."""
     if not registered_grid_metadata:
         return
@@ -506,7 +512,18 @@ def check_grid_region_consistency(findings, ds, registered_grid_metadata):
         expected = registered_region.strip()
     else:
         expected = str(as_dict(registered_region).get("drs_name") or "").strip()
-    if not actual or not expected or actual == expected:
+    if not expected:
+        return
+    if not actual:
+        if not attribute_presence_delegated:
+            findings.add_prerequisite(
+                "grid_region_consistency",
+                "Global attribute 'region' is missing, so it could not be "
+                "compared with the registered grid region.",
+                issue=("missing_global_attribute", "region"),
+            )
+        return
+    if actual == expected:
         return
     label = reference_id(registered_grid_metadata.get("id"))
     grid = f" for registered grid {label!r}" if label else ""
@@ -1085,6 +1102,7 @@ def _validate_vertices(
         declared,
         findings.vertices_dimension_name,
         description="Vertex variable",
+        family=findings.bounds_naming_family(recommendation=True),
     )
     # Vertex attributes are inherited from the coordinate under CF and are
     # optional. When supplied they must agree with the ESGVoc grid record.

@@ -124,8 +124,22 @@ def test_cordex_calendar_policy(calendar, passes, fragment):
 def test_cordex_time_unit_policy_and_no_time_short_circuit():
     allowed = _checker(timeunits="days since 1850-01-01T00:00:00Z")
     assert _passed(check_time_units(allowed)[0])
-    assert _passed(check_time_units(_checker(time=None, timeunits="bad"))[0])
+    assert check_time_units(_checker(time=None, timeunits="bad")) == []
 
     invalid = check_time_units(_checker(timeunits="hours since 2000-01-01"))[0]
     assert not _passed(invalid)
     assert "differs from the allowed values" in invalid.msgs[0]
+
+
+def test_cordex_time_metadata_reports_missing_prerequisites_without_owner():
+    missing_time = _checker(time=None, calendar=None, timeunits=None)
+
+    calendar = check_calendar(
+        missing_time, time_presence_delegated=False
+    )[0]
+    units = check_time_units(
+        missing_time, time_presence_delegated=False
+    )[0]
+
+    assert "Coordinate variable 'time' is missing" in calendar.msgs[0]
+    assert "Coordinate variable 'time' is missing" in units.msgs[0]

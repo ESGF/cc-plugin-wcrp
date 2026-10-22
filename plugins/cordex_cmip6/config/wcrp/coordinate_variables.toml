@@ -67,11 +67,19 @@ severity = "H"
 
 [coordinates.registry.bounds_name]
 severity = "M"
-# Recommended bounds-related names; structure, existence, and dimension sizes
-# remain HIGH checks under coordinates.registry.bounds/grid.
+# With no separate recommendation family enabled below, this family owns all
+# bounds and vertex name recommendations. Structure, existence, and dimension
+# sizes remain High checks under coordinates.registry.bounds/grid.
 bounds_dimension_name = "bnds"
 vertices_dimension_name = "vertices"
 climatology_bounds_name = "climatology_bnds"
+
+# Enabling this optional family would move only the climatology bounds variable
+# name and trailing vertices dimension name out of bounds_name. CORDEX does not
+# define climatological time coordinates, so climatology_bounds_name is not
+# evaluated unless a future coordinate definition explicitly enables them.
+# [coordinates.registry.bounds_name_recommendations]
+# severity = "M"
 
 [coordinates.registry.associations]
 severity = "H"

@@ -35,6 +35,13 @@ _CMIP6_FUNCTIONS = (
     "check_frequency_table_id_consistency",
 )
 
+_VARIANT_FUNCTIONS = (
+    "check_variant_vs_realization_index",
+    "check_variant_vs_initialization_index",
+    "check_variant_vs_physics_index",
+    "check_variant_vs_forcing_index",
+)
+
 
 @pytest.mark.parametrize(
     ("module", "checker_class", "extra_functions"),
@@ -68,9 +75,37 @@ def test_project_consistency_configuration_reaches_every_check(
         return check
 
     for function_name in function_names:
+        if function_name in _VARIANT_FUNCTIONS:
+            continue
         monkeypatch.setattr(module, function_name, replacement(function_name))
 
+    def variant_group(_dataset, configured_checks, **_kwargs):
+        results = []
+        for check, _severity in configured_checks:
+            name = check.__name__
+            called.append(name)
+            context = CheckContext(BaseCheck.HIGH, f"[TEST] {name}")
+            context.add_pass()
+            results.append(context.to_result())
+        return results
+
+    # The dispatcher deliberately identifies these four checks by function
+    # object. Record its configured inputs without replacing those objects.
+    monkeypatch.setattr(
+        module,
+        "check_variant_label_consistency_group",
+        variant_group,
+    )
+
     with Dataset(tmp_path / f"{checker.project_name}.nc", "w") as dataset:
+        # The group dispatcher deliberately skips dependent comparisons when
+        # their shared selector is unusable. Supply a valid selector here so
+        # this test remains about configuration reachability.
+        dataset.variant_label = "r1i1p1f1"
+        dataset.realization_index = 1
+        dataset.initialization_index = 1
+        dataset.physics_index = 1
+        dataset.forcing_index = 1
         results = checker.check_Global_Consistency(dataset)
 
     assert len(results) == len(function_names)

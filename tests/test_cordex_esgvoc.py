@@ -97,7 +97,7 @@ def test_descriptive_attributes_are_checked_against_their_own_ids(
             assert f"{collection_id}={identifier!r}" in _messages(failing)[0]
 
 
-def test_descriptive_consistency_passes_when_either_attribute_is_missing(tmp_path):
+def test_descriptive_consistency_defers_missing_attributes_to_attr001(tmp_path):
     pairs = (
         ("institution_id", "institution"),
         ("source_id", "source"),
@@ -117,6 +117,10 @@ def test_descriptive_consistency_passes_when_either_attribute_is_missing(tmp_pat
                     project_id="cordex-cmip6",
                     id_attribute=id_attribute,
                     value_attribute=value_attribute,
+                    missing_attributes_delegated={
+                        id_attribute,
+                        value_attribute,
+                    },
                 )
             assert _messages(results) == []
 
@@ -825,20 +829,39 @@ def test_cordex_drs_uses_project_templates(tmp_path, monkeypatch):
     with Dataset(tmp_path / "tas.nc", "w") as dataset:
         checker.check_DRS(dataset)
 
+    path001_delegated = checker._global_attributes_owning(
+        checker.get_severity(drs.attributes_vs_directory.severity)
+    )
+    path002_delegated = checker._global_attributes_owning(
+        checker.get_severity(drs.filename_vs_directory.severity)
+    )
     assert captured == [
         {
             "project_id": "cordex-cmip6",
             "dir_template_keys": drs.directory_template_keys,
             "filename_template_keys": drs.filename_template_keys,
             "report_directory_structure_error": True,
+            "missing_attributes_delegated": path001_delegated,
         },
         {
             "project_id": "cordex-cmip6",
             "dir_template_keys": drs.directory_template_keys,
             "filename_template_keys": drs.filename_template_keys,
             "report_directory_structure_error": False,
+            "missing_attributes_delegated": path002_delegated,
         },
     ]
+
+
+def test_compression_defers_missing_data_variable_to_variable_suite(tmp_path):
+    checker = CordexCmip6ProjectCheck()
+    checker._load_split_config()
+    checker._geo_var_cache = None
+    with Dataset(tmp_path / "missing-data-variable.nc", "w") as dataset:
+        dataset.variable_id = "tas"
+        results = checker.check_File_Compression(dataset)
+
+    assert results == []
 
 
 def test_cordex_allows_rectilinear_grid_without_mapping_but_recommends_one(tmp_path):

@@ -96,6 +96,38 @@ def test_resolved_time_coordinate_supplies_climatology_flag(is_climatology):
     assert expected.time_is_climatology is is_climatology
 
 
+def test_resolved_coordinates_preserve_output_names_and_bounds_requirements():
+    record = {
+        **NEW_RECORD,
+        "dimensions": [
+            SimpleNamespace(
+                id="alevel",
+                out_name="lev",
+                axis="Z",
+                bounds_required=False,
+            ),
+            SimpleNamespace(
+                id="latitude",
+                out_name="lat",
+                axis="Y",
+                bounds_required=True,
+            ),
+        ],
+    }
+
+    expected = normalize_known_branded_variable(record)
+
+    assert expected.dimensions == ["alevel", "latitude"]
+    assert expected.coordinate_out_names == {
+        "alevel": "lev",
+        "latitude": "lat",
+    }
+    assert expected.coordinate_bounds_required == {
+        "alevel": False,
+        "latitude": True,
+    }
+
+
 def test_legacy_known_branded_variable_maps_units_and_looks_up_long_name():
     legacy = {
         "id": NEW_RECORD["id"],

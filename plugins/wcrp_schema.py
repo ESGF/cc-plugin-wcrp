@@ -216,7 +216,7 @@ class DrsSection(BaseModel):
     directory: Optional[DrsRule] = None
     attributes_vs_directory: Optional[DrsRule] = None
     filename_vs_directory: Optional[DrsRule] = None
-    time_range: TimeRangeRule = Field(default_factory=TimeRangeRule)
+    time_range: Optional[TimeRangeRule] = None
     directory_template_keys: List[str] = Field(default_factory=list)
     filename_template_keys: List[str] = Field(default_factory=list)
 
@@ -415,7 +415,7 @@ class CoordinateMissingValueAttributesRule(BaseModel):
 
 
 class CoordinateBoundsNameRule(CoordinateGlobalRule):
-    """Recommended names for bounds-related dimensions."""
+    """Configured names for bounds-related variables and dimensions."""
 
     bounds_dimension_name: str = "bnds"
     vertices_dimension_name: str = "vertices"
@@ -483,6 +483,7 @@ class CoordinateRegistrySection(BaseModel):
     requested_values: Optional[CoordinateGlobalRule] = None
     bounds: Optional[CoordinateGlobalRule] = None
     bounds_name: Optional[CoordinateBoundsNameRule] = None
+    bounds_name_recommendations: Optional[CoordinateGlobalRule] = None
     associations: Optional[CoordinateAssociationRule] = None
     grid: Optional[CoordinateGridRule] = None
     formula: Optional[CoordinateGlobalRule] = None

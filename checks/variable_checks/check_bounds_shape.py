@@ -4,7 +4,9 @@
 [VAR004] Bounds shape check.
 
 For a coordinate variable that declares a `bounds` attribute, verify that
-the referenced bounds variable has a CF-compliant shape:
+the referenced bounds variable has a CF-compliant shape. The caller can also
+request a prerequisite failure when catalogue metadata requires bounds but the
+dedicated attribute-existence check is disabled:
 
 - 1-D coordinate of length N  -> bounds shape (N, 2)
 - Multi-D coordinate (e.g. curvilinear lat/lon) of shape (d1, d2, ...)
@@ -18,7 +20,13 @@ by [VAR012] (check_bounds_value_consistency).
 from compliance_checker.base import BaseCheck, TestCtx
 
 
-def check_bounds_shape(ds, var_name, severity=BaseCheck.MEDIUM):
+def check_bounds_shape(
+    ds,
+    var_name,
+    severity=BaseCheck.MEDIUM,
+    *,
+    report_missing_bounds=False,
+):
     """
     Validate the shape of the bounds variable declared by `var_name`.
 
@@ -29,12 +37,15 @@ def check_bounds_shape(ds, var_name, severity=BaseCheck.MEDIUM):
         Name of the coordinate (or auxiliary coordinate) variable to check.
     severity : int
         Severity level used for the emitted Result.
+    report_missing_bounds : bool
+        Report a missing bounds attribute instead of treating it as outside
+        this structural check's scope.
 
     Returns
     -------
     list[Result]
-        - Empty list if the variable does not exist or has no `bounds`
-          attribute (nothing to check).
+        - Empty list if the variable does not exist, or has no `bounds`
+          attribute and ``report_missing_bounds`` is false.
         - One Result describing pass/failure otherwise.
     """
     check_id = "VAR004"
@@ -45,6 +56,12 @@ def check_bounds_shape(ds, var_name, severity=BaseCheck.MEDIUM):
     cvar = ds.variables[var_name]
     bnds_name = getattr(cvar, "bounds", None)
     if not bnds_name:
+        if report_missing_bounds:
+            ctx = TestCtx(severity, f"[VAR004] Bounds for '{var_name}'")
+            ctx.add_failure(
+                f"Coordinate '{var_name}' requires bounds but has no bounds attribute."
+            )
+            return [ctx.to_result()]
         return []
 
     ctx = TestCtx(severity, f"[{check_id}] Bounds for '{var_name}'")

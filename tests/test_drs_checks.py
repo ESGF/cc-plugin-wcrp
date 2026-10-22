@@ -214,7 +214,7 @@ def test_cmip6_drs_consistency_uses_member_id_and_shared_filename_facets(monkeyp
     attribute_result = consistency.check_attributes_match_directory_structure(
         dataset, BaseCheck.HIGH, project_id="cmip6"
     )[0]
-    assert result_passed(attribute_result)
+    assert not result_passed(attribute_result)
     assert any("source_id" in message for message in attribute_result.msgs)
 
     filename_result = consistency.check_filename_matches_directory_structure(

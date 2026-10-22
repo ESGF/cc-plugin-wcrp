@@ -87,6 +87,7 @@ def validate_standard_1d(
     entry: dict,
     *,
     check_direct_physical_values: bool = True,
+    time_monotonicity_delegated: bool = True,
     attributes_allowed_when_unset=(),
 ):
     name = str(entry.get("out_name") or entry_id)
@@ -120,10 +121,9 @@ def validate_standard_1d(
         allowed_when_unset=attributes_allowed_when_unset,
     )
     check_valid_range(findings, var, name, entry)
-    # Time monotonicity remains owned by the existing project-configured check.
-    if entry.get("axis") != "T":
+    if entry.get("axis") != "T" or not time_monotonicity_delegated:
         check_direction(findings, var, name, entry)
-        if check_direct_physical_values:
+        if entry.get("axis") != "T" and check_direct_physical_values:
             check_direct_vertical_values(findings, var, name, entry)
     check_requested_numeric(findings, var, name, entry)
     validate_time_semantics(findings, ds, var, name, entry)
@@ -158,10 +158,11 @@ def validate_time_semantics(findings, ds, var, name, entry):
     else:
         recommended = findings.climatology_bounds_name
         if recommended and climatology != recommended:
+            family = findings.bounds_naming_family(recommendation=True)
             findings.add(
-                "bounds_name",
+                family,
                 f"'{name}' climatology={climatology!r}; the configured "
-                f"{findings.severity_word('bounds_name')} climatology bounds name "
+                f"{findings.severity_word(family)} climatology bounds name "
                 f"is {recommended!r}.",
             )
     if climatology and climatology not in ds.variables:
@@ -457,6 +458,7 @@ def validate_ordinary(
     data_var,
     *,
     check_direct_physical_values=True,
+    time_monotonicity_delegated=True,
     attributes_allowed_when_unset=(),
     unstructured_latitude_longitude_for=(),
 ):
@@ -479,6 +481,7 @@ def validate_ordinary(
                 entry_id,
                 entry,
                 check_direct_physical_values=check_direct_physical_values,
+                time_monotonicity_delegated=time_monotonicity_delegated,
                 attributes_allowed_when_unset=attributes_allowed_when_unset,
             )
         elif kind == "scalar":

@@ -106,7 +106,9 @@ def _all_true(values):
     return False if np.ma.is_masked(result) else bool(result)
 
 
-def check_lon_value_range(CheckerObject, severity=BaseCheck.MEDIUM):
+def check_lon_value_range(
+    CheckerObject, severity=BaseCheck.MEDIUM, *, topology_error_delegated=True
+):
     """
     Checks if longitude values are within the range required by the CORDEX-CMIP6 Archive Specifications.
 
@@ -127,7 +129,12 @@ def check_lon_value_range(CheckerObject, severity=BaseCheck.MEDIUM):
 
     _, longitudes = _true_horizontal_coordinates(CheckerObject.ds)
     if not longitudes:
-        testctx.add_pass()
+        if topology_error_delegated:
+            return []
+        testctx.add_failure(
+            "A longitude coordinate could not be identified, so the CORDEX "
+            "longitude value-range policy could not be checked."
+        )
         return [testctx.to_result()]
     lon = CheckerObject.ds.variables[longitudes[0]]
     lon_values = np.ma.asarray(lon[:])

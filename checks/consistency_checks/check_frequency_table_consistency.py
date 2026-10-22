@@ -4,7 +4,9 @@
 from compliance_checker.base import TestCtx
 
 
-def check_frequency_table_id_consistency(ds, mapping, severity):
+def check_frequency_table_id_consistency(
+    ds, mapping, severity, *, missing_attributes_delegated=()
+):
     """
     Checks if the global attributes 'frequency' and 'table_id' are consistent
     based on the mapping in TOML config
@@ -12,6 +14,20 @@ def check_frequency_table_id_consistency(ds, mapping, severity):
     fixed_check_id = "ATTR008"
     description = f"[{fixed_check_id}] Consistency: Frequency vs Table ID"
     ctx = TestCtx(severity, description)
+
+    missing = [
+        name for name in ("table_id", "frequency") if name not in ds.ncattrs()
+    ]
+    unowned = [
+        name for name in missing if name not in set(missing_attributes_delegated)
+    ]
+    if missing:
+        for name in unowned:
+            ctx.add_failure(
+                f"Global attribute {name!r} is missing, so frequency/table_id "
+                "consistency could not be checked."
+            )
+        return [ctx.to_result()] if unowned else []
 
     try:
         table_id = ds.getncattr("table_id")
@@ -35,8 +51,6 @@ def check_frequency_table_id_consistency(ds, mapping, severity):
             )
             ctx.add_pass()
 
-    except AttributeError as e:
-        ctx.add_failure(f"Missing required attribute for check: {e}")
     except Exception as e:
         ctx.add_failure(f"An unexpected error occurred: {e}")
 

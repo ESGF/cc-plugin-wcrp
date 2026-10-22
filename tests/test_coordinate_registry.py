@@ -71,6 +71,11 @@ FAMILIES_WITH_INFORMATION = {
     **FAMILIES,
     "allowed_when_unset": BaseCheck.LOW,
 }
+CMIP7_NAMING_FAMILIES = {
+    **FAMILIES,
+    "bounds_name": BaseCheck.HIGH,
+    "bounds_name_recommendations": BaseCheck.MEDIUM,
+}
 
 
 @pytest.fixture
@@ -575,11 +580,15 @@ def test_grid_topology_mapping_can_disable_standard_name_fallback(tmp_path):
     assert config.allow_standard_name_fallback is False
 
 
-def test_cmip7_config_sets_recommended_bounds_dimension_names():
+def test_cmip7_config_separates_required_and_recommended_bounds_names():
     checker = Cmip7ProjectCheck()
     checker._load_split_config()
     naming = checker.config.coordinates.registry.bounds_name
-    assert naming.severity == "M"
+    recommendations = (
+        checker.config.coordinates.registry.bounds_name_recommendations
+    )
+    assert naming.severity == "H"
+    assert recommendations.severity == "M"
     assert naming.bounds_dimension_name == "bnds"
     assert naming.vertices_dimension_name == "vertices"
     assert naming.climatology_bounds_name == "climatology_bnds"
@@ -1466,6 +1475,47 @@ def test_bounds_dimension_name_is_a_configurable_recommendation(nc):
     )
     naming = next(item for item in result if "COORD009" in item.name)
     assert naming.value == (1, 1)
+
+
+def test_cmip7_bounds_dimension_name_uses_required_naming_family(nc):
+    nc.createDimension("lat", 2)
+    nc.createDimension("nv", 2)
+    lat = nc.createVariable("lat", "f8", ("lat",))
+    lat[:] = [-45.0, 45.0]
+    lat.bounds = "lat_bnds"
+    nc.createVariable("lat_bnds", "f8", ("lat", "nv"))[:] = [
+        [-90.0, 0.0],
+        [0.0, 90.0],
+    ]
+    nc.createVariable("ta", "f4", ("lat",))
+    entry = coordinate(
+        "latitude",
+        "standard_1d",
+        "lat",
+        cf_standard_name="latitude",
+        bounds_required=True,
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"latitude": entry}),
+        severities=CMIP7_NAMING_FAMILIES,
+    )
+
+    required = next(
+        item
+        for item in result
+        if item.name == "[COORD009] Coordinate bounds naming"
+    )
+    recommended = next(
+        item
+        for item in result
+        if item.name == "[COORD009] Coordinate bounds naming recommendations"
+    )
+    assert required.weight == BaseCheck.HIGH
+    assert any("configured required name is 'bnds'" in msg for msg in required.msgs)
+    assert recommended.weight == BaseCheck.MEDIUM
+    assert recommended.msgs == []
 
 
 def test_identity_message_wording_follows_configured_severity(nc):
@@ -2383,6 +2433,57 @@ def test_climatology_bounds_name_is_a_configurable_recommendation(nc):
     )
     naming = next(item for item in result if "COORD009" in item.name)
     assert naming.value == (1, 1)
+
+
+def test_cmip7_climatology_name_is_medium_but_trailing_bnds_is_high(nc):
+    nc.createDimension("time", 2)
+    nc.createDimension("nv", 2)
+    time = nc.createVariable("time", "f8", ("time",))
+    time[:] = [15.0, 45.0]
+    time.axis = "T"
+    time.standard_name = "time"
+    time.units = "days since 2000-01-01"
+    time.calendar = "standard"
+    time.climatology = "model_climatology"
+    nc.createVariable("model_climatology", "f8", ("time", "nv"))[:] = [
+        [0.0, 30.0],
+        [30.0, 60.0],
+    ]
+    nc.createVariable("ta", "f4", ("time",))
+    entry = coordinate(
+        "time_climatology",
+        "standard_1d",
+        "time",
+        axis="T",
+        cf_standard_name="time",
+        units="days since ?",
+        bounds_required=True,
+        is_climatology=True,
+    )
+
+    result = check_coordinate_catalog(
+        nc,
+        catalog({"time_climatology": entry}),
+        severities=CMIP7_NAMING_FAMILIES,
+    )
+
+    required = next(
+        item
+        for item in result
+        if item.name == "[COORD009] Coordinate bounds naming"
+    )
+    recommended = next(
+        item
+        for item in result
+        if item.name == "[COORD009] Coordinate bounds naming recommendations"
+    )
+    assert required.weight == BaseCheck.HIGH
+    assert any("configured required name is 'bnds'" in msg for msg in required.msgs)
+    assert recommended.weight == BaseCheck.MEDIUM
+    assert any(
+        "recommended climatology bounds name is 'climatology_bnds'" in msg
+        for msg in recommended.msgs
+    )
 
 
 def grid_catalog():
@@ -4220,6 +4321,46 @@ def test_vertex_dimension_name_is_a_configurable_recommendation(nc):
     )
     naming = next(item for item in result if "COORD009" in item.name)
     assert naming.value == (1, 1)
+
+
+def test_cmip7_vertex_variable_name_is_high_but_dimension_name_is_medium(nc):
+    nc.createDimension("cell", 3)
+    nc.createDimension("nv", 4)
+    for role, units in (
+        ("latitude", "degrees_north"),
+        ("longitude", "degrees_east"),
+    ):
+        variable = nc.createVariable(role, "f8", ("cell",))
+        variable[:] = 0.0
+        variable.standard_name = role
+        variable.units = units
+        declared = f"custom_{role}_vertices"
+        variable.bounds = declared
+        nc.createVariable(declared, "f8", ("cell", "nv"))
+    ta = nc.createVariable("ta", "f4", ("cell",))
+    ta.coordinates = "latitude longitude"
+
+    result = check_coordinate_catalog(
+        nc,
+        grid_catalog(),
+        severities=CMIP7_NAMING_FAMILIES,
+        grid_topology="unstructured",
+    )
+
+    required = next(
+        item
+        for item in result
+        if item.name == "[COORD009] Coordinate bounds naming"
+    )
+    recommended = next(
+        item
+        for item in result
+        if item.name == "[COORD009] Coordinate bounds naming recommendations"
+    )
+    assert required.weight == BaseCheck.HIGH
+    assert len([msg for msg in required.msgs if "required name" in msg]) == 2
+    assert recommended.weight == BaseCheck.MEDIUM
+    assert len([msg for msg in recommended.msgs if "recommended name" in msg]) == 2
 
 
 def test_vertices_require_the_parent_coordinate_dimensions(nc):

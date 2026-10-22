@@ -40,6 +40,7 @@ _REGISTRY_FAMILIES = (
     "requested_values",
     "bounds",
     "bounds_name",
+    "bounds_name_recommendations",
     "associations",
     "grid",
     "formula",
@@ -63,7 +64,8 @@ def coordinate_catalog_required(config) -> bool:
     ):
         return True
     # TIME003 obtains climatology semantics from the coordinate catalogue.
-    return getattr(config, "drs", None) is not None
+    drs = getattr(config, "drs", None)
+    return drs is not None and getattr(drs, "time_range", None) is not None
 
 
 def coordinate_metadata_setup_result(
@@ -94,7 +96,10 @@ def coordinate_metadata_setup_result(
             dependent_rules.append(rule.squareness)
         if rule.coverage is not None:
             dependent_rules.append(rule.coverage)
-    if getattr(config, "drs", None) is not None:
+    if (
+        getattr(config, "drs", None) is not None
+        and config.drs.time_range is not None
+    ):
         dependent_rules.append(config.drs.time_range)
 
     dependent_severities = [
@@ -263,6 +268,7 @@ def check_coordinate_catalog(
     vertices_dimension_name="vertices",
     climatology_bounds_name="climatology_bnds",
     time_bounds_delegated=False,
+    time_monotonicity_delegated=True,
     data_variable_presence_delegated=True,
     check_direct_physical_values=True,
     check_formula_derived_profile=True,
@@ -271,6 +277,7 @@ def check_coordinate_catalog(
     missing_value_attribute_policy=None,
     nominal_resolution_policy=None,
     nominal_resolution_presence_delegated=True,
+    grid_region_presence_delegated=True,
 ):
     """Validate all coordinate IDs required by one known branded variable."""
     findings = Findings(
@@ -285,7 +292,12 @@ def check_coordinate_catalog(
     if data_var is None and not data_variable_presence_delegated:
         expected_name = catalog.data_variable_name or "<unknown>"
         findings.add_blocked(
-            ("dimension_order", "associations", "grid_mapping_consistency"),
+            (
+                "dimension_order",
+                "associations",
+                "grid_mapping_consistency",
+                "grid_cell_count_consistency",
+            ),
             f"The data variable {expected_name!r} is absent, so configured "
             "checks which require the data variable could not be evaluated.",
             issue=("missing_data_variable", expected_name),
@@ -319,6 +331,7 @@ def check_coordinate_catalog(
         catalog,
         data_var,
         check_direct_physical_values=check_direct_physical_values,
+        time_monotonicity_delegated=time_monotonicity_delegated,
         attributes_allowed_when_unset=attributes_allowed_when_unset,
         unstructured_latitude_longitude_for=unstructured_latitude_longitude_for,
     )
@@ -338,7 +351,12 @@ def check_coordinate_catalog(
         data_var,
         registered_grid_metadata,
     )
-    check_grid_region_consistency(findings, ds, registered_grid_metadata)
+    check_grid_region_consistency(
+        findings,
+        ds,
+        registered_grid_metadata,
+        attribute_presence_delegated=grid_region_presence_delegated,
+    )
     check_grid_label_recommendation(
         findings,
         ds,

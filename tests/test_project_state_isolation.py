@@ -86,8 +86,8 @@ def test_geophysical_variable_cache_is_not_reused_for_another_dataset(monkeypatc
         (
             ["tas", "areacella"],
             "pr",
+            "pr",
             None,
-            "variable_id='pr' is not among the detected candidates",
         ),
         (
             ["tas", "areacella"],

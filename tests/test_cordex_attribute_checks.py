@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from checks.attribute_checks import check_attrs_cordex_cmip6 as checks
+from checks.variable_checks import check_coords_cordex_cmip6 as coordinate_checks
 from tests.wcrp_cmip6_test_checks.conftest import result_passed
 
 
@@ -60,7 +61,35 @@ def test_cordex_version_realization_info_policy(version, info, passes):
 )
 def test_cordex_grid_description_policy(description, passes):
     attrs = {} if description is None else {"grid": description}
-    assert result_passed(checks.check_grid(_Checker(attrs))[0]) is passes
+    results = checks.check_grid(_Checker(attrs))
+    if description is None:
+        assert results == []
+    else:
+        assert result_passed(results[0]) is passes
+
+
+def test_grid_mapping_reports_unowned_topology_error():
+    data = SimpleNamespace()
+    checker = _Checker(varname=["tas"])
+    checker.ds.variables = {"tas": data}
+
+    delegated = checks.check_grid_mapping(
+        checker,
+        horizontal_topology=None,
+        topology_error="latitude and longitude could not be identified",
+        topology_error_delegated=True,
+    )
+    fallback = checks.check_grid_mapping(
+        checker,
+        horizontal_topology=None,
+        topology_error="latitude and longitude could not be identified",
+        topology_error_delegated=False,
+    )
+
+    assert len(delegated) == 1
+    assert "shape and size of the Earth" in delegated[0].msgs[0]
+    assert not result_passed(fallback[0])
+    assert "topology could not be established" in fallback[0].msgs[0]
 
 
 def test_cordex_version_realization_validates_all_three_locations():
@@ -124,3 +153,41 @@ def test_cordex_domain_id_checks_discovery_interpolation_and_legacy_cv(monkeypat
     result = checks.check_domain_id(checker, use_esgvoc=False)[0]
     assert not result_passed(result)
     assert "not compliant with the CV" in result.msgs[-1]
+
+
+def test_cordex_metadata_checks_report_unowned_missing_prerequisites():
+    checker = _Checker({})
+
+    domain = checks.check_domain_id(
+        checker,
+        use_esgvoc=True,
+        missing_attribute_delegated=False,
+    )
+    grid = checks.check_grid(checker, missing_attribute_delegated=False)
+
+    assert "domain_id' is missing" in domain[0].msgs[0]
+    assert "attribute 'grid' is missing" in grid[0].msgs[0]
+
+
+def test_cordex_longitude_policy_reports_unowned_discovery_failure(monkeypatch):
+    checker = _Checker(varname=[])
+    monkeypatch.setattr(
+        coordinate_checks.cfutil,
+        "get_true_latitude_variables",
+        lambda _dataset: [],
+    )
+    monkeypatch.setattr(
+        coordinate_checks.cfutil,
+        "get_true_longitude_variables",
+        lambda _dataset: [],
+    )
+
+    delegated = coordinate_checks.check_lon_value_range(
+        checker, topology_error_delegated=True
+    )
+    fallback = coordinate_checks.check_lon_value_range(
+        checker, topology_error_delegated=False
+    )
+
+    assert delegated == []
+    assert "longitude coordinate could not be identified" in fallback[0].msgs[0]

@@ -100,12 +100,19 @@ severity = "H"
 severity = "H"
 
 [coordinates.registry.bounds_name]
-severity = "M"
-# Recommended bounds-related names; structure, existence, and dimension sizes
-# remain HIGH checks under coordinates.registry.bounds/grid.
+severity = "H"
+# This family owns regular/scalar/vertical bounds variable names, vertex
+# variable names, and every trailing bnds dimension name (including that of a
+# climatology bounds variable).
 bounds_dimension_name = "bnds"
 vertices_dimension_name = "vertices"
 climatology_bounds_name = "climatology_bnds"
+
+# When configured, this optional family owns only the recommended climatology
+# bounds variable name and the recommended trailing vertices dimension name.
+# It does not own vertex variable names or any trailing bnds dimension name.
+[coordinates.registry.bounds_name_recommendations]
+severity = "M"
 
 [coordinates.registry.associations]
 severity = "H"

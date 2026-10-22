@@ -44,6 +44,7 @@ PREREQUISITE_FALLBACKS = {
         "requested_values",
         "bounds",
         "bounds_name",
+        "bounds_name_recommendations",
         "associations",
         "formula",
         "dimension_order",
@@ -63,6 +64,7 @@ PREREQUISITE_FALLBACKS = {
         "requested_values",
         "bounds",
         "bounds_name",
+        "bounds_name_recommendations",
         "associations",
         "formula",
         "dimension_order",
@@ -150,6 +152,17 @@ class Findings:
         """Return wording matching the configured severity of one family."""
         return configured_severity_word(self.severities.get(family), noun=noun)
 
+    def bounds_naming_family(self, *, recommendation: bool = False) -> str:
+        """Select the configured family for one bounds-related name check.
+
+        Projects with one naming severity retain the original ``bounds_name``
+        family.  A project may configure the additional family to keep
+        recommendations separate from required names.
+        """
+        if recommendation and "bounds_name_recommendations" in self.messages:
+            return "bounds_name_recommendations"
+        return "bounds_name"
+
     def results(self):
         labels = {
             "identity": "[COORD001] Coordinate identity and structure",
@@ -206,6 +219,9 @@ class Findings:
             "requested_values": "[COORD007] Requested coordinate values",
             "bounds": "[COORD008] Coordinate bounds",
             "bounds_name": "[COORD009] Coordinate bounds naming",
+            "bounds_name_recommendations": (
+                "[COORD009] Coordinate bounds naming recommendations"
+            ),
             "associations": "[COORD010] Auxiliary-coordinate associations",
             "grid": "[COORD011] Horizontal grid coordinates",
             "formula": "[COORD012] Parametric vertical coordinate",
@@ -875,6 +891,7 @@ def check_trailing_dimension(
     recommended: str,
     *,
     description: str,
+    family: str = "bounds_name",
 ):
     """Check a bounds-like variable's trailing dimension name."""
     if not recommended or not var.ndim:
@@ -882,9 +899,9 @@ def check_trailing_dimension(
     actual = var.dimensions[-1]
     if actual != recommended:
         findings.add(
-            "bounds_name",
+            family,
             f"{description} '{name}' uses trailing dimension {actual!r}; the "
-            f"configured {findings.severity_word('bounds_name')} name is "
+            f"configured {findings.severity_word(family)} name is "
             f"{recommended!r}.",
         )
 

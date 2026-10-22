@@ -20,6 +20,7 @@ def check_grid_mapping(
     missing_severity=BaseCheck.MEDIUM,
     horizontal_topology=None,
     topology_error=None,
+    topology_error_delegated=True,
 ):
     """
     Checks if the grid_mapping label is compliant with the CORDEX-CMIP6 archive specifications.
@@ -51,6 +52,7 @@ def check_grid_mapping(
         missing_severity,
         f"[{check_id}] grid_mapping Earth description",
     )
+    topology_deferred = False
 
     omission_marker = "(no grid_mapping)"
     grid_description = str(getattr(CheckerObject.ds, "grid", "") or "").lower()
@@ -125,8 +127,15 @@ def check_grid_mapping(
             if horizontal_topology == "rectilinear" or ocean_omission:
                 testctx.add_pass()
             elif topology_error:
-                # COORD011 owns the topology failure; do not repeat its cause here.
-                testctx.add_pass()
+                if topology_error_delegated:
+                    # COORD011 owns the topology failure.
+                    topology_deferred = True
+                else:
+                    testctx.add_failure(
+                        "The horizontal topology could not be established, so "
+                        "the missing grid_mapping could not be assessed. "
+                        f"Reason: {topology_error}"
+                    )
             else:
                 testctx.add_failure(
                     "No grid_mapping variable describing the coordinate reference "
@@ -138,13 +147,20 @@ def check_grid_mapping(
     else:
         testctx.add_pass()
 
-    results = [testctx.to_result()]
+    results = [] if topology_deferred else [testctx.to_result()]
     if missingctx.messages:
         results.append(missingctx.to_result())
     return results
 
 
-def check_domain_id(CheckerObject, severity=BaseCheck.MEDIUM, use_esgvoc=False):
+def check_domain_id(
+    CheckerObject,
+    severity=BaseCheck.MEDIUM,
+    use_esgvoc=False,
+    *,
+    missing_attribute_delegated=True,
+    topology_error_delegated=True,
+):
     """
     Checks if the domain_id is compliant with the CORDEX-CMIP6 archive specifications.
 
@@ -170,13 +186,20 @@ def check_domain_id(CheckerObject, severity=BaseCheck.MEDIUM, use_esgvoc=False):
 
     # Do not give a result if not defined
     if not domain_id:
-        testctx.add_pass()
+        if missing_attribute_delegated:
+            return []
+        testctx.add_failure(
+            "Global attribute 'domain_id' is missing, so the CORDEX domain "
+            "policy could not be checked."
+        )
         return [testctx.to_result()]
 
     # If the grid is rectilinear, the domain_id needs to include the suffix "i"
     latitudes = cfutil.get_true_latitude_variables(CheckerObject.ds)
     longitudes = cfutil.get_true_longitude_variables(CheckerObject.ds)
     if not latitudes or not longitudes:
+        if topology_error_delegated:
+            return []
         testctx.add_failure(
             "Cannot check 'domain_id' as latitude and longitude coordinate variables could not be identified."
         )
@@ -342,7 +365,9 @@ def check_version_realization_info(CheckerObject, severity=BaseCheck.MEDIUM):
     return [testctx.to_result()]
 
 
-def check_grid(CheckerObject, severity=BaseCheck.LOW):
+def check_grid(
+    CheckerObject, severity=BaseCheck.LOW, *, missing_attribute_delegated=True
+):
     """
     Checks if the global attribute grid is defined as suggested in the CORDEX-CMIP6 archive specifications.
 
@@ -376,7 +401,12 @@ def check_grid(CheckerObject, severity=BaseCheck.LOW):
                 " examples, please have a look at the CORDEX-CMIP6 Archive Specifications."
             )
     else:
-        testctx.add_pass()
+        if missing_attribute_delegated:
+            return []
+        testctx.add_failure(
+            "Global attribute 'grid' is missing, so its recommended CORDEX "
+            "description could not be checked."
+        )
 
     return [testctx.to_result()]
 

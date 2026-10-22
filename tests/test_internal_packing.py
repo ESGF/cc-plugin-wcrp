@@ -263,3 +263,75 @@ def test_internal_packing_can_disable_every_section():
         )
         == []
     )
+
+
+def test_internal_packing_reports_only_unowned_missing_prerequisites(monkeypatch):
+    packing_file = FakePackingFile({}, consolidated_metadata=True)
+    packing_file.attrs = {}
+    monkeypatch.setattr(packing, "_PYFIVE_OK", True)
+    monkeypatch.setattr(
+        packing, "pyfive", SimpleNamespace(File=lambda _path: packing_file)
+    )
+    dataset = FakeDataset()
+
+    time = packing.check_internal_packing(
+        dataset,
+        run_metadata=False,
+        run_time=True,
+        run_data=False,
+        time_presence_delegated=False,
+    )
+    packing.finalize_internal_packing_session(dataset)
+    data = packing.check_internal_packing(
+        dataset,
+        run_metadata=False,
+        run_time=False,
+        run_data=True,
+        variable_id_presence_delegated=False,
+    )
+    packing.finalize_internal_packing_session(dataset)
+    delegated = packing.check_internal_packing(
+        dataset,
+        run_metadata=False,
+        run_time=True,
+        run_data=True,
+        time_presence_delegated=True,
+        variable_id_presence_delegated=True,
+    )
+    packing.finalize_internal_packing_session(dataset)
+
+    assert "Coordinate variable 'time' is missing" in messages(time)[0]
+    assert "Global attribute 'variable_id' is missing" in messages(data)[0]
+    assert delegated == []
+
+
+@pytest.mark.parametrize(
+    ("variable_id", "expected"),
+    [
+        ("tas", "Data variable 'tas' named by global attribute"),
+        ("", "Global attribute 'variable_id' is empty"),
+    ],
+)
+def test_internal_packing_reports_unowned_unusable_data_selector(
+    monkeypatch, variable_id, expected
+):
+    packing_file = FakePackingFile(
+        {}, consolidated_metadata=True, variable_id=variable_id
+    )
+    monkeypatch.setattr(packing, "_PYFIVE_OK", True)
+    monkeypatch.setattr(
+        packing, "pyfive", SimpleNamespace(File=lambda _path: packing_file)
+    )
+    dataset = FakeDataset()
+
+    results = packing.check_internal_packing(
+        dataset,
+        run_metadata=False,
+        run_time=False,
+        run_data=True,
+        variable_id_presence_delegated=False,
+        data_variable_presence_delegated=False,
+    )
+    packing.finalize_internal_packing_session(dataset)
+
+    assert expected in messages(results)[0]
