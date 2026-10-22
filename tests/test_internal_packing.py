@@ -60,6 +60,10 @@ def messages(results):
     return [message for result in results for message in result.msgs]
 
 
+def test_pyfive_minimum_version_covers_consolidated_metadata_parser_fix():
+    assert str(packing._PYFIVE_MIN) == "1.3.0"
+
+
 def test_internal_packing_sections_reuse_and_close_pyfive_file(monkeypatch):
     packing_file = FakePackingFile(
         {
