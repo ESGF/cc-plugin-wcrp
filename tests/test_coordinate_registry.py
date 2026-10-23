@@ -2787,9 +2787,10 @@ def test_registered_grid_mapping_rejects_conflicting_file_value(nc):
     assert result.value == (0, 1)
     assert result.msgs == [
         (
-            "File grid_mapping_name='rotated_latitude_longitude' does not match "
-            "the registered grid_mapping='latitude_longitude' for registered grid "
-            "'g100'; 'latitude_longitude' is the recommended value."
+            "File grid_mapping_name='rotated_latitude_longitude' is inconsistent "
+            "with the registered grid_mapping='latitude_longitude' for registered "
+            "grid 'g100'. Verify the intended grid definition and make the "
+            "grid_mapping and grid_label selections consistent."
         )
     ]
 
@@ -2840,8 +2841,10 @@ def test_registered_grid_region_rejects_conflicting_file_value(nc):
     assert result.value == (0, 1)
     assert result.msgs == [
         (
-            "File region='nh' does not match the registered grid region='glb' "
-            "for registered grid 'g010'; 'glb' is the recommended value."
+            "File region='nh' is inconsistent with the registered grid "
+            "region='glb' for registered grid 'g010'. Verify the intended "
+            "output region and make the region and grid_label selections "
+            "consistent."
         )
     ]
 

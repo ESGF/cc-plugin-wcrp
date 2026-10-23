@@ -490,9 +490,9 @@ def check_grid_mapping_consistency(
     grid = f" for registered grid {label!r}" if label else ""
     findings.add(
         "grid_mapping_consistency",
-        f"File grid_mapping_name={actual!r} does not match the registered "
-        f"grid_mapping={expected!r}{grid}; {expected!r} is the "
-        f"{findings.severity_word('grid_mapping_consistency')} value.",
+        f"File grid_mapping_name={actual!r} is inconsistent with the registered "
+        f"grid_mapping={expected!r}{grid}. Verify the intended grid definition "
+        "and make the grid_mapping and grid_label selections consistent.",
     )
 
 
@@ -529,9 +529,9 @@ def check_grid_region_consistency(
     grid = f" for registered grid {label!r}" if label else ""
     findings.add(
         "grid_region_consistency",
-        f"File region={actual!r} does not match the registered grid "
-        f"region={expected!r}{grid}; {expected!r} is the "
-        f"{findings.severity_word('grid_region_consistency')} value.",
+        f"File region={actual!r} is inconsistent with the registered grid "
+        f"region={expected!r}{grid}. Verify the intended output region and "
+        "make the region and grid_label selections consistent.",
     )
 
 
