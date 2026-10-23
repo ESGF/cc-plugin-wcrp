@@ -251,6 +251,7 @@ class GlobalConsistency(BaseModel):
 
     # Frequency vs table (ATTR008)
     frequency_vs_table_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+    frequency_vs_branded_variable: Optional[ConsistencyRule] = None  # CMIP7 only
 
     # Variant label consistency, atomic (ATTR006a-d)
     variant_label_vs_realization_index: Optional[ConsistencyRule] = None
@@ -450,6 +451,8 @@ class TimeCoverageRule(BaseModel):
 class CalendarRecommendationRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
+    discouraged_values: List[str] = Field(default_factory=lambda: ["standard"])
+    preferred_value: str = "proleptic_gregorian"
 
 
 class CoordinateRegistrySection(BaseModel):

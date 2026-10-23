@@ -17,6 +17,9 @@ from checks.consistency_checks.check_drs_filename_cv import check_drs_directory
 from checks.consistency_checks.check_frequency_table_consistency import (
     check_frequency_table_id_consistency,
 )
+from checks.consistency_checks.check_frequency_branded_variable_consistency import (
+    check_frequency_branded_variable_consistency,
+)
 from checks.consistency_checks.check_institution_source_consistency import (
     check_id_attribute_consistency,
 )
@@ -306,6 +309,70 @@ def test_time001_leaves_missing_frequency_to_attr_owner(tmp_path):
 
     assert delegated == []
     assert "Missing global attribute 'frequency'" in _messages(fallback)[0]
+
+
+@pytest.mark.parametrize(
+    ("delegated", "expected_count"),
+    [(True, 0), (False, 1)],
+)
+def test_attr008_missing_frequency_respects_attribute_owner(
+    tmp_path, delegated, expected_count
+):
+    with Dataset(tmp_path / "missing-frequency-attr008.nc", "w") as ds:
+        ds.branded_variable = "tas_tavg-h2m-hxy-air"
+        results = check_frequency_branded_variable_consistency(
+            ds,
+            ["mon"],
+            BaseCheck.LOW,
+            project_label="CMIP7",
+            missing_attributes_delegated=("frequency",) if delegated else (),
+        )
+
+    assert len(_messages(results)) == expected_count
+
+
+@pytest.mark.parametrize(
+    ("delegated", "expected_count"),
+    [(True, 0), (False, 1)],
+)
+def test_attr008_invalid_frequency_respects_vocabulary_owner(
+    tmp_path, delegated, expected_count
+):
+    with Dataset(tmp_path / "invalid-frequency-attr008.nc", "w") as ds:
+        ds.frequency = "invalid"
+        ds.branded_variable = "tas_tavg-h2m-hxy-air"
+        results = check_frequency_branded_variable_consistency(
+            ds,
+            ["mon"],
+            BaseCheck.LOW,
+            project_label="CMIP7",
+            frequency_is_registered=False,
+            invalid_frequency_delegated=delegated,
+        )
+
+    assert len(_messages(results)) == expected_count
+
+
+@pytest.mark.parametrize(
+    ("delegated", "expected_count"),
+    [(True, 0), (False, 1)],
+)
+def test_attr008_registry_failure_respects_metadata_owner(
+    tmp_path, delegated, expected_count
+):
+    with Dataset(tmp_path / "registry-failure-attr008.nc", "w") as ds:
+        ds.frequency = "mon"
+        ds.branded_variable = "tas_tavg-h2m-hxy-air"
+        results = check_frequency_branded_variable_consistency(
+            ds,
+            None,
+            BaseCheck.LOW,
+            project_label="CMIP7",
+            metadata_error="database unavailable",
+            metadata_error_delegated=delegated,
+        )
+
+    assert len(_messages(results)) == expected_count
 
 
 @pytest.mark.parametrize(

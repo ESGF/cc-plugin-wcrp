@@ -404,8 +404,8 @@ def check_grid(
         if missing_attribute_delegated:
             return []
         testctx.add_failure(
-            "Global attribute 'grid' is missing, so its recommended CORDEX "
-            "description could not be checked."
+            "Global attribute 'grid' is missing, so its "
+            f"{severity_word(severity)} CORDEX description could not be checked."
         )
 
     return [testctx.to_result()]

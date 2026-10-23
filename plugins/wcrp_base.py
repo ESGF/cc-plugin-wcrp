@@ -390,6 +390,16 @@ class WCRPBaseCheck(BaseCheck):
             and self.get_severity(rule.severity) >= int(consumer_severity)
         )
 
+    def _variable_registry_owns(self, consumer_severity):
+        """Whether an enabled variable rule owns registry lookup failures."""
+        variable = getattr(self.config, "variable", None) if self.config else None
+        rules = (variable.attributes or {}).values() if variable is not None else ()
+        return any(
+            rule.cv_source_term_key
+            and self.get_severity(rule.severity) >= int(consumer_severity)
+            for rule in rules
+        )
+
     def _resolve_expected_data_variable(self, ds, severity):
         """Resolve an authoritative data-variable name before CF heuristics."""
         name = self._expected_data_variable_name(ds)

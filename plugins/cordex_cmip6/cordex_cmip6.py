@@ -1036,12 +1036,13 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                         )
                     )
             if rule.calendar_recommendation:
+                calendar_rule = rule.calendar_recommendation
                 results.extend(
                     check_calendar_recommendation(
                         ds,
-                        severity=self.get_severity(
-                            rule.calendar_recommendation.severity
-                        ),
+                        severity=self.get_severity(calendar_rule.severity),
+                        discouraged_values=calendar_rule.discouraged_values,
+                        preferred_value=calendar_rule.preferred_value,
                     )
                 )
             for attr_key, attr_rule in rule.attributes.items():

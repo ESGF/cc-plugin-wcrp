@@ -141,4 +141,7 @@ severity = "H"
 
 [coordinates.time.calendar_recommendation]
 # TIME003a
+# ATTR004 rejects other unsupported values; this lists valid values discouraged here.
 severity = "M"
+discouraged_values = ["standard"]
+preferred_value = "proleptic_gregorian"

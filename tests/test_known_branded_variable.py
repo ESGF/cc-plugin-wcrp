@@ -28,6 +28,7 @@ NEW_RECORD = {
     "long_name": "Near-Surface Air Temperature",
     "out_name": "tas",
     "dimensions": ["time", "latitude", "longitude"],
+    "frequency": ["mon", "day"],
     "cell_methods": "area: time: mean",
     "cell_measures": "area: areacella",
     "flag_values": None,
@@ -54,6 +55,7 @@ def test_new_known_branded_variable_uses_canonical_fields_directly():
     assert lookup.expected.cf_units == "K"
     assert lookup.expected.long_name == "Near-Surface Air Temperature"
     assert lookup.expected.out_name == "tas"
+    assert lookup.expected.frequency == ["mon", "day"]
     assert len(calls) == 1
 
 

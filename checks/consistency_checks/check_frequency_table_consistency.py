@@ -39,9 +39,8 @@ def check_frequency_table_id_consistency(
                 ctx.add_pass()
             else:
                 msg = (
-                    f"Inconsistency found. For table_id '{table_id}', "
-                    f"frequency should be one of {allowed_frequencies}, "
-                    f"but found '{frequency}'."
+                    f"For table_id '{table_id}', the allowed frequencies are "
+                    f"{allowed_frequencies}, but the file defines '{frequency}'."
                 )
                 ctx.add_failure(msg)
         else:

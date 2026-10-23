@@ -416,7 +416,7 @@ def test_calendar_message_wording_follows_configured_severity(nc):
     )
 
 
-def test_coordinate_calendar_enum_advisory_uses_configured_severity(nc):
+def test_coordinate_calendar_enum_does_not_add_preference_advisory(nc):
     nc.createDimension("time", 1)
     time = nc.createVariable("time", "f8", ("time",))
     time.calendar = "gregorian"
@@ -431,10 +431,42 @@ def test_coordinate_calendar_enum_advisory_uses_configured_severity(nc):
         context="Coordinate",
     )
 
+    assert messages(result) == []
+
+
+def test_calendar_recommendation_uses_configured_values(nc):
+    nc.createDimension("time", 1)
+    time = nc.createVariable("time", "f8", ("time",))
+    time.units = "days since 2000-01-01"
+    time.calendar = "gregorian"
+
+    result = check_calendar_recommendation(
+        nc,
+        severity=BaseCheck.MEDIUM,
+        discouraged_values=["standard", "gregorian"],
+        preferred_value="proleptic_gregorian",
+    )
+
     assert any(
-        "it is suggested to use 'proleptic_gregorian'" in msg
+        "value 'gregorian'. It is recommended to use "
+        "'proleptic_gregorian' instead." in msg
         for msg in messages(result)
     )
+
+
+def test_calendar_recommendation_ignores_values_owned_by_attr004(nc):
+    nc.createDimension("time", 1)
+    time = nc.createVariable("time", "f8", ("time",))
+    time.units = "days since 2000-01-01"
+    time.calendar = "gregorian"
+
+    result = check_calendar_recommendation(
+        nc,
+        severity=BaseCheck.MEDIUM,
+        discouraged_values=["standard"],
+    )
+
+    assert messages(result) == []
 
 
 def test_grid_topology_mapping_prefers_label_over_general_emd_rules():
@@ -501,6 +533,7 @@ def test_default_grid_topology_mapping_is_loaded_from_toml():
     }
     assert config.accepted_grid_labels_by_horizontal_label_and_region == {}
     assert config.recommended_grid_types_by_horizontal_label == {
+        "hy": "regular_latitude_longitude",
         "hyb": "basin_by_latitude"
     }
     assert config.reduced_horizontal_labels == frozenset(
@@ -3119,6 +3152,42 @@ def test_basin_layout_recommends_basin_by_latitude_grid_type(
 
 
 @pytest.mark.parametrize(
+    ("grid_type", "expected_failures"),
+    [("regular_latitude_longitude", 0), ("tripolar", 1)],
+)
+def test_zonal_mean_recommends_regular_latitude_longitude_grid_type(
+    nc, grid_type, expected_failures
+):
+    nc.horizontal_label = "hy"
+    nc.region = "glb"
+    root = Path(__file__).parents[1]
+    config = load_grid_topology_config(
+        root / "plugins/cmip7/config/wcrp/mappings/grid_topology.toml"
+    )
+    findings = Findings({"grid_label_recommendation": BaseCheck.MEDIUM})
+
+    check_grid_label_recommendation(
+        findings,
+        nc,
+        catalog({}, dimensions=("latitude", "time")),
+        {
+            "id": "zonal_grid",
+            "grid_type": {"id": grid_type},
+            "n_cells": None,
+        },
+        config,
+    )
+
+    result = findings.results()[0]
+    assert result.value == (1 - expected_failures, 1)
+    if expected_failures:
+        assert "horizontal_label='hy'" in result.msgs[0]
+        assert "grid_type='regular_latitude_longitude'" in result.msgs[0]
+    else:
+        assert not result.msgs
+
+
+@pytest.mark.parametrize(
     "dimensions",
     [
         ("site", "time"),
@@ -3529,17 +3598,15 @@ def test_zonal_mean_cell_count_uses_the_retained_latitude_dimension(nc):
     assert "contain 2 cells" in consistency.msgs[0]
 
 
-def _basin_by_latitude_cell_count_case(
-    nc, axis_identifier, basin_name="basin"
-):
+def _basin_by_latitude_cell_count_case(nc, axis_identifier):
     axis_name = "lat" if axis_identifier == "latitude" else "rlat"
     nc.createDimension(axis_name, 4)
-    nc.createDimension(basin_name, 3)
+    nc.createDimension("basin", 3)
     nc.createDimension("strlen", 16)
     nc.createDimension("lev", 2)
     nc.createVariable(axis_name, "f8", (axis_name,))
-    nc.createVariable(basin_name, "S1", (basin_name, "strlen"))
-    data_var = nc.createVariable("ta", "f4", (axis_name, basin_name, "lev"))
+    nc.createVariable("sector", "S1", ("basin", "strlen"))
+    data_var = nc.createVariable("ta", "f4", (axis_name, "basin", "lev"))
     cv = catalog(
         {
             axis_identifier: coordinate(
@@ -3555,7 +3622,7 @@ def _basin_by_latitude_cell_count_case(
             "basin": coordinate(
                 "basin",
                 "auxiliary",
-                basin_name,
+                "basin",
                 data_type="character",
                 cf_standard_name="region",
             ),
@@ -3569,17 +3636,12 @@ def _basin_by_latitude_cell_count_case(
     return cv, data_var, config
 
 
-@pytest.mark.parametrize(
-    ("axis_identifier", "basin_name"),
-    [("latitude", "basin"), ("gridlatitude", "sector")],
-)
+@pytest.mark.parametrize("axis_identifier", ["latitude", "gridlatitude"])
 @pytest.mark.parametrize("registered_count", [4, 12])
 def test_basin_by_latitude_cell_count_accepts_axis_or_axis_times_basin(
-    nc, axis_identifier, basin_name, registered_count
+    nc, axis_identifier, registered_count
 ):
-    cv, data_var, config = _basin_by_latitude_cell_count_case(
-        nc, axis_identifier, basin_name
-    )
+    cv, data_var, config = _basin_by_latitude_cell_count_case(nc, axis_identifier)
     findings = Findings(
         {
             "grid_cell_count_availability": BaseCheck.LOW,
@@ -3606,9 +3668,7 @@ def test_basin_by_latitude_cell_count_accepts_axis_or_axis_times_basin(
 
 
 def test_basin_by_latitude_cell_count_reports_neither_permitted_interpretation(nc):
-    cv, data_var, config = _basin_by_latitude_cell_count_case(
-        nc, "gridlatitude", "sector"
-    )
+    cv, data_var, config = _basin_by_latitude_cell_count_case(nc, "gridlatitude")
     findings = Findings(
         {
             "grid_cell_count_availability": BaseCheck.LOW,
@@ -4583,15 +4643,15 @@ def test_rectilinear_grid_uses_generic_coordinate_records(nc):
 
 
 @pytest.mark.parametrize(
-    ("topology", "resolution_error", "detail"),
+    ("topology", "resolution_error"),
     [
-        ("curvilinear", None, "resolved topology is 'curvilinear'"),
-        ("unstructured", None, "resolved topology is 'unstructured'"),
-        (None, "No topology metadata was available.", "No topology metadata"),
+        ("curvilinear", None),
+        ("unstructured", None),
+        (None, "No topology metadata was available."),
     ],
 )
-def test_zonal_mean_overrides_grid_metadata_with_rectilinear_grid(
-    nc, topology, resolution_error, detail
+def test_zonal_mean_uses_1d_latitude_without_prescribing_registered_grid_type(
+    nc, topology, resolution_error
 ):
     nc.createDimension("lat", 2)
     latitude = nc.createVariable("lat", "f8", ("lat",))
@@ -4628,14 +4688,8 @@ def test_zonal_mean_overrides_grid_metadata_with_rectilinear_grid(
     )
 
     recommendation = next(item for item in result if "COORD004" in item.name)
-    assert recommendation.weight == BaseCheck.MEDIUM
-    assert any(
-        "zonal-mean grid is verified as rectilinear" in message
-        and detail in message
-        and "recommended to register or select a grid" in message
-        and "with a (zonal-mean) rectilinear topology" in message
-        for message in recommendation.msgs
-    )
+    assert recommendation.value == (1, 1)
+    assert not recommendation.msgs
     grid = next(item for item in result if "COORD011" in item.name)
     assert grid.value == (1, 1)
 
@@ -4669,13 +4723,9 @@ def test_zonal_mean_with_2d_latitude_stops_at_rectilinear_structure(nc):
         grid_topology="curvilinear",
     )
 
-    recommendation = next(
-        result for result in results if "COORD004" in result.name
-    )
-    assert any(
-        "zonal-mean grid is verified as rectilinear" in msg
-        for msg in recommendation.msgs
-    )
+    recommendation = next(result for result in results if "COORD004" in result.name)
+    assert recommendation.value == (1, 1)
+    assert not recommendation.msgs
     grid = next(result for result in results if result.name.endswith("coordinates"))
     assert any("configured rectilinear grid" in msg for msg in grid.msgs)
     assert_coordinate_families_pass(

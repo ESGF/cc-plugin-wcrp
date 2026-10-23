@@ -90,7 +90,7 @@ CURVILINEAR_OCEAN = RemoteDataset(
         "check_File_Internal_Packing_Time": ExpectedCheck(2),
         "check_Geophysical_Variable": ExpectedCheck(39, (_COMMENT_FAILURE,)),
         "check_Global_Attributes": ExpectedCheck(81),
-        "check_Global_Consistency": ExpectedCheck(9),
+        "check_Global_Consistency": ExpectedCheck(10),
         "check_consistency_output": ExpectedCheck(1),
         "check_setup_warnings": ExpectedCheck(1),
     },

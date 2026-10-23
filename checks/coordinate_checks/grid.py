@@ -13,7 +13,11 @@ from checks.coordinate_checks.scanning import (
     scan_chunk_cache,
     spatial_selection,
 )
-from checks.coordinate_checks.utils import ncattr, neutral_dtype
+from checks.coordinate_checks.utils import (
+    TEXT_AUXILIARY_COORDINATE_NAME,
+    ncattr,
+    neutral_dtype,
+)
 from checks.coordinate_checks.validation import (
     Findings,
     check_attributes,
@@ -315,38 +319,34 @@ def _observed_basin_by_latitude_cell_counts(
     if not axis_identifier or data_var is None:
         return None
 
-    entries = {
-        identifier: catalog.data_coordinates.get(identifier, {})
-        for identifier in (axis_identifier, "basin")
-    }
-    variables = {}
-    for identifier, entry in entries.items():
-        expected_name = str(entry.get("out_name") or identifier)
-        standard_name = str(entry.get("cf_standard_name") or identifier)
-        variable = _identify_coordinate(
-            ds,
-            expected_name,
-            standard_name,
-            allow_standard_name_fallback,
-        )
-        if variable is None:
-            return None
-        variables[identifier] = variable
-
-    axis = variables[axis_identifier]
+    axis_entry = catalog.data_coordinates.get(axis_identifier, {})
+    axis = _identify_coordinate(
+        ds,
+        str(axis_entry.get("out_name") or axis_identifier),
+        str(axis_entry.get("cf_standard_name") or axis_identifier),
+        allow_standard_name_fallback,
+    )
+    if axis is None:
+        return None
     if axis.ndim != 1 or axis.dimensions[0] not in data_var.dimensions:
         return None
     axis_dimension = axis.dimensions[0]
-    basin_dimensions = [
-        dimension
-        for dimension in variables["basin"].dimensions
-        if dimension in data_var.dimensions
-    ]
-    if len(basin_dimensions) != 1 or basin_dimensions[0] == axis_dimension:
+
+    basin_entry = catalog.data_coordinates.get("basin", {})
+    basin_dimension = str(basin_entry.get("out_name") or "basin")
+    sector = ds.variables.get(TEXT_AUXILIARY_COORDINATE_NAME)
+    if (
+        sector is None
+        or sector.ndim != 2
+        or not sector.dimensions
+        or sector.dimensions[0] != basin_dimension
+        or basin_dimension not in data_var.dimensions
+        or basin_dimension == axis_dimension
+    ):
         return None
 
     axis_size = len(ds.dimensions[axis_dimension])
-    basin_size = len(ds.dimensions[basin_dimensions[0]])
+    basin_size = len(ds.dimensions[basin_dimension])
     return frozenset({axis_size, axis_size * basin_size})
 
 
@@ -1345,15 +1345,10 @@ def validate_horizontal_grid(
         return []
     zonal_mean = "latitude" in requested and "longitude" not in requested
     if zonal_mean:
-        if resolution_error or topology != "rectilinear":
-            detail = resolution_error or f"The resolved topology is {topology!r}."
-            findings.add(
-                "recommendations",
-                "Only latitude is required, so the zonal-mean grid is verified "
-                f"as rectilinear regardless of its grid metadata. {detail} It is "
-                f"{findings.severity_word('recommendations')} to register or select a grid "
-                "with a (zonal-mean) rectilinear topology.",
-            )
+        # "Rectilinear" describes only the retained coordinate layout here:
+        # zonal and basin means require a 1-D latitude coordinate. It does not
+        # prescribe the registered EMD grid_type, which may instead describe a
+        # reduced grid such as basin_by_latitude.
         topology = "rectilinear"
     elif resolution_error or topology is None:
         findings.add_prerequisite(

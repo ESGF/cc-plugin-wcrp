@@ -14,6 +14,7 @@ BRANDED_VARIABLE_FIELDS = [
     "units",
     "cf_units",
     "dimensions",
+    "frequency",
     "cell_methods",
     "cell_measures",
     "comment",
@@ -38,6 +39,7 @@ class ExpectedVariableMetadata:
     dimensions: list[str] | None = None
     coordinate_out_names: dict[str, str] | None = None
     coordinate_bounds_required: dict[str, bool] | None = None
+    frequency: list[str] | None = None
     cell_methods: str | list[str] | None = None
     cell_measures: str | list[str] | None = None
     comment: str | list[str] | None = None
@@ -148,6 +150,7 @@ def normalize_known_branded_variable(
         dimensions=_reference_ids(dimensions),
         coordinate_out_names=_coordinate_out_names(dimensions),
         coordinate_bounds_required=_coordinate_bounds_required(dimensions),
+        frequency=_reference_ids(_value(term, "frequency")),
         cell_methods=_nonempty(_value(term, "cell_methods")),
         cell_measures=_nonempty(_value(term, "cell_measures")),
         comment=_nonempty(_value(term, "comment")),

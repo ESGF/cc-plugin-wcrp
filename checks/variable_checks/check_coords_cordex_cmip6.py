@@ -162,17 +162,22 @@ def check_lon_value_range(
     if grid_mapping_name == "latitude_longitude":
         if lon.ndim != 1:
             testctx.add_failure(
-                "The longitude coordinate should have one dimension for grid_mapping_name"
-                " 'latitude_longitude'."
+                f"It is {severity_word(severity)} for the longitude coordinate "
+                "to have one dimension when grid_mapping_name is "
+                "'latitude_longitude'."
             )
         elif _all_true((lon_values[1:] - lon_values[:-1]) > 0):
             testctx.add_pass()
         else:
             testctx.add_failure(
-                "The longitude coordinate should be strictly monotonically increasing."
+                f"It is {severity_word(severity)} for the longitude coordinate "
+                "to be strictly monotonically increasing."
             )
     elif lon.ndim != 2:
-        testctx.add_failure("The longitude coordinate should have two dimensions.")
+        testctx.add_failure(
+            f"It is {severity_word(severity)} for the longitude coordinate to "
+            "have two dimensions."
+        )
     elif (
         domain_id.startswith("ARC")
         or domain_id.startswith("ANT")
@@ -193,20 +198,23 @@ def check_lon_value_range(
                     testctx.add_pass()
                 else:
                     testctx.add_failure(
-                        "The longitude coordinate should be strictly monotonically increasing."
+                        f"It is {severity_word(severity)} for the longitude "
+                        "coordinate to be strictly monotonically increasing."
                     )
             elif rlon_idx == 1:
                 if increasing_1:
                     testctx.add_pass()
                 else:
                     testctx.add_failure(
-                        "The longitude coordinate should be strictly monotonically increasing."
+                        f"It is {severity_word(severity)} for the longitude "
+                        "coordinate to be strictly monotonically increasing."
                     )
         elif increasing_0 or increasing_1:
             testctx.add_pass()
         else:
             testctx.add_failure(
-                "The longitude coordinate should be strictly monotonically increasing."
+                f"It is {severity_word(severity)} for the longitude coordinate "
+                "to be strictly monotonically increasing. "
                 f"{increasing_0}, {increasing_1}"
             )
 
@@ -216,7 +224,8 @@ def check_lon_value_range(
         testctx.add_pass()
     else:
         testctx.add_failure(
-            "Longitude coordinates should be confined to the range -180 to 360."
+            f"It is {severity_word(severity)} for longitude coordinates to be "
+            "confined to the range -180 to 360."
         )
 
     # Check if longitude coordinates have absolute values as small as possible
@@ -224,7 +233,8 @@ def check_lon_value_range(
     valid_lon_values = lon_values.compressed()
     if valid_lon_values.size and valid_lon_values.min() >= 180:
         testctx.add_failure(
-            "Longitude values are required to take the smallest absolute value in the range [-180, 360]."
+            f"It is {severity_word(severity)} for longitude values to use the "
+            "smallest absolute representation in the range [-180, 360]."
         )
     else:
         testctx.add_pass()

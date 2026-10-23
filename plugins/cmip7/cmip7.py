@@ -45,6 +45,9 @@ from checks.consistency_checks.check_institution_source_consistency import (
     check_institution_consistency,
     check_source_consistency,
 )
+from checks.consistency_checks.check_frequency_branded_variable_consistency import (
+    check_frequency_branded_variable_consistency,
+)
 from checks.consistency_checks.check_variant_label_consistency import (
     check_variant_vs_realization_index,
     check_variant_vs_initialization_index,
@@ -96,6 +99,7 @@ from checks.coordinate_checks import (
     resolve_grid_topology,
 )
 from checks.coordinate_checks.utils import coordinate_type
+from checks.coordinate_checks.model import reference_ids
 
 
 # --- CF Checker helpers ---
@@ -875,7 +879,96 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 )
             )
 
-        # --- Frequency vs table: not part of CMIP7 (no such key in its TOML) ---
+        # --- Frequency vs branded variable (ATTR008) ---
+        if c.frequency_vs_branded_variable:
+            sev = self.get_severity(
+                c.frequency_vs_branded_variable.severity
+            )
+            catalog_owner = coordinate_catalog_required(self.config)
+            registry_owner = self._variable_registry_owns(sev)
+            missing_delegated = {
+                name
+                for name in ("frequency", "branded_variable")
+                if self._global_attribute_owns(name, sev)
+            }
+            if catalog_owner or registry_owner:
+                missing_delegated.add("branded_variable")
+
+            expected_frequencies = None
+            branded_id = getattr(ds, "branded_variable", None)
+            metadata_error = None
+            metadata_error_delegated = False
+            frequency_is_registered = True
+            frequency_error = None
+
+            if all(
+                name in ds.ncattrs()
+                for name in ("frequency", "branded_variable")
+            ):
+                if self._coordinate_catalog is not None:
+                    branded_id = self._coordinate_catalog.branded_variable_id
+                    expected_frequencies = reference_ids(
+                        self._coordinate_catalog.branded_variable.get("frequency")
+                    )
+                elif catalog_owner:
+                    metadata_error = self._coordinate_setup_error or (
+                        "the coordinate catalogue is unavailable"
+                    )
+                    metadata_error_delegated = True
+                else:
+                    expected, registry_results = self._get_expected_from_registry(
+                        ds, sev
+                    )
+                    if expected is not None:
+                        branded_id = expected.id or branded_id
+                        expected_frequencies = expected.frequency
+                    else:
+                        messages = [
+                            message
+                            for result in registry_results
+                            for message in result.msgs
+                        ]
+                        metadata_error = "; ".join(messages) or (
+                            "the branded-variable record is unavailable"
+                        )
+                        metadata_error_delegated = registry_owner
+
+                frequency = str(ds.getncattr("frequency")).strip()
+                if expected_frequencies and frequency not in expected_frequencies:
+                    if esgvoc_api is None:
+                        frequency_error = "the ESGVoc API is unavailable"
+                    else:
+                        try:
+                            frequency_is_registered = (
+                                esgvoc_api.get_term_in_collection(
+                                    self.project_name,
+                                    "frequency",
+                                    frequency,
+                                    ["id"],
+                                )
+                                is not None
+                            )
+                        except Exception as exc:
+                            frequency_error = f"{type(exc).__name__}: {exc}"
+
+            res.extend(
+                check_frequency_branded_variable_consistency(
+                    ds,
+                    expected_frequencies,
+                    sev,
+                    project_label="CMIP7",
+                    branded_variable_id=branded_id,
+                    missing_attributes_delegated=missing_delegated,
+                    invalid_frequency_delegated=(
+                        self._global_attribute_owns("frequency", sev)
+                        or self._esgvoc_project_setup_error is not None
+                    ),
+                    frequency_is_registered=frequency_is_registered,
+                    frequency_error=frequency_error,
+                    metadata_error=metadata_error,
+                    metadata_error_delegated=metadata_error_delegated,
+                )
+            )
 
         # --- Variant label consistency (atomic ATTR006a-d) ---
         variant_checks = [
@@ -1201,8 +1294,16 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     )
 
             if getattr(rule, "calendar_recommendation", None):
-                sev = self.get_severity(rule.calendar_recommendation.severity)
-                res.extend(check_calendar_recommendation(ds, severity=sev))
+                calendar_rule = rule.calendar_recommendation
+                sev = self.get_severity(calendar_rule.severity)
+                res.extend(
+                    check_calendar_recommendation(
+                        ds,
+                        severity=sev,
+                        discouraged_values=calendar_rule.discouraged_values,
+                        preferred_value=calendar_rule.preferred_value,
+                    )
+                )
 
             for attr_key, arule in (rule.attributes or {}).items():
                 if (arule.attribute_name or attr_key) != "calendar" or not arule.enum:

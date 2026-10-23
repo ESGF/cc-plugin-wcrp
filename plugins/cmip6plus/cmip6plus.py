@@ -939,10 +939,18 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
 
             # TIME003a (calendar recommendation)
             if getattr(rule, "calendar_recommendation", None):
+                calendar_rule = rule.calendar_recommendation
                 sev = _sev(
-                    rule.calendar_recommendation.severity, default=BaseCheck.MEDIUM
+                    calendar_rule.severity, default=BaseCheck.MEDIUM
                 )
-                res.extend(check_calendar_recommendation(ds, severity=sev))
+                res.extend(
+                    check_calendar_recommendation(
+                        ds,
+                        severity=sev,
+                        discouraged_values=calendar_rule.discouraged_values,
+                        preferred_value=calendar_rule.preferred_value,
+                    )
+                )
             # coordinate variable attributes
             for attr_key, arule in (getattr(rule, "attributes", None) or {}).items():
                 sev = _sev(arule.severity, default=BaseCheck.MEDIUM)

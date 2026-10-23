@@ -386,7 +386,7 @@ def test_attribute_suite_vocabulary_lookup_failures_are_results(tmp_path, monkey
     assert unavailable[-1].msgs == ["ESGVOC library not available."]
 
 
-def test_gregorian_calendar_is_accepted_with_advisory(tmp_path):
+def test_gregorian_calendar_enum_is_accepted_without_preference_message(tmp_path):
     with Dataset(tmp_path / "calendar.nc", "w") as dataset:
         time = dataset.createVariable("time", "f8")
         time.calendar = "gregorian"
@@ -398,4 +398,4 @@ def test_gregorian_calendar_is_accepted_with_advisory(tmp_path):
             enum=("standard", "gregorian", "proleptic_gregorian"),
         )
     assert result_passed(results[-1])
-    assert "proleptic_gregorian" in results[-1].msgs[0]
+    assert results[-1].msgs == []

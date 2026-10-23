@@ -11,6 +11,7 @@ from checks.coordinate_checks.model import as_dict, reference_id, reference_ids
 
 _DIRECT_NUMERIC_RTOL = 1e-12
 _DIRECT_NUMERIC_ATOL = 1e-12
+TEXT_AUXILIARY_COORDINATE_NAME = "sector"
 
 
 def direct_numeric_slack(expected):

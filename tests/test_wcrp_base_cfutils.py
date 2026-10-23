@@ -823,6 +823,31 @@ def test_cordex_consumers_use_netCDF_and_cfutils(cf_dataset):
     assert all(not result.msgs for result in results)
 
 
+@pytest.mark.parametrize(
+    ("severity", "qualifier"),
+    [
+        (BaseCheck.HIGH, "required"),
+        (BaseCheck.MEDIUM, "recommended"),
+        (BaseCheck.LOW, "suggested"),
+    ],
+)
+def test_cordex_longitude_wording_uses_configured_severity(
+    tmp_path,
+    severity,
+    qualifier,
+):
+    path = tmp_path / "longitude-range.nc"
+    _create_dataset(path)
+    with Dataset(path, "r+") as dataset:
+        dataset.variables["longitude"][-1] = 400.0
+    with Dataset(path) as dataset:
+        checker = WCRPBaseCheck()
+        checker.setup(dataset)
+        result = check_lon_value_range(checker, severity=severity)[0]
+
+    assert any(f"It is {qualifier}" in message for message in result.msgs)
+
+
 def test_horizontal_axes_bounds_ignore_auxiliary_lat_lon_vertices(tmp_path):
     path = tmp_path / "rotated-grid.nc"
     with Dataset(path, "w") as dataset:

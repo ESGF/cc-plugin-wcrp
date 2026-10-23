@@ -10,6 +10,7 @@ if not hasattr(cfutil, "get_true_latitude_variables"):
     from compliance_checker import cfutil
 
 from checks.coordinate_checks.utils import (
+    TEXT_AUXILIARY_COORDINATE_NAME,
     coordinate_type,
     decode_character,
     direct_numeric_equal,
@@ -333,7 +334,7 @@ def validate_scalar(
 
 def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
     dimension_name = str(entry.get("out_name") or entry_id)
-    name = "sector"
+    name = TEXT_AUXILIARY_COORDINATE_NAME
     if name not in ds.variables:
         findings.add_prerequisite(
             "identity",
@@ -351,12 +352,12 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
             "associations",
             f"It is {findings.severity_word('associations')} for "
             f"'{data_var.name}' coordinates attribute to include text auxiliary "
-            "coordinate 'sector'.",
+            f"coordinate {name!r}.",
         )
     if var.ndim != 2 or not var.dimensions or var.dimensions[0] != dimension_name:
         findings.add(
             "identity",
-            f"It is {findings.severity_word('identity')} for 'sector' to be a "
+            f"It is {findings.severity_word('identity')} for {name!r} to be a "
             f"character array whose first dimension is "
             f"'{dimension_name}'; found {list(var.dimensions)}.",
         )
@@ -364,7 +365,7 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
         findings.add(
             "recommendations",
             f"The {findings.severity_word('recommendations')} string-length "
-            "dimension for 'sector' is 'strlen'; "
+            f"dimension for {name!r} is 'strlen'; "
             f"found {var.dimensions[1]!r}.",
         )
     check_dtype(findings, var, name, entry)
@@ -377,7 +378,7 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
         if missing:
             findings.add(
                 "requested_values",
-                f"'sector' is missing requested label(s) {missing}; found {actual}. "
+                f"{name!r} is missing requested label(s) {missing}; found {actual}. "
                 "Additional labels and any label order are allowed.",
             )
     return var
