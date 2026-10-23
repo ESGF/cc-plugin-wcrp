@@ -71,6 +71,7 @@ def check_id_attribute_consistency(
     value_attribute,
     term_field=None,
     collection_id=None,
+    missing_attributes_delegated=(),
 ):
     """Compare an attribute with a field on the term selected by its ID."""
     term_field = term_field or value_attribute
@@ -81,9 +82,19 @@ def check_id_attribute_consistency(
     )
 
     attributes = set(ds.ncattrs())
-    if id_attribute not in attributes or value_attribute not in attributes:
-        ctx.add_pass()
-        return [ctx.to_result()]
+    missing = [
+        name for name in (id_attribute, value_attribute) if name not in attributes
+    ]
+    if missing:
+        unowned = [
+            name for name in missing if name not in set(missing_attributes_delegated)
+        ]
+        for name in unowned:
+            ctx.add_failure(
+                f"Global attribute {name!r} is missing, so {id_attribute!r} "
+                f"could not be compared with {value_attribute!r}."
+            )
+        return [ctx.to_result()] if unowned else []
 
     identifier = str(ds.getncattr(id_attribute)).strip()
     actual = str(ds.getncattr(value_attribute)).strip()

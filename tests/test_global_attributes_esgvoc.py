@@ -10,7 +10,6 @@ from esgvoc.apps.ncattvalid import AttributeResult, GAReport
 
 from checks.attribute_checks.check_global_attributes_esgvoc import (
     check_global_attributes_esgvoc,
-    get_global_attribute_names,
     normalize_global_attributes,
 )
 from plugins import wcrp_base
@@ -122,6 +121,34 @@ def test_esgvoc_report_uses_toml_severity_and_ignores_extra_attributes():
     )
     assert failures[1].weight == BaseCheck.MEDIUM
     assert all("history" not in result.name for result in results)
+
+
+def test_esgvoc_report_omits_attributes_disabled_in_toml():
+    report = GAReport(
+        project_id="cmip7",
+        filename="example.nc",
+        missing=["source_id", "experiment_id"],
+        results=[
+            AttributeResult(
+                "activity_id",
+                False,
+                "invalid activity",
+                "WRONG",
+                "activity",
+            ),
+        ],
+    )
+
+    results = check_global_attributes_esgvoc(
+        FakeDataset({"activity_id": "WRONG"}),
+        "cmip7",
+        severity_by_attribute={"source_id": BaseCheck.MEDIUM},
+        enabled_attributes={"source_id"},
+        validator=FakeValidator(report),
+    )
+
+    assert len(results) == 1
+    assert "source_id" in results[0].name
 
 
 def test_esgvoc_string_array_results_are_grouped_by_attribute():
@@ -376,3 +403,18 @@ def test_base_routes_esgvoc_and_local_attributes_to_separate_checkers():
     assert results[0].weight == BaseCheck.MEDIUM
     assert results[-1].weight == BaseCheck.LOW
     assert all(not result.msgs for result in results)
+
+
+def test_empty_global_attribute_configuration_disables_validator(monkeypatch):
+    checker = WCRPBaseCheck()
+    checker.project_name = "cmip7"
+    checker.config = SimpleNamespace(
+        global_=SimpleNamespace(attributes={}),
+    )
+    monkeypatch.setattr(
+        wcrp_base,
+        "get_global_attribute_validator",
+        lambda _project: (_ for _ in ()).throw(AssertionError("must not load")),
+    )
+
+    assert checker._check_global_attributes(FakeDataset({})) == []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Literal, Union
 
 from pydantic import (
@@ -215,7 +216,7 @@ class DrsSection(BaseModel):
     directory: Optional[DrsRule] = None
     attributes_vs_directory: Optional[DrsRule] = None
     filename_vs_directory: Optional[DrsRule] = None
-    time_range: TimeRangeRule = Field(default_factory=TimeRangeRule)
+    time_range: Optional[TimeRangeRule] = None
     directory_template_keys: List[str] = Field(default_factory=list)
     filename_template_keys: List[str] = Field(default_factory=list)
 
@@ -250,6 +251,7 @@ class GlobalConsistency(BaseModel):
 
     # Frequency vs table (ATTR008)
     frequency_vs_table_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+    frequency_vs_branded_variable: Optional[ConsistencyRule] = None  # CMIP7 only
 
     # Variant label consistency, atomic (ATTR006a-d)
     variant_label_vs_realization_index: Optional[ConsistencyRule] = None
@@ -314,6 +316,33 @@ class CoordinateDirectionRule(CoordinateGlobalRule):
     check_formula_derived_profile: bool = True
 
 
+class CoordinateNominalResolutionRule(CoordinateGlobalRule):
+    """Restrict the not-applicable resolution value by horizontal layout."""
+
+    none_value: str = "None"
+    none_forbidden_horizontal_labels: list[str] = Field(default_factory=list)
+
+    @field_validator("none_value")
+    @classmethod
+    def validate_none_value(cls, value):
+        if not value:
+            raise ValueError("none_value must be a non-empty string")
+        return value
+
+    @field_validator("none_forbidden_horizontal_labels")
+    @classmethod
+    def validate_horizontal_labels(cls, values):
+        if any(not value for value in values):
+            raise ValueError(
+                "none_forbidden_horizontal_labels may not contain empty values"
+            )
+        if len(set(values)) != len(values):
+            raise ValueError(
+                "none_forbidden_horizontal_labels may not contain duplicates"
+            )
+        return values
+
+
 class CoordinateAttributesRule(CoordinateGlobalRule):
     """Controls exceptions to strict coordinate-attribute absence rules."""
 
@@ -321,8 +350,73 @@ class CoordinateAttributesRule(CoordinateGlobalRule):
     allowed_when_unset_severity: Optional[str] = "L"
 
 
+class CoordinateAssociationRule(CoordinateGlobalRule):
+    """Controls auxiliary-coordinate associations required by coordinate types."""
+
+    unstructured_latitude_longitude_for: list[str] = Field(default_factory=list)
+
+    @field_validator("unstructured_latitude_longitude_for")
+    @classmethod
+    def validate_coordinate_types(cls, values):
+        if any(not value for value in values):
+            raise ValueError(
+                "unstructured_latitude_longitude_for may not contain empty values"
+            )
+        if len(set(values)) != len(values):
+            raise ValueError(
+                "unstructured_latitude_longitude_for may not contain duplicates"
+            )
+        return values
+
+
+class CoordinateMissingValueAttributesRule(BaseModel):
+    """Policy for missing-value attributes on verified coordinates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Presence/value policy for numeric auxiliary coordinates.
+    severity: Optional[str] = None
+    # NaN values and disagreement between the two attributes.
+    integrity_severity: Optional[str] = None
+    # Missing-value attributes prohibited for scalar/character coordinates.
+    prohibited_severity: Optional[str] = None
+    required_for_auxiliary: bool = False
+    expected_values_by_data_type: Dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("expected_values_by_data_type")
+    @classmethod
+    def validate_expected_values(cls, values):
+        allowed = {"real", "double"}
+        unexpected = set(values) - allowed
+        if unexpected:
+            raise ValueError(
+                "expected_values_by_data_type supports only "
+                f"{sorted(allowed)}; found {sorted(unexpected)}"
+            )
+        if any(not math.isfinite(value) for value in values.values()):
+            raise ValueError("configured missing values must be finite")
+        return values
+
+    @model_validator(mode="after")
+    def at_least_one_result_family(self):
+        if (
+            self.severity is None
+            and self.integrity_severity is None
+            and self.prohibited_severity is None
+        ):
+            raise ValueError(
+                "missing-value attribute checking requires severity or "
+                "integrity_severity or prohibited_severity"
+            )
+        if self.required_for_auxiliary and self.severity is None:
+            raise ValueError(
+                "required_for_auxiliary requires the configured-value severity"
+            )
+        return self
+
+
 class CoordinateBoundsNameRule(CoordinateGlobalRule):
-    """Recommended names for bounds-related dimensions."""
+    """Configured names for bounds-related variables and dimensions."""
 
     bounds_dimension_name: str = "bnds"
     vertices_dimension_name: str = "vertices"
@@ -357,6 +451,8 @@ class TimeCoverageRule(BaseModel):
 class CalendarRecommendationRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Optional[str] = None
+    discouraged_values: List[str] = Field(default_factory=lambda: ["standard"])
+    preferred_value: str = "proleptic_gregorian"
 
 
 class CoordinateRegistrySection(BaseModel):
@@ -376,6 +472,8 @@ class CoordinateRegistrySection(BaseModel):
     recommendations: Optional[CoordinateGlobalRule] = None
     direction: Optional[CoordinateDirectionRule] = None
     valid_range: Optional[CoordinateGlobalRule] = None
+    missing_value_attributes: Optional[CoordinateMissingValueAttributesRule] = None
+    grid_geometry_missing_values: Optional[CoordinateGlobalRule] = None
     grid_latitude_valid_range: Optional[CoordinateGlobalRule] = None
     grid_longitude_valid_range: Optional[CoordinateGlobalRule] = None
     grid_longitude_single_cycle: Optional[CoordinateGlobalRule] = None
@@ -384,10 +482,12 @@ class CoordinateRegistrySection(BaseModel):
     grid_label_recommendation: Optional[CoordinateGlobalRule] = None
     grid_cell_count_availability: Optional[CoordinateGlobalRule] = None
     grid_cell_count_consistency: Optional[CoordinateGlobalRule] = None
+    nominal_resolution: Optional[CoordinateNominalResolutionRule] = None
     requested_values: Optional[CoordinateGlobalRule] = None
     bounds: Optional[CoordinateGlobalRule] = None
     bounds_name: Optional[CoordinateBoundsNameRule] = None
-    associations: Optional[CoordinateGlobalRule] = None
+    bounds_name_recommendations: Optional[CoordinateGlobalRule] = None
+    associations: Optional[CoordinateAssociationRule] = None
     grid: Optional[CoordinateGridRule] = None
     formula: Optional[CoordinateGlobalRule] = None
 

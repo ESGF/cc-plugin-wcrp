@@ -14,6 +14,7 @@ BRANDED_VARIABLE_FIELDS = [
     "units",
     "cf_units",
     "dimensions",
+    "frequency",
     "cell_methods",
     "cell_measures",
     "comment",
@@ -36,6 +37,9 @@ class ExpectedVariableMetadata:
     cf_standard_name: str | None = None
     units: str | None = None
     dimensions: list[str] | None = None
+    coordinate_out_names: dict[str, str] | None = None
+    coordinate_bounds_required: dict[str, bool] | None = None
+    frequency: list[str] | None = None
     cell_methods: str | list[str] | None = None
     cell_measures: str | list[str] | None = None
     comment: str | list[str] | None = None
@@ -101,6 +105,33 @@ def _time_is_climatology(values: Any) -> bool | None:
     return bool(_value(time_coordinates[0], "is_climatology", False))
 
 
+def _coordinate_out_names(values: Any) -> dict[str, str] | None:
+    resolved = {}
+    for value in values or []:
+        if isinstance(value, str):
+            continue
+        identifier = _reference_id(value)
+        out_name = _nonempty(_value(value, "out_name"))
+        if identifier and out_name:
+            resolved[identifier] = str(out_name)
+    return resolved or None
+
+
+def _coordinate_bounds_required(values: Any) -> dict[str, bool] | None:
+    resolved = {}
+    for value in values or []:
+        if isinstance(value, str):
+            continue
+        identifier = _reference_id(value)
+        required = _value(value, "bounds_required")
+        if not identifier or required is None:
+            continue
+        if isinstance(required, str):
+            required = required.strip().lower() in {"true", "yes", "1"}
+        resolved[identifier] = bool(required)
+    return resolved or None
+
+
 def normalize_known_branded_variable(
     term: Any,
     *,
@@ -117,6 +148,9 @@ def normalize_known_branded_variable(
         cf_standard_name=_nonempty(_value(term, "cf_standard_name")),
         units=units,
         dimensions=_reference_ids(dimensions),
+        coordinate_out_names=_coordinate_out_names(dimensions),
+        coordinate_bounds_required=_coordinate_bounds_required(dimensions),
+        frequency=_reference_ids(_value(term, "frequency")),
         cell_methods=_nonempty(_value(term, "cell_methods")),
         cell_measures=_nonempty(_value(term, "cell_measures")),
         comment=_nonempty(_value(term, "comment")),

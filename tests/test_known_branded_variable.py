@@ -28,6 +28,7 @@ NEW_RECORD = {
     "long_name": "Near-Surface Air Temperature",
     "out_name": "tas",
     "dimensions": ["time", "latitude", "longitude"],
+    "frequency": ["mon", "day"],
     "cell_methods": "area: time: mean",
     "cell_measures": "area: areacella",
     "flag_values": None,
@@ -54,6 +55,7 @@ def test_new_known_branded_variable_uses_canonical_fields_directly():
     assert lookup.expected.cf_units == "K"
     assert lookup.expected.long_name == "Near-Surface Air Temperature"
     assert lookup.expected.out_name == "tas"
+    assert lookup.expected.frequency == ["mon", "day"]
     assert len(calls) == 1
 
 
@@ -94,6 +96,38 @@ def test_resolved_time_coordinate_supplies_climatology_flag(is_climatology):
     expected = normalize_known_branded_variable(record)
 
     assert expected.time_is_climatology is is_climatology
+
+
+def test_resolved_coordinates_preserve_output_names_and_bounds_requirements():
+    record = {
+        **NEW_RECORD,
+        "dimensions": [
+            SimpleNamespace(
+                id="alevel",
+                out_name="lev",
+                axis="Z",
+                bounds_required=False,
+            ),
+            SimpleNamespace(
+                id="latitude",
+                out_name="lat",
+                axis="Y",
+                bounds_required=True,
+            ),
+        ],
+    }
+
+    expected = normalize_known_branded_variable(record)
+
+    assert expected.dimensions == ["alevel", "latitude"]
+    assert expected.coordinate_out_names == {
+        "alevel": "lev",
+        "latitude": "lat",
+    }
+    assert expected.coordinate_bounds_required == {
+        "alevel": False,
+        "latitude": True,
+    }
 
 
 def test_legacy_known_branded_variable_maps_units_and_looks_up_long_name():
