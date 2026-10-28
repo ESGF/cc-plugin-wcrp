@@ -30,6 +30,14 @@ The **cc-plugin-wcrp**  provides plugins that call automated **quality and consi
 ```bash
 pip install cc-plugin-wcrp
 ```
+**Conda-forge Installation**
+
+To install from [conda-forge](https://anaconda.org/conda-forge/cc-plugin-wcrp) in a new conda environment (for example, `cc-wcrp`):
+
+```bash
+conda create -n cc-wcrp -c conda-forge cc-plugin-wcrp
+conda activate cc-wcrp
+```
 **Pip Installation from source**
 
 Clone the repository and cd into the repository folder, then:
@@ -39,9 +47,15 @@ pip install -e .
 ```
 **Esgvoc Installation**
 
-If you have an old version of `esgvoc`, you should upgrade it:
+If you have an old version of `esgvoc`, you should upgrade it using the same package manager.
+
+With pip:
 ```bash
 pip install esgvoc --upgrade
+```
+With conda:
+```bash
+conda update -c conda-forge esgvoc
 ```
 Then, use the commands below to activate the project you want:
 ```bash
@@ -56,6 +70,36 @@ The projects currently available  in both 'cc_plugin_wcrp' and 'esgvoc' are:
 cmip6, cmip6plus, cmip7 and cordex-cmip6 
 
 ```
+### Advanced: Installing pre-release versions
+
+Beta and release candidate versions are available for testing upcoming changes before a stable release.
+
+**Using pip (PyPI)**
+
+To install a specific pre-release (for example, `2.4.0b2`):
+
+```bash
+pip install "cc-plugin-wcrp==2.4.0b2"
+```
+
+**Using conda (conda-forge)**
+
+Pre-release versions are available under the dedicated `cc-plugin-wcrp_rc` label.
+
+To install a specific pre-release in a new conda environment:
+
+```bash
+conda create -n cc-wcrp-beta \
+  -c conda-forge/label/cc-plugin-wcrp_rc \
+  -c conda-forge \
+  "cc-plugin-wcrp=2.4.0b2"
+
+conda activate cc-wcrp-beta
+```
+
+Available pre-release packages can be found on [Anaconda.org](https://anaconda.org/conda-forge/repo?label=cc-plugin-wcrp_rc).
+
+Pre-release versions are intended for testing. Make sure to use compatible ESGVOC project specifications, as described above.
 
 ## Usage
 
