@@ -428,8 +428,13 @@ def test_cmip7_project_reports_valid_additional_region(tmp_path, monkeypatch):
 
     class Api:
         @staticmethod
-        def get_term_in_collection(*_args, **_kwargs):
-            return {"id": "ata"}
+        def valid_term_in_collection(value, project_id, collection_id):
+            assert (value, project_id, collection_id) == (
+                "ata",
+                "cmip7",
+                "region",
+            )
+            return ["antarctica"]
 
     monkeypatch.setattr(cmip7_module, "esgvoc_api", Api())
     with Dataset(tmp_path / "cmip7-additional-region.nc", "w") as dataset:
@@ -441,6 +446,60 @@ def test_cmip7_project_reports_valid_additional_region(tmp_path, monkeypatch):
     assert len(failures) == 1
     assert failures[0].name.startswith("[ATTR012]")
     assert failures[0].weight == BaseCheck.LOW
+
+
+def test_cmip7_region_check_accepts_drs_name_distinct_from_term_id(
+    tmp_path, monkeypatch
+):
+    checker = Cmip7ProjectCheck()
+    checker.config = WCRPConfig.model_validate(
+        {
+            "project_name": "cmip7",
+            "project_version": "1.0",
+            "global": {
+                "attributes": {
+                    "region": {"severity": "H"},
+                    "branded_variable": {"severity": "H"},
+                },
+                "consistency": {
+                    "region_vs_branded_variable": {"severity": "L"}
+                },
+            },
+        }
+    )
+    checker._coordinate_catalog = Catalog(
+        project_id="cmip7",
+        branded_variable_id="intdic_tavg-u-hxy-sea",
+        branded_variable={
+            "id": "intdic_tavg-u-hxy-sea",
+            "compound_name": [
+                "ocnBgchem.intdic.tavg-u-hxy-sea.mon.30S-90S"
+            ],
+        },
+        coordinate_ids=(),
+    )
+
+    class Api:
+        @staticmethod
+        def valid_term_in_collection(value, project_id, collection_id):
+            assert (value, project_id, collection_id) == (
+                "glb",
+                "cmip7",
+                "region",
+            )
+            # ESGVoc resolves drs_name="glb" to term_id="global".
+            return ["global"]
+
+    monkeypatch.setattr(cmip7_module, "esgvoc_api", Api())
+    with Dataset(tmp_path / "cmip7-region-drs-name.nc", "w") as dataset:
+        dataset.region = "glb"
+        dataset.branded_variable = "intdic_tavg-u-hxy-sea"
+        results = checker.check_Global_Consistency(dataset)
+
+    failures = [result for result in results if result.msgs]
+    assert len(failures) == 1
+    assert failures[0].name.startswith("[ATTR012]")
+    assert "['30S-90S']" in failures[0].msgs[0]
 
 
 def test_cmip7_region_check_uses_registry_when_coordinate_catalog_is_disabled(
@@ -473,8 +532,16 @@ def test_cmip7_region_check_uses_registry_when_coordinate_catalog_is_disabled(
                     "long_name": ["Near-Surface Air Temperature"],
                     "compound_name": ["atmos.tas.tavg-h2m-hxy-u.mon.glb"],
                 }
-            assert args[1] == "region"
-            return {"id": "ata"}
+            raise AssertionError("Unexpected positional term lookup")
+
+        @staticmethod
+        def valid_term_in_collection(value, project_id, collection_id):
+            assert (value, project_id, collection_id) == (
+                "ata",
+                "cmip7",
+                "region",
+            )
+            return ["antarctica"]
 
     monkeypatch.setattr(cmip7_module, "esgvoc_api", Api())
     with Dataset(tmp_path / "cmip7-registry-region.nc", "w") as dataset:

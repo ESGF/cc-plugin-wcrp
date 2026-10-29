@@ -1034,14 +1034,17 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                         region_error = "the ESGVoc API is unavailable"
                     else:
                         try:
-                            region_is_registered = (
-                                esgvoc_api.get_term_in_collection(
+                            # File metadata contains the drs_name (for
+                            # example ``glb``), which is not necessarily the
+                            # ESGVoc id (``global``). Validation thus happens
+                            # through the public vocabulary API which accepts
+                            # both, id and drs_name.
+                            region_is_registered = bool(
+                                esgvoc_api.valid_term_in_collection(
+                                    region,
                                     self.project_name,
                                     "region",
-                                    region,
-                                    ["id"],
                                 )
-                                is not None
                             )
                         except Exception as exc:
                             region_error = f"{type(exc).__name__}: {exc}"
