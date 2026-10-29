@@ -48,6 +48,10 @@ from checks.consistency_checks.check_institution_source_consistency import (
 from checks.consistency_checks.check_frequency_branded_variable_consistency import (
     check_frequency_branded_variable_consistency,
 )
+from checks.consistency_checks.check_region_branded_variable_consistency import (
+    check_region_branded_variable_consistency,
+    infer_regions_from_compound_names,
+)
 from checks.consistency_checks.check_variant_label_consistency import (
     check_variant_vs_realization_index,
     check_variant_vs_initialization_index,
@@ -965,6 +969,97 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     ),
                     frequency_is_registered=frequency_is_registered,
                     frequency_error=frequency_error,
+                    metadata_error=metadata_error,
+                    metadata_error_delegated=metadata_error_delegated,
+                )
+            )
+
+        # --- Region vs branded variable (ATTR012) ---
+        if c.region_vs_branded_variable:
+            sev = self.get_severity(c.region_vs_branded_variable.severity)
+            catalog_owner = coordinate_catalog_required(self.config)
+            registry_owner = self._variable_registry_owns(sev)
+            missing_delegated = {
+                name
+                for name in ("region", "branded_variable")
+                if self._global_attribute_owns(name, sev)
+            }
+            if catalog_owner or registry_owner:
+                missing_delegated.add("branded_variable")
+
+            expected_regions = None
+            branded_id = getattr(ds, "branded_variable", None)
+            metadata_error = None
+            metadata_error_delegated = False
+            region_is_registered = True
+            region_error = None
+
+            if all(
+                name in ds.ncattrs()
+                for name in ("region", "branded_variable")
+            ):
+                if self._coordinate_catalog is not None:
+                    branded_id = self._coordinate_catalog.branded_variable_id
+                    expected_regions = infer_regions_from_compound_names(
+                        self._coordinate_catalog.branded_variable.get("compound_name")
+                    )
+                elif catalog_owner:
+                    metadata_error = self._coordinate_setup_error or (
+                        "the coordinate catalogue is unavailable"
+                    )
+                    metadata_error_delegated = True
+                else:
+                    expected, registry_results = self._get_expected_from_registry(
+                        ds, sev
+                    )
+                    if expected is not None:
+                        branded_id = expected.id or branded_id
+                        expected_regions = infer_regions_from_compound_names(
+                            expected.compound_name
+                        )
+                    else:
+                        messages = [
+                            message
+                            for result in registry_results
+                            for message in result.msgs
+                        ]
+                        metadata_error = "; ".join(messages) or (
+                            "the branded-variable record is unavailable"
+                        )
+                        metadata_error_delegated = registry_owner
+
+                region = str(ds.getncattr("region")).strip()
+                if expected_regions and region not in expected_regions:
+                    if esgvoc_api is None:
+                        region_error = "the ESGVoc API is unavailable"
+                    else:
+                        try:
+                            region_is_registered = (
+                                esgvoc_api.get_term_in_collection(
+                                    self.project_name,
+                                    "region",
+                                    region,
+                                    ["id"],
+                                )
+                                is not None
+                            )
+                        except Exception as exc:
+                            region_error = f"{type(exc).__name__}: {exc}"
+
+            res.extend(
+                check_region_branded_variable_consistency(
+                    ds,
+                    expected_regions,
+                    sev,
+                    project_label="CMIP7",
+                    branded_variable_id=branded_id,
+                    missing_attributes_delegated=missing_delegated,
+                    invalid_region_delegated=(
+                        self._global_attribute_owns("region", sev)
+                        or self._esgvoc_project_setup_error is not None
+                    ),
+                    region_is_registered=region_is_registered,
+                    region_error=region_error,
                     metadata_error=metadata_error,
                     metadata_error_delegated=metadata_error_delegated,
                 )

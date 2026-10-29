@@ -249,9 +249,10 @@ class GlobalConsistency(BaseModel):
     driving_source_id_vs_driving_source: Optional[ConsistencyRule] = None
     source_id_vs_institution_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
 
-    # Frequency vs table (ATTR008)
+    # Data Request associations
     frequency_vs_table_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
-    frequency_vs_branded_variable: Optional[ConsistencyRule] = None  # CMIP7 only
+    frequency_vs_branded_variable: Optional[ConsistencyRule] = None # CMIP7 only
+    region_vs_branded_variable: Optional[ConsistencyRule] = None # CMIP7 only
 
     # Variant label consistency, atomic (ATTR006a-d)
     variant_label_vs_realization_index: Optional[ConsistencyRule] = None

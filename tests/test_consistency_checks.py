@@ -11,6 +11,10 @@ from checks.consistency_checks.check_attributes_match_filename import (
 from checks.consistency_checks.check_frequency_branded_variable_consistency import (
     check_frequency_branded_variable_consistency,
 )
+from checks.consistency_checks.check_region_branded_variable_consistency import (
+    check_region_branded_variable_consistency,
+    infer_regions_from_compound_names,
+)
 from checks.consistency_checks.check_frequency_table_consistency import (
     check_frequency_table_id_consistency,
 )
@@ -43,7 +47,10 @@ _CMIP6_FUNCTIONS = (
     "check_frequency_table_id_consistency",
 )
 
-_CMIP7_FUNCTIONS = ("check_frequency_branded_variable_consistency",)
+_CMIP7_FUNCTIONS = (
+    "check_frequency_branded_variable_consistency",
+    "check_region_branded_variable_consistency",
+)
 
 _VARIANT_FUNCTIONS = (
     "check_variant_vs_realization_index",
@@ -281,6 +288,73 @@ def test_cmip7_absent_branded_variable_frequency_list_is_silent(tmp_path):
     assert results == []
 
 
+def test_regions_are_inferred_from_registered_compound_names():
+    assert infer_regions_from_compound_names(
+        [
+            "atmos.tas.tavg-h2m-hxy-u.mon.glb",
+            "atmos.tas.tavg-h2m-hxy-u.day.ata",
+            "atmos.tas.tavg-h2m-hxy-u.6hr.glb",
+        ]
+    ) == ["glb", "ata"]
+
+
+@pytest.mark.parametrize(
+    "compound_names",
+    [None, [], ["not-a-compound-name"], ["valid.enough.glb", "invalid"]],
+)
+def test_region_inference_rejects_incomplete_compound_metadata(compound_names):
+    assert infer_regions_from_compound_names(compound_names) is None
+
+
+def test_cmip7_additional_branded_variable_region_is_low(tmp_path):
+    with Dataset(tmp_path / "additional-region.nc", "w") as dataset:
+        dataset.region = "ata"
+        dataset.branded_variable = "tas_tavg-h2m-hxy-u"
+        results = check_region_branded_variable_consistency(
+            dataset,
+            ["glb"],
+            BaseCheck.LOW,
+            project_label="CMIP7",
+        )
+
+    assert len(results) == 1
+    assert results[0].name.startswith("[ATTR012]")
+    assert results[0].weight == BaseCheck.LOW
+    assert results[0].value[0] < results[0].value[1]
+    assert "registered compound names are ['glb']" in results[0].msgs[0]
+    assert "Submission for additional regions is allowed" in results[0].msgs[0]
+
+
+def test_cmip7_registered_branded_variable_region_passes(tmp_path):
+    with Dataset(tmp_path / "registered-region.nc", "w") as dataset:
+        dataset.region = "glb"
+        dataset.branded_variable = "tas_tavg-h2m-hxy-u"
+        results = check_region_branded_variable_consistency(
+            dataset,
+            ["glb", "ata"],
+            BaseCheck.LOW,
+            project_label="CMIP7",
+        )
+
+    assert len(results) == 1
+    assert results[0].value[0] == results[0].value[1]
+    assert results[0].msgs == []
+
+
+def test_unavailable_branded_variable_regions_are_silent(tmp_path):
+    with Dataset(tmp_path / "unavailable-region-list.nc", "w") as dataset:
+        dataset.region = "glb"
+        dataset.branded_variable = "tas_tavg-h2m-hxy-u"
+        results = check_region_branded_variable_consistency(
+            dataset,
+            None,
+            BaseCheck.LOW,
+            project_label="CMIP7",
+        )
+
+    assert results == []
+
+
 def test_cmip7_project_reports_valid_additional_frequency(tmp_path, monkeypatch):
     checker = Cmip7ProjectCheck()
     checker.config = WCRPConfig.model_validate(
@@ -323,6 +397,95 @@ def test_cmip7_project_reports_valid_additional_frequency(tmp_path, monkeypatch)
     assert len(failures) == 1
     assert failures[0].name.startswith("[ATTR008]")
     assert failures[0].weight == BaseCheck.LOW
+
+
+def test_cmip7_project_reports_valid_additional_region(tmp_path, monkeypatch):
+    checker = Cmip7ProjectCheck()
+    checker.config = WCRPConfig.model_validate(
+        {
+            "project_name": "cmip7",
+            "project_version": "1.0",
+            "global": {
+                "attributes": {
+                    "region": {"severity": "H"},
+                    "branded_variable": {"severity": "H"},
+                },
+                "consistency": {
+                    "region_vs_branded_variable": {"severity": "L"}
+                },
+            },
+        }
+    )
+    checker._coordinate_catalog = Catalog(
+        project_id="cmip7",
+        branded_variable_id="tas_tavg-h2m-hxy-u",
+        branded_variable={
+            "id": "tas_tavg-h2m-hxy-u",
+            "compound_name": ["atmos.tas.tavg-h2m-hxy-u.mon.glb"],
+        },
+        coordinate_ids=(),
+    )
+
+    class Api:
+        @staticmethod
+        def get_term_in_collection(*_args, **_kwargs):
+            return {"id": "ata"}
+
+    monkeypatch.setattr(cmip7_module, "esgvoc_api", Api())
+    with Dataset(tmp_path / "cmip7-additional-region.nc", "w") as dataset:
+        dataset.region = "ata"
+        dataset.branded_variable = "tas_tavg-h2m-hxy-u"
+        results = checker.check_Global_Consistency(dataset)
+
+    failures = [result for result in results if result.msgs]
+    assert len(failures) == 1
+    assert failures[0].name.startswith("[ATTR012]")
+    assert failures[0].weight == BaseCheck.LOW
+
+
+def test_cmip7_region_check_uses_registry_when_coordinate_catalog_is_disabled(
+    tmp_path, monkeypatch
+):
+    checker = Cmip7ProjectCheck()
+    checker.config = WCRPConfig.model_validate(
+        {
+            "project_name": "cmip7",
+            "project_version": "1.0",
+            "global": {
+                "attributes": {
+                    "region": {"severity": "H"},
+                    "branded_variable": {"severity": "H"},
+                },
+                "consistency": {
+                    "region_vs_branded_variable": {"severity": "L"}
+                },
+            },
+        }
+    )
+
+    class Api:
+        @staticmethod
+        def get_term_in_collection(*args, **kwargs):
+            if kwargs:
+                assert kwargs["collection_id"] == "branded_variable"
+                return {
+                    "id": "tas_tavg-h2m-hxy-u",
+                    "long_name": ["Near-Surface Air Temperature"],
+                    "compound_name": ["atmos.tas.tavg-h2m-hxy-u.mon.glb"],
+                }
+            assert args[1] == "region"
+            return {"id": "ata"}
+
+    monkeypatch.setattr(cmip7_module, "esgvoc_api", Api())
+    with Dataset(tmp_path / "cmip7-registry-region.nc", "w") as dataset:
+        dataset.region = "ata"
+        dataset.branded_variable = "tas_tavg-h2m-hxy-u"
+        dataset.variable_id = "tas"
+        results = checker.check_Global_Consistency(dataset)
+
+    failures = [result for result in results if result.msgs]
+    assert len(failures) == 1
+    assert failures[0].name.startswith("[ATTR012]")
 
 
 @pytest.mark.parametrize(

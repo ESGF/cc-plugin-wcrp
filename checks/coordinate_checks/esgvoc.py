@@ -258,6 +258,7 @@ def load_catalog(
                 "variable_root_name",
                 "dimensions",
                 "frequency",
+                "compound_name",
                 "cell_methods",
                 "horizontal_label",
             ],

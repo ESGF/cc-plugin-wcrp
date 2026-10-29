@@ -168,6 +168,7 @@ def test_catalog_reads_each_coordinate_collection_once():
             assert project == "cmip7"
             assert descriptor == "branded_variable"
             assert "cell_methods" in fields
+            assert "compound_name" in fields
             assert "horizontal_label" in fields
             self.calls.append(("one", descriptor))
             return {
@@ -175,6 +176,7 @@ def test_catalog_reads_each_coordinate_collection_once():
                 "out_name": "ta",
                 "dimensions": ["time1"],
                 "cell_methods": ["area: time: mean", "area: mean time: mean"],
+                "compound_name": ["atmos.ta.ti-u-hxy-air.mon.glb"],
                 "horizontal_label": {"id": "hxy"},
             }
 
@@ -190,6 +192,9 @@ def test_catalog_reads_each_coordinate_collection_once():
     assert result.branded_variable["cell_methods"] == [
         "area: time: mean",
         "area: mean time: mean",
+    ]
+    assert result.branded_variable["compound_name"] == [
+        "atmos.ta.ti-u-hxy-air.mon.glb"
     ]
     assert result.branded_variable["horizontal_label"] == {"id": "hxy"}
     assert api.calls.count(("one", "branded_variable")) == 1

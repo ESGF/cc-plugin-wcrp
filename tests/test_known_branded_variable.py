@@ -29,6 +29,7 @@ NEW_RECORD = {
     "out_name": "tas",
     "dimensions": ["time", "latitude", "longitude"],
     "frequency": ["mon", "day"],
+    "compound_name": ["atmos.tas.ti-u-hxy-air.mon.glb"],
     "cell_methods": "area: time: mean",
     "cell_measures": "area: areacella",
     "flag_values": None,
@@ -56,6 +57,7 @@ def test_new_known_branded_variable_uses_canonical_fields_directly():
     assert lookup.expected.long_name == "Near-Surface Air Temperature"
     assert lookup.expected.out_name == "tas"
     assert lookup.expected.frequency == ["mon", "day"]
+    assert lookup.expected.compound_name == ["atmos.tas.ti-u-hxy-air.mon.glb"]
     assert len(calls) == 1
 
 
@@ -77,6 +79,7 @@ def test_new_known_branded_variable_preserves_list_metadata():
     ]
     assert expected.cell_measures == ["area: areacella"]
     assert expected.comment == ["Air temperature comment", "Alternative comment"]
+    assert expected.compound_name == ["atmos.tas.ti-u-hxy-air.mon.glb"]
 
 
 @pytest.mark.parametrize("is_climatology", [False, True])
@@ -374,6 +377,7 @@ def test_cmip7_registry_lookup_uses_project_branded_variable_collection(monkeypa
     assert results == []
     assert expected.long_name == "Near-Surface Air Temperature"
     assert expected.cell_measures == "area: areacella"
+    assert expected.compound_name == ["atmos.tas.ti-u-hxy-air.mon.glb"]
     assert len(calls) == 1
 
 

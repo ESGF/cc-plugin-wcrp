@@ -15,6 +15,7 @@ BRANDED_VARIABLE_FIELDS = [
     "cf_units",
     "dimensions",
     "frequency",
+    "compound_name",
     "cell_methods",
     "cell_measures",
     "comment",
@@ -40,6 +41,7 @@ class ExpectedVariableMetadata:
     coordinate_out_names: dict[str, str] | None = None
     coordinate_bounds_required: dict[str, bool] | None = None
     frequency: list[str] | None = None
+    compound_name: list[str] | None = None
     cell_methods: str | list[str] | None = None
     cell_measures: str | list[str] | None = None
     comment: str | list[str] | None = None
@@ -91,6 +93,16 @@ def _reference_ids(values: Any) -> list[str] | None:
     if values is None:
         return None
     return [identifier for value in values if (identifier := _reference_id(value))]
+
+
+def _string_values(values: Any) -> list[str] | None:
+    """Normalize optional scalar or list-valued strings."""
+    if values is None:
+        return None
+    if isinstance(values, str):
+        values = [values]
+    normalized = [str(value).strip() for value in values if str(value).strip()]
+    return normalized or None
 
 
 def _time_is_climatology(values: Any) -> bool | None:
@@ -151,6 +163,7 @@ def normalize_known_branded_variable(
         coordinate_out_names=_coordinate_out_names(dimensions),
         coordinate_bounds_required=_coordinate_bounds_required(dimensions),
         frequency=_reference_ids(_value(term, "frequency")),
+        compound_name=_string_values(_value(term, "compound_name")),
         cell_methods=_nonempty(_value(term, "cell_methods")),
         cell_measures=_nonempty(_value(term, "cell_measures")),
         comment=_nonempty(_value(term, "comment")),
