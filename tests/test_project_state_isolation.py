@@ -23,6 +23,27 @@ class _Attributes:
 
 
 @pytest.mark.parametrize(
+    ("checker_class", "discouraged_values"),
+    [
+        (C3SCmip6ProjectCheck, ["standard", "gregorian"]),
+        (Cmip6ProjectCheck, ["standard", "gregorian"]),
+        (Cmip6PlusProjectCheck, ["standard", "gregorian"]),
+        (Cmip7ProjectCheck, ["standard"]),
+        (CordexCmip6ProjectCheck, ["standard"]),
+    ],
+)
+def test_project_calendar_recommendations_preserve_existing_policy(
+    checker_class,
+    discouraged_values,
+):
+    checker = checker_class()
+    checker._load_split_config()
+
+    rule = checker.config.coordinates.variables["time"].calendar_recommendation
+    assert rule.discouraged_values == discouraged_values
+
+
+@pytest.mark.parametrize(
     "order",
     [
         ("cmip6", "cmip7", "cordex"),
@@ -86,8 +107,8 @@ def test_geophysical_variable_cache_is_not_reused_for_another_dataset(monkeypatc
         (
             ["tas", "areacella"],
             "pr",
+            "pr",
             None,
-            "variable_id='pr' is not among the detected candidates",
         ),
         (
             ["tas", "areacella"],

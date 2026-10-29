@@ -164,6 +164,14 @@ severity = "M"
 # ATTR009
 severity = "M"
 
+[global.consistency.frequency_vs_branded_variable]
+# ATTR008: additional frequencies remain permitted under this Low policy.
+severity = "L"
+
+[global.consistency.region_vs_branded_variable]
+# ATTR012: additional regions remain permitted under this Low policy.
+severity = "L"
+
 [global.consistency.variant_label_vs_realization_index]
 # ATTR006a
 severity = "H"

@@ -97,7 +97,7 @@ def test_descriptive_attributes_are_checked_against_their_own_ids(
             assert f"{collection_id}={identifier!r}" in _messages(failing)[0]
 
 
-def test_descriptive_consistency_passes_when_either_attribute_is_missing(tmp_path):
+def test_descriptive_consistency_defers_missing_attributes_to_attr001(tmp_path):
     pairs = (
         ("institution_id", "institution"),
         ("source_id", "source"),
@@ -117,6 +117,10 @@ def test_descriptive_consistency_passes_when_either_attribute_is_missing(tmp_pat
                     project_id="cordex-cmip6",
                     id_attribute=id_attribute,
                     value_attribute=value_attribute,
+                    missing_attributes_delegated={
+                        id_attribute,
+                        value_attribute,
+                    },
                 )
             assert _messages(results) == []
 
@@ -540,10 +544,12 @@ def _add_supported_horizontal_grid(dataset, layout):
             variable.axis = "Y" if name == "lat" else "X"
             variable[:] = np.arange(variable.size, dtype="float64")
         else:
+            variable[:] = 0.0
             variable.bounds = f"vertices_{name}"
-            dataset.createVariable(
+            vertices = dataset.createVariable(
                 f"vertices_{name}", "f8", dimensions + ("vertices",)
             )
+            vertices[:] = 0.0
 
     data = dataset.createVariable("tas", "f4", dimensions)
     data.coordinates = "lat lon"
@@ -604,6 +610,26 @@ def test_cordex_catalogue_topology_check_is_enabled_in_toml():
 
     assert checker.config.coordinates.registry.grid.severity == "H"
     assert checker.config.coordinates.registry.grid.require_explicit_grid_axes is True
+    assert checker.config.coordinates.registry.grid_geometry_missing_values.severity == "H"
+    assert (
+        checker.config.coordinates.registry.associations.unstructured_latitude_longitude_for
+        == []
+    )
+
+
+def test_cordex_config_sets_optional_auxiliary_missing_value_policy():
+    checker = CordexCmip6ProjectCheck()
+    checker._load_split_config()
+    rule = checker.config.coordinates.registry.missing_value_attributes
+
+    assert rule.severity == "M"
+    assert rule.integrity_severity == "H"
+    assert rule.prohibited_severity == "H"
+    assert rule.required_for_auxiliary is False
+    assert rule.expected_values_by_data_type == {
+        "real": 1.0e20,
+        "double": 1.0e20,
+    }
 
 
 def test_cordex_enabled_topology_ignores_free_text_grid_attributes(
@@ -803,20 +829,39 @@ def test_cordex_drs_uses_project_templates(tmp_path, monkeypatch):
     with Dataset(tmp_path / "tas.nc", "w") as dataset:
         checker.check_DRS(dataset)
 
+    path001_delegated = checker._global_attributes_owning(
+        checker.get_severity(drs.attributes_vs_directory.severity)
+    )
+    path002_delegated = checker._global_attributes_owning(
+        checker.get_severity(drs.filename_vs_directory.severity)
+    )
     assert captured == [
         {
             "project_id": "cordex-cmip6",
             "dir_template_keys": drs.directory_template_keys,
             "filename_template_keys": drs.filename_template_keys,
             "report_directory_structure_error": True,
+            "missing_attributes_delegated": path001_delegated,
         },
         {
             "project_id": "cordex-cmip6",
             "dir_template_keys": drs.directory_template_keys,
             "filename_template_keys": drs.filename_template_keys,
             "report_directory_structure_error": False,
+            "missing_attributes_delegated": path002_delegated,
         },
     ]
+
+
+def test_compression_defers_missing_data_variable_to_variable_suite(tmp_path):
+    checker = CordexCmip6ProjectCheck()
+    checker._load_split_config()
+    checker._geo_var_cache = None
+    with Dataset(tmp_path / "missing-data-variable.nc", "w") as dataset:
+        dataset.variable_id = "tas"
+        results = checker.check_File_Compression(dataset)
+
+    assert results == []
 
 
 def test_cordex_allows_rectilinear_grid_without_mapping_but_recommends_one(tmp_path):
@@ -1077,7 +1122,9 @@ def test_cordex_malformed_projected_grid_stops_derivative_coordinate_checks(
         checker._initialize_coordinate_catalog(dataset)
         results = checker.check_Coordinate_Standard(dataset)
 
-    grid = next(result for result in results if "COORD011" in result.name)
+    grid = next(
+        result for result in results if result.name.endswith("Horizontal grid coordinates")
+    )
     assert grid.weight == BaseCheck.HIGH
     assert len(grid.msgs) == 1
     assert all(
@@ -1113,7 +1160,11 @@ def test_cordex_project_rejects_unstructured_grid_once(tmp_path, monkeypatch):
     assert "does not currently support unstructured horizontal grids" in (
         checker._coordinate_grid_error or ""
     )
-    grid = next(result for result in coordinate_results if "COORD011" in result.name)
+    grid = next(
+        result
+        for result in coordinate_results
+        if result.name.endswith("Horizontal grid coordinates")
+    )
     assert len(grid.msgs) == 1
     assert "does not currently support unstructured horizontal grids" in grid.msgs[0]
     assert all(
@@ -1161,7 +1212,9 @@ def test_cordex_rejects_unstructured_topology_from_future_mapping(
         "for CORDEX-CMIP6. Please open a GitHub issue and provide test data so "
         "that support can be discussed and, if appropriate, implemented."
     )
-    grid = next(result for result in results if "COORD011" in result.name)
+    grid = next(
+        result for result in results if result.name.endswith("Horizontal grid coordinates")
+    )
     assert grid.msgs == [
         (
             "The horizontal grid could not be verified. The plugin does not "
@@ -1258,7 +1311,9 @@ def test_cordex_ambiguous_cf_coordinates_report_once_and_stop_topology(
 
     assert checker._coordinate_grid_topology is None
     assert "exactly one of each is required" in checker._coordinate_grid_error
-    grid = next(result for result in results if "COORD011" in result.name)
+    grid = next(
+        result for result in results if result.name.endswith("Horizontal grid coordinates")
+    )
     assert grid.weight == BaseCheck.HIGH
     assert len(grid.msgs) == 1
     assert any(

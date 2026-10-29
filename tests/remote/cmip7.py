@@ -71,7 +71,7 @@ CURVILINEAR_OCEAN = RemoteDataset(
         "check_Coordinate_Metadata_Setup": ExpectedCheck(1),
         # The current development vocabulary permits -180..360 for grid
         # longitude and its vertices, so the real curvilinear grid passes.
-        "check_Coordinate_Standard": ExpectedCheck(22),
+        "check_Coordinate_Standard": ExpectedCheck(28),
         # FILE001 owns the malformed/missing filename time-range structure;
         # TIME001 and TIME003 therefore do not repeat that failure here.
         "check_Coordinates": ExpectedCheck(3),
@@ -90,7 +90,7 @@ CURVILINEAR_OCEAN = RemoteDataset(
         "check_File_Internal_Packing_Time": ExpectedCheck(2),
         "check_Geophysical_Variable": ExpectedCheck(39, (_COMMENT_FAILURE,)),
         "check_Global_Attributes": ExpectedCheck(81),
-        "check_Global_Consistency": ExpectedCheck(9),
+        "check_Global_Consistency": ExpectedCheck(11),
         "check_consistency_output": ExpectedCheck(1),
         "check_setup_warnings": ExpectedCheck(1),
     },

@@ -19,6 +19,21 @@ reduced_horizontal_labels = ["hm", "hy", "hyb", "hys"]
 "hs|glb" = "g013"
 "ht|glb" = "g014"
 
+# A project may accept registered alternatives without changing the canonical
+# recommendation. No CMIP7 alternatives are currently configured.
+# [grid_label_recommendation.accepted_horizontal_label_and_region]
+# "hm|glb" = ["g999"]
+
+# Zonal means (hy) may use different latitude resolutions, so recommend the
+# regular latitude-longitude grid type rather than one fixed grid label.
+# Latitude+basin (hyb) and gridlatitude+basin (ht) likewise use the dedicated
+# basin-by-latitude type. For gridlatitude+basin, this signature-specific
+# guidance takes precedence over the ht recommendation for oline/siline
+# transects.
+[grid_label_recommendation.grid_type_by_horizontal_label]
+hy = "regular_latitude_longitude"
+hyb = "basin_by_latitude"
+
 [grid_type]
 regular_latitude_longitude = "rectilinear"
 regular_gaussian = "rectilinear"

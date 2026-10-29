@@ -165,3 +165,173 @@ def test_project_packing_configuration_is_loaded():
         "3hr": 1,
         "1hr": 6,
     }
+
+
+class BrokenChunkVariable:
+    dtype = np.dtype("f4")
+
+    def __init__(self, *, fail_chunks=False, fail_count=False):
+        self.fail_chunks = fail_chunks
+        self.id = self if fail_count else FakeChunkId(2)
+
+    @property
+    def chunks(self):
+        if self.fail_chunks:
+            raise RuntimeError("broken chunks")
+        return (2, 2)
+
+    def get_num_chunks(self):
+        raise RuntimeError("broken count")
+
+
+@pytest.mark.parametrize(
+    ("variable", "fragment"),
+    [
+        (BrokenChunkVariable(fail_chunks=True), "unable to read chunk metadata"),
+        (BrokenChunkVariable(fail_count=True), "unable to read number of chunks"),
+    ],
+)
+def test_packing_helpers_turn_chunk_metadata_errors_into_details(variable, fragment):
+    assert fragment in packing._is_single_chunk_or_contiguous(variable)[1]
+    assert fragment in packing._check_data_variable(variable, 1024)[1]
+
+
+def test_data_chunk_helper_covers_contiguous_single_threshold_and_frequency_failures():
+    assert packing._check_data_variable(FakeVariable(None), 1024)[0]
+    assert packing._check_data_variable(FakeVariable((2, 2), chunk_count=1), 1024)[0]
+    assert packing._check_data_variable(FakeVariable((128, 2)), 1024)[0]
+
+    failed, detail = packing._check_data_variable(
+        FakeVariable((2, 2)),
+        4096,
+        frequency="unknown",
+        frequency_min_timesteps={"mon": 6},
+        has_time=True,
+    )
+    assert failed is False
+    assert "frequency is unavailable" in detail
+
+    failed, detail = packing._check_data_variable(
+        FakeVariable((2, 2)),
+        4096,
+        frequency="mon",
+        frequency_min_timesteps={"mon": 6},
+        has_time=True,
+    )
+    assert failed is False
+    assert "at least 6 time steps" in detail
+
+
+def test_finalize_rejects_inconsistent_expected_section_count(monkeypatch):
+    dataset = FakeDataset()
+    monkeypatch.setattr(packing, "_PYFIVE_OK", True)
+    packing._INTERNAL_PACKING_FINALIZE_COUNTERS[dataset.path] = {
+        "count": 1,
+        "total": 3,
+    }
+    with pytest.raises(ValueError, match="same total_packing_checks"):
+        packing.finalize_internal_packing_session(dataset, total_packing_checks=2)
+
+
+def test_internal_packing_reports_dependency_path_and_open_failures(monkeypatch):
+    monkeypatch.setattr(packing, "_PYFIVE_OK", False)
+    monkeypatch.setattr(packing, "_PYFIVE_ERR", "not installed")
+    assert "not installed" in messages(packing.check_internal_packing(FakeDataset()))[0]
+
+    monkeypatch.setattr(packing, "_PYFIVE_OK", True)
+    no_path = SimpleNamespace(filepath=lambda: None)
+    assert (
+        "Could not retrieve dataset file path"
+        in messages(packing.check_internal_packing(no_path))[0]
+    )
+
+    monkeypatch.setattr(
+        packing,
+        "pyfive",
+        SimpleNamespace(File=lambda _path: (_ for _ in ()).throw(OSError("bad file"))),
+    )
+    assert (
+        "Could not open file with pyfive: bad file"
+        in messages(packing.check_internal_packing(FakeDataset()))[0]
+    )
+
+
+def test_internal_packing_can_disable_every_section():
+    assert (
+        packing.check_internal_packing(
+            FakeDataset(), run_metadata=False, run_time=False, run_data=False
+        )
+        == []
+    )
+
+
+def test_internal_packing_reports_only_unowned_missing_prerequisites(monkeypatch):
+    packing_file = FakePackingFile({}, consolidated_metadata=True)
+    packing_file.attrs = {}
+    monkeypatch.setattr(packing, "_PYFIVE_OK", True)
+    monkeypatch.setattr(
+        packing, "pyfive", SimpleNamespace(File=lambda _path: packing_file)
+    )
+    dataset = FakeDataset()
+
+    time = packing.check_internal_packing(
+        dataset,
+        run_metadata=False,
+        run_time=True,
+        run_data=False,
+        time_presence_delegated=False,
+    )
+    packing.finalize_internal_packing_session(dataset)
+    data = packing.check_internal_packing(
+        dataset,
+        run_metadata=False,
+        run_time=False,
+        run_data=True,
+        variable_id_presence_delegated=False,
+    )
+    packing.finalize_internal_packing_session(dataset)
+    delegated = packing.check_internal_packing(
+        dataset,
+        run_metadata=False,
+        run_time=True,
+        run_data=True,
+        time_presence_delegated=True,
+        variable_id_presence_delegated=True,
+    )
+    packing.finalize_internal_packing_session(dataset)
+
+    assert "Coordinate variable 'time' is missing" in messages(time)[0]
+    assert "Global attribute 'variable_id' is missing" in messages(data)[0]
+    assert delegated == []
+
+
+@pytest.mark.parametrize(
+    ("variable_id", "expected"),
+    [
+        ("tas", "Data variable 'tas' named by global attribute"),
+        ("", "Global attribute 'variable_id' is empty"),
+    ],
+)
+def test_internal_packing_reports_unowned_unusable_data_selector(
+    monkeypatch, variable_id, expected
+):
+    packing_file = FakePackingFile(
+        {}, consolidated_metadata=True, variable_id=variable_id
+    )
+    monkeypatch.setattr(packing, "_PYFIVE_OK", True)
+    monkeypatch.setattr(
+        packing, "pyfive", SimpleNamespace(File=lambda _path: packing_file)
+    )
+    dataset = FakeDataset()
+
+    results = packing.check_internal_packing(
+        dataset,
+        run_metadata=False,
+        run_time=False,
+        run_data=True,
+        variable_id_presence_delegated=False,
+        data_variable_presence_delegated=False,
+    )
+    packing.finalize_internal_packing_session(dataset)
+
+    assert expected in messages(results)[0]

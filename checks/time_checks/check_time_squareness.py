@@ -364,6 +364,7 @@ def check_time_squareness(
     report_structural_prerequisites=False,
     report_units_prerequisite=True,
     report_bounds_prerequisites=True,
+    report_frequency_prerequisite=True,
     increment_mapping=None,
     filename_structure_delegated=False,
 ):
@@ -484,6 +485,8 @@ def check_time_squareness(
 
     freq_id = _resolve_frequency(ds)
     if not freq_id:
+        if not report_frequency_prerequisite:
+            return [ctx.to_result()] if ctx.messages else []
         ctx.add_failure(
             "Missing global attribute 'frequency'; cannot resolve expected step."
         )
@@ -700,13 +703,52 @@ def check_time_squareness(
         if bad.size:
             i = int(bad[0])
             agreement = "does" if bad.size == 1 else "do"
-            ctx.add_failure(
-                f"{count_phrase(int(bad.size), 'time value')} {agreement} not match the expected "
-                f"axis. First incident at index {i}: "
-                f"the file contains {format_time_value(actual[i], units=units, calendar=cal, decimals=NDECIMALS)}. "
-                f"The expected value is {format_time_value(theo[i], units=units, calendar=cal, decimals=NDECIMALS)}. "
-                f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
-            )
+            annual_point_guidance = None
+            if instantaneous and freq_id in {"yr", "yrPt"}:
+                try:
+                    decoded = cftime.num2date(
+                        actual[i],
+                        units=units,
+                        calendar=cal,
+                        only_use_cftime_datetimes=True,
+                    )
+                    is_annual_boundary = (
+                        decoded.month,
+                        decoded.day,
+                        decoded.hour,
+                        decoded.minute,
+                        decoded.second,
+                        decoded.microsecond,
+                    ) == (1, 1, 0, 0, 0, 0)
+                    if not is_annual_boundary:
+                        annual_point_guidance = (
+                            "Annual point values must be recorded at 24Z on the "
+                            "last day of a year, represented as 00:00 on 1 January. "
+                            "The surrounding valid annual timestamps are "
+                            f"{decoded.year:04d}-01-01 00:00 and "
+                            f"{decoded.year + 1:04d}-01-01 00:00; which one applies "
+                            "depends on the intended reporting year and cannot be "
+                            "inferred by TIME001."
+                        )
+                except (OverflowError, TypeError, ValueError):
+                    pass
+
+            if annual_point_guidance:
+                ctx.add_failure(
+                    f"{count_phrase(int(bad.size), 'time value')} {agreement} not match the expected "
+                    f"axis. First incident at index {i}: "
+                    f"the file contains {format_time_value(actual[i], units=units, calendar=cal, decimals=NDECIMALS)}. "
+                    f"{annual_point_guidance} "
+                    f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
+                )
+            else:
+                ctx.add_failure(
+                    f"{count_phrase(int(bad.size), 'time value')} {agreement} not match the expected "
+                    f"axis. First incident at index {i}: "
+                    f"the file contains {format_time_value(actual[i], units=units, calendar=cal, decimals=NDECIMALS)}. "
+                    f"The expected value is {format_time_value(theo[i], units=units, calendar=cal, decimals=NDECIMALS)}. "
+                    f"(table_id={table_id}, frequency={freq_id}, var={target}, midpoint={use_midpoint})"
+                )
 
     if not ctx.messages:
         ctx.add_pass()

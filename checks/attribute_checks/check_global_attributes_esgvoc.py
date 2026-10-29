@@ -153,6 +153,7 @@ def check_global_attributes_esgvoc(
     severity_by_attribute: Mapping[str, int] | None = None,
     default_severity: int = BaseCheck.HIGH,
     validator: GAValidator | None = None,
+    enabled_attributes: set[str] | None = None,
 ):
     """Validate global attributes with ESGVoc and return checker results.
 
@@ -182,7 +183,12 @@ def check_global_attributes_esgvoc(
 
     results = []
 
+    def enabled(name: str) -> bool:
+        return enabled_attributes is None or name in enabled_attributes
+
     for name in report.missing:
+        if not enabled(name):
+            continue
         severity = severities.get(name, default_severity)
         ctx = TestCtx(severity, f"[ATTR001] Global attribute '{name}' existence")
         ctx.add_failure(f"Required global attribute '{name}' is missing.")
@@ -193,6 +199,8 @@ def check_global_attributes_esgvoc(
         grouped[attribute_result.name].append(attribute_result)
 
     for name, attribute_results in grouped.items():
+        if not enabled(name):
+            continue
         severity = severities.get(name, default_severity)
 
         existence = TestCtx(
