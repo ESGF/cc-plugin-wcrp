@@ -77,3 +77,9 @@ By default, the output is in plain text, but you can specify other formats with 
 compliance-checker -t ''plugin'' path/to/data/file.nc -f json
 compliance-checker -t ''plugin'' path/to/data/file.nc -f html
 ``` 
+
+## License
+
+`cc-plugin-wcrp` is distributed under the
+[CeCILL-C Free Software License Agreement](https://www.cecill.info/licences/Licence_CeCILL-C_V1-en.html)
+(`CECILL-C`). The complete license text is provided in the [`LICENSE`](LICENSE) file.
