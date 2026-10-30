@@ -18,21 +18,38 @@ from checks.time_checks.reporting import (
 from checks.utils import severity_word
 
 
-def check_time_bounds(ds, severity=BaseCheck.MEDIUM, coord_name="time"):
+def check_time_bounds(
+    ds,
+    severity=BaseCheck.MEDIUM,
+    coord_name="time",
+    report_bounds_prerequisites=False,
+):
     """Check regular bounds shape and containment for one time coordinate."""
     check_id = "TIME002"
     ctx = TestCtx(severity, f"[{check_id}] Check time bounds for '{coord_name}'")
 
     if coord_name not in ds.variables:
-        return [ctx.to_result()]
+        return []
 
     time_var = ds.variables[coord_name]
 
     bnds_name = getattr(time_var, "bounds", None)
-    if bnds_name is None or bnds_name not in ds.variables:
-        # Presence of bounds is checked elsewhere – we are only interested
-        # in *consistency* if they exist.
-        return [ctx.to_result()]
+    if not bnds_name:
+        if report_bounds_prerequisites:
+            ctx.add_failure(
+                f"Coordinate '{coord_name}' has no bounds attribute, so its "
+                "time bounds could not be checked."
+            )
+            return [ctx.to_result()]
+        return []
+    if bnds_name not in ds.variables:
+        if report_bounds_prerequisites:
+            ctx.add_failure(
+                f"Coordinate '{coord_name}' names bounds variable {bnds_name!r}, "
+                "but that variable is absent."
+            )
+            return [ctx.to_result()]
+        return []
 
     bnds_var = ds.variables[bnds_name]
 

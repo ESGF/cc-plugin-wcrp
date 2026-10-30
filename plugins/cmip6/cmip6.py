@@ -280,6 +280,10 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
         if self._geo_var_cache and self._geo_var_cache in ds.variables:
             return self._geo_var_cache, []
 
+        expected, result = self._resolve_expected_data_variable(ds, severity)
+        if result is not None:
+            return expected, result
+
         res: list = []
         try:
             geo_vars = list(get_geophysical_variables(ds) or [])
@@ -445,6 +449,9 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     report_directory_structure_error=(
                         directory_structure_owner == "attributes_vs_directory"
                     ),
+                    missing_attributes_delegated=(
+                        self._global_attributes_owning(sev)
+                    ),
                 )
             )
 
@@ -457,6 +464,9 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     project_id=self.project_name,
                     report_directory_structure_error=(
                         directory_structure_owner == "filename_vs_directory"
+                    ),
+                    missing_attributes_delegated=(
+                        self._global_attributes_owning(sev)
                     ),
                 )
             )
@@ -471,7 +481,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
         if not self.config or not self.config.variable:
             return res
 
-        sev_default = BaseCheck.HIGH
+        sev_default = self._configured_variable_severity()
         geo, geo_r = self._get_geo_var(ds, sev_default)
         res.extend(geo_r)
         if not geo:
@@ -568,8 +578,11 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     ds,
                     sev,
                     project_id=self.project_name,
-                    filename_structure_delegated=bool(
-                        self.config.drs and self.config.drs.filename
+                    filename_structure_delegated=self._drs_rule_owns(
+                        "filename", sev
+                    ),
+                    missing_attributes_delegated=(
+                        self._global_attributes_owning(sev)
                     ),
                 )
             )
@@ -610,13 +623,23 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                         check,
                         self.get_severity(rule.severity),
                         {
-                            "report_missing": not self._global_attribute_rule_enabled(
-                                attribute
+                            "report_missing": not self._global_attribute_owns(
+                                attribute, self.get_severity(rule.severity)
                             )
                         },
                     )
                     for rule, check, attribute in experiment_checks
                 ],
+                selector_error_delegated=self._global_attribute_owns(
+                    "experiment_id",
+                    max(
+                        (
+                            self.get_severity(rule.severity)
+                            for rule, _, _ in experiment_checks
+                        ),
+                        default=BaseCheck.HIGH,
+                    ),
+                ),
             )
         )
 
@@ -631,7 +654,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     missing_attributes_delegated={
                         name
                         for name in ("institution_id", "institution")
-                        if self._global_attribute_rule_enabled(name)
+                        if self._global_attribute_owns(name, sev)
                     },
                 )
             )
@@ -646,7 +669,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     missing_attributes_delegated={
                         name
                         for name in ("source_id", "institution_id")
-                        if self._global_attribute_rule_enabled(name)
+                        if self._global_attribute_owns(name, sev)
                     },
                 )
             )
@@ -656,7 +679,12 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
             sev = self.get_severity(c.frequency_vs_table_id.severity)
             res.extend(
                 check_frequency_table_id_consistency(
-                    ds, self.table_id_to_frequency, sev
+                    ds,
+                    self.table_id_to_frequency,
+                    sev,
+                    missing_attributes_delegated=(
+                        self._global_attributes_owning(sev)
+                    ),
                 )
             )
 
@@ -684,6 +712,17 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     (check, self.get_severity(rule.severity))
                     for rule, check in variant_checks
                 ],
+                attribute_severities={
+                    name: severity
+                    for name in (
+                        "variant_label",
+                        "realization_index",
+                        "initialization_index",
+                        "physics_index",
+                        "forcing_index",
+                    )
+                    if (severity := self._global_attribute_severity(name)) is not None
+                },
             )
         )
 
@@ -732,10 +771,20 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
         except Exception:
             cf_aux = set()
 
+        # Resolve the coordinate IDs required by the selected branded variable.
+        # This avoids treating every coordinate configured for the project as
+        # mandatory while still reporting a required coordinate that is absent.
+        expected, lookup_results = self._get_expected_from_registry(ds, BaseCheck.HIGH)
+        res.extend(lookup_results)
+        required_names = self._legacy_required_coordinate_names(expected, coords_cfg)
+        required_bounds_names = self._legacy_required_bounds_names(
+            expected, coords_cfg
+        )
+
         # TOML-listed coords present in dataset
         toml_present = {n for n in rule_by_nc.keys() if n in ds.variables}
 
-        coord_set = sorted(cf_coords | cf_aux | toml_present)
+        coord_set = sorted(cf_coords | cf_aux | toml_present | required_names)
 
         # ---------------- Global dimension checks ----------------
         if getattr(coords_cfg, "dimensions", None):
@@ -757,6 +806,36 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     continue
                 cvar = ds.variables[cname]
                 if not getattr(cvar, "bounds", None):
+                    coordinate_rule = rule_by_nc.get(cname)
+                    bounds_attribute = next(
+                        (
+                            attribute
+                            for key, attribute in (
+                                coordinate_rule.attributes.items()
+                                if coordinate_rule
+                                else ()
+                            )
+                            if (attribute.attribute_name or key) == "bounds"
+                        ),
+                        None,
+                    )
+                    bounds_owned = bool(
+                        (bounds_attribute and bounds_attribute.is_required)
+                        or (coordinate_rule and coordinate_rule.coverage)
+                    )
+                    if (
+                        cname in required_bounds_names
+                        and not bounds_owned
+                        and check_bounds_shape is not None
+                    ):
+                        res.extend(
+                            check_bounds_shape(
+                                ds,
+                                cname,
+                                severity=sev,
+                                report_missing_bounds=True,
+                            )
+                        )
                     continue
 
                 if check_bounds_shape is not None:
@@ -767,10 +846,14 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
 
         # ---------------- Per-coordinate TOML rules ----------------
         for cname in coord_set:
-            if cname not in ds.variables:
-                continue
             rule = rule_by_nc.get(cname)
             if not rule:
+                continue
+
+            if getattr(rule, "name", None):
+                sev = _sev(rule.name.severity, default=BaseCheck.HIGH)
+                res.extend(check_variable_existence(ds, cname, sev))
+            if cname not in ds.variables:
                 continue
 
             var = ds.variables[cname]
@@ -810,6 +893,10 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
             # TIME001
             if getattr(rule, "squareness", None):
                 sev = _sev(rule.squareness.severity, default=BaseCheck.MEDIUM)
+                owned_attributes = {
+                    arule.attribute_name or key
+                    for key, arule in (rule.attributes or {}).items()
+                }
                 expected, lookup_results = self._get_expected_from_registry(ds, sev)
                 res.extend(lookup_results)
                 if expected is not None:
@@ -821,9 +908,15 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                             ref_time_units=rule.squareness.ref_time_units or "",
                             frequency=None,
                             expected_cell_methods=expected.cell_methods,
+                            report_units_prerequisite=(
+                                "units" not in owned_attributes
+                            ),
+                            report_frequency_prerequisite=(
+                                not self._global_attribute_owns("frequency", sev)
+                            ),
                             increment_mapping=self._time_increment_mapping,
-                            filename_structure_delegated=bool(
-                                self.config.drs and self.config.drs.filename
+                            filename_structure_delegated=self._drs_rule_owns(
+                                "filename", sev
                             ),
                         )
                     )
@@ -831,14 +924,33 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
             # TIME002
             if getattr(rule, "coverage", None):
                 sev = _sev(rule.coverage.severity, default=BaseCheck.MEDIUM)
-                res.extend(check_time_bounds(ds, severity=sev))
+                bounds_owned = any(
+                    (arule.attribute_name or key) == "bounds"
+                    and bool(arule.is_required)
+                    for key, arule in (rule.attributes or {}).items()
+                )
+                res.extend(
+                    check_time_bounds(
+                        ds,
+                        severity=sev,
+                        report_bounds_prerequisites=not bounds_owned,
+                    )
+                )
 
             # time calendar recommendation (TIME003a)
             if getattr(rule, "calendar_recommendation", None):
+                calendar_rule = rule.calendar_recommendation
                 sev = _sev(
-                    rule.calendar_recommendation.severity, default=BaseCheck.MEDIUM
+                    calendar_rule.severity, default=BaseCheck.MEDIUM
                 )
-                res.extend(check_calendar_recommendation(ds, severity=sev))
+                res.extend(
+                    check_calendar_recommendation(
+                        ds,
+                        severity=sev,
+                        discouraged_values=calendar_rule.discouraged_values,
+                        preferred_value=calendar_rule.preferred_value,
+                    )
+                )
 
             # coordinate variable attributes
             for attr_key, arule in (getattr(rule, "attributes", None) or {}).items():
@@ -869,7 +981,11 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     )
                 )
 
-        if check_time_range_vs_filename is not None:
+        if (
+            check_time_range_vs_filename is not None
+            and self.config.drs is not None
+            and self.config.drs.time_range is not None
+        ):
             expected, lookup_results = self._get_expected_from_registry(
                 ds, BaseCheck.HIGH
             )
@@ -877,12 +993,32 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
             precision_map = None
             climatology_suffix = ""
             severity = BaseCheck.HIGH
-            if self.config and self.config.drs:
-                time_range = self.config.drs.time_range
-                precision_map = time_range.label_precision
-                climatology_suffix = time_range.climatology_suffix
-                severity = self.get_severity(time_range.severity, "HIGH")
+            time_range = self.config.drs.time_range
+            precision_map = time_range.label_precision
+            climatology_suffix = time_range.climatology_suffix
+            severity = self.get_severity(time_range.severity, "HIGH")
             if expected is not None and expected.time_is_climatology is not None:
+                time_rule = rule_by_nc.get("time")
+                time_attributes = {
+                    arule.attribute_name or key: arule
+                    for key, arule in (
+                        (time_rule.attributes or {}).items() if time_rule else ()
+                    )
+                }
+                identity_owned = bool(
+                    time_rule
+                    and time_rule.name
+                    and _sev(time_rule.name.severity) >= severity
+                )
+                units_rule = time_attributes.get("units")
+                units_owned = bool(
+                    units_rule and _sev(units_rule.severity) >= severity
+                )
+                squareness_owned = bool(
+                    time_rule
+                    and time_rule.squareness
+                    and _sev(time_rule.squareness.severity) >= severity
+                )
                 res.extend(
                     check_time_range_vs_filename(
                         ds,
@@ -890,12 +1026,16 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                         precision_by_frequency=precision_map,
                         climatology_suffix=climatology_suffix,
                         expected_is_climatology=expected.time_is_climatology,
-                        report_time_units_prerequisite=False,
-                        report_time_values_prerequisite=False,
-                        report_climatology_bounds_prerequisite=False,
-                        report_frequency_prerequisite=False,
-                        filename_structure_delegated=bool(
-                            self.config.drs and self.config.drs.filename
+                        report_time_structure_prerequisite=not identity_owned,
+                        report_time_units_prerequisite=not units_owned,
+                        report_time_values_prerequisite=not squareness_owned,
+                        report_climatology_bounds_prerequisite=not squareness_owned,
+                        report_frequency_prerequisite=not (
+                            squareness_owned
+                            or self._global_attribute_owns("frequency", severity)
+                        ),
+                        filename_structure_delegated=self._drs_rule_owns(
+                            "filename", severity
                         ),
                     )
                 )

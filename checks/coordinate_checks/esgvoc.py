@@ -252,7 +252,16 @@ def load_catalog(
             project_id,
             branded_collection,
             lookup_id,
-            ["id", "out_name", "variable_root_name", "dimensions", "cell_methods"],
+            [
+                "id",
+                "out_name",
+                "variable_root_name",
+                "dimensions",
+                "frequency",
+                "compound_name",
+                "cell_methods",
+                "horizontal_label",
+            ],
         )
     except Exception as exc:
         raise CoordinateMetadataError(

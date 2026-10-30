@@ -227,6 +227,10 @@ def check_internal_packing(
     run_metadata: bool = True,
     run_time: bool = True,
     run_data: bool = True,
+    time_expected: bool = True,
+    time_presence_delegated: bool = False,
+    variable_id_presence_delegated: bool = False,
+    data_variable_presence_delegated: bool = False,
 ) -> list:
     """Run selected FILE004 internal-packing checks."""
     results = []
@@ -361,6 +365,17 @@ def check_internal_packing(
                 ctx_c.add_failure(f"Unable to inspect time bounds chunking: {exc}")
                 results.append(ctx_c.to_result())
 
+    elif run_time and time_expected and not time_presence_delegated:
+        ctx_b = TestCtx(
+            sev_time,
+            "[FILE004b] Internal packing : Time coordinate chunking",
+        )
+        ctx_b.add_failure(
+            "Coordinate variable 'time' is missing, so its internal packing "
+            "could not be checked."
+        )
+        results.append(ctx_b.to_result())
+
     # FILE004d — Data-variable chunk size
     if run_data:
         try:
@@ -376,11 +391,33 @@ def check_internal_packing(
             )
             results.append(ctx_d.to_result())
 
+        if not has_variable_id and not variable_id_presence_delegated:
+            ctx_d = TestCtx(
+                sev_data,
+                "[FILE004d] Internal packing : Data variable chunking",
+            )
+            ctx_d.add_failure(
+                "Global attribute 'variable_id' is missing, so data-variable "
+                "chunking could not be checked."
+            )
+            results.append(ctx_d.to_result())
+
         if has_variable_id:
             try:
                 variable_id = _attr_to_str(packing_file.attrs["variable_id"])
             except Exception:
                 variable_id = None
+
+            if not variable_id and not variable_id_presence_delegated:
+                ctx_d = TestCtx(
+                    sev_data,
+                    "[FILE004d] Internal packing : Data variable chunking",
+                )
+                ctx_d.add_failure(
+                    "Global attribute 'variable_id' is empty, so data-variable "
+                    "chunking could not be checked."
+                )
+                results.append(ctx_d.to_result())
 
             try:
                 has_variable = bool(variable_id) and variable_id in packing_file
@@ -430,5 +467,15 @@ def check_internal_packing(
                             "using a project repacking tool."
                         )
                     results.append(ctx_d.to_result())
+            elif variable_id and not data_variable_presence_delegated:
+                ctx_d = TestCtx(
+                    sev_data,
+                    "[FILE004d] Internal packing : Data variable chunking",
+                )
+                ctx_d.add_failure(
+                    f"Data variable {variable_id!r} named by global attribute "
+                    "'variable_id' is absent, so its chunking could not be checked."
+                )
+                results.append(ctx_d.to_result())
 
     return results

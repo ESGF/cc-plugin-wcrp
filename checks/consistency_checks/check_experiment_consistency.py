@@ -271,7 +271,9 @@ def check_experiment_id_vs_sub_experiment_id(
     return [ctx.to_result()]
 
 
-def check_experiment_consistency_group(ds, project_id, configured_checks):
+def check_experiment_consistency_group(
+    ds, project_id, configured_checks, *, selector_error_delegated=False
+):
     """Run comparisons with one severity-aware selector-error owner."""
     if not configured_checks:
         return []
@@ -295,7 +297,7 @@ def check_experiment_consistency_group(ds, project_id, configured_checks):
                 ds,
                 severity,
                 project_id=project_id,
-                report_selector_error=(check is owner),
+                report_selector_error=(check is owner and not selector_error_delegated),
                 **kwargs,
             )
         )

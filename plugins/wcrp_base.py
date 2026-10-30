@@ -318,16 +318,219 @@ class WCRPBaseCheck(BaseCheck):
             return default_severity_const
         return self.SEVERITY_MAP.get(str(severity_str).upper(), default_severity_const)
 
-    def _global_attribute_rule_enabled(self, attribute_name):
-        """Whether ATTR001/ATTR004 owns one configured global attribute."""
+    def _enabled_global_attribute_names(self):
         global_section = getattr(self.config, "global_", None) if self.config else None
         if global_section is None:
-            return False
+            return set()
+        return {
+            getattr(rule, "attribute_name", None) or key
+            for key, rule in global_section.attributes.items()
+        }
+
+    def _global_attribute_severity(self, attribute_name):
+        """Return the configured ATTR severity for one file attribute."""
+        global_section = getattr(self.config, "global_", None) if self.config else None
+        if global_section is None:
+            return None
         for key, rule in global_section.attributes.items():
             configured_name = getattr(rule, "attribute_name", None) or key
             if configured_name == attribute_name:
-                return True
+                return self.get_severity(rule.severity)
+        return None
+
+    def _global_attribute_owns(self, attribute_name, consumer_severity):
+        """Whether ATTR is an equal- or higher-severity prerequisite owner."""
+        attribute_severity = self._global_attribute_severity(attribute_name)
+        return (
+            attribute_severity is not None
+            and attribute_severity >= int(consumer_severity)
+        )
+
+    def _global_attributes_owning(self, consumer_severity):
+        """Return attributes whose ATTR checks outrank one dependent check."""
+        return {
+            name
+            for name in self._enabled_global_attribute_names()
+            if self._global_attribute_owns(name, consumer_severity)
+        }
+
+    def _expected_data_variable_name(self, ds):
+        """Return the catalogue/file-selected data variable, when known."""
+        catalog = getattr(self, "_coordinate_catalog", None)
+        name = getattr(catalog, "data_variable_name", None) if catalog else None
+        if name:
+            return str(name)
+        name = getattr(ds, "variable_id", None)
+        return str(name).strip() if name else None
+
+    def _configured_variable_severity(self):
+        """Highest enabled severity among checks needing the data variable."""
+        variable = getattr(self.config, "variable", None) if self.config else None
+        if variable is None:
+            return BaseCheck.HIGH
+        rules = [
+            variable.existence,
+            variable.type,
+            variable.dimensions,
+            *(variable.attributes or {}).values(),
+        ]
+        severities = [
+            self.get_severity(rule.severity)
+            for rule in rules
+            if rule is not None
+        ]
+        return max(severities, default=BaseCheck.HIGH)
+
+    def _variable_existence_owns(self, consumer_severity):
+        """Whether VAR001 is an equal- or higher-severity prerequisite owner."""
+        variable = getattr(self.config, "variable", None) if self.config else None
+        rule = variable.existence if variable is not None else None
+        return bool(
+            rule is not None
+            and self.get_severity(rule.severity) >= int(consumer_severity)
+        )
+
+    def _variable_registry_owns(self, consumer_severity):
+        """Whether an enabled variable rule owns registry lookup failures."""
+        variable = getattr(self.config, "variable", None) if self.config else None
+        rules = (variable.attributes or {}).values() if variable is not None else ()
+        return any(
+            rule.cv_source_term_key
+            and self.get_severity(rule.severity) >= int(consumer_severity)
+            for rule in rules
+        )
+
+    def _resolve_expected_data_variable(self, ds, severity):
+        """Resolve an authoritative data-variable name before CF heuristics."""
+        name = self._expected_data_variable_name(ds)
+        if not name:
+            return None, None
+        if name in ds.variables:
+            self._geo_var_cache = name
+            return name, []
+
+        variable = getattr(self.config, "variable", None) if self.config else None
+        if (
+            variable is not None
+            and variable.existence is not None
+            and self.get_severity(variable.existence.severity) >= int(severity)
+        ):
+            from checks.variable_checks.check_variable_existence import (
+                check_variable_existence,
+            )
+
+            return None, check_variable_existence(
+                ds,
+                name,
+                self.get_severity(variable.existence.severity),
+            )
+        ctx = TestCtx(severity, "Geophysical Variable Detection")
+        ctx.add_failure(
+            f"Expected data variable {name!r} is missing, so configured "
+            "dependent variable checks could not be evaluated."
+        )
+        return None, [ctx.to_result()]
+
+    def _legacy_required_coordinate_names(self, expected, coordinates):
+        """Map required coordinate IDs to configured netCDF variable names."""
+        identifiers = (expected.dimensions if expected is not None else None) or []
+        rules = coordinates.variables or {}
+        by_name = {
+            str(rule.name.variable_name if rule.name else key): rule
+            for key, rule in rules.items()
+        }
+        axis_entries = getattr(self, "CTcoords", {}).get("axis_entry", {})
+        registered_out_names = (
+            getattr(expected, "coordinate_out_names", None)
+            if expected is not None
+            else None
+        ) or {}
+        required = set()
+        for identifier in identifiers:
+            identifier = str(identifier)
+            rule = rules.get(identifier)
+            name = str(registered_out_names.get(identifier) or identifier)
+            if rule is None:
+                entry = axis_entries.get(identifier, {})
+                name = str(entry.get("out_name") or name)
+                rule = by_name.get(name)
+            if rule is not None:
+                required.add(str(rule.name.variable_name if rule.name else name))
+        return required
+
+    def _legacy_required_bounds_names(self, expected, coordinates):
+        """Return required coordinate names whose bounds need a structural owner."""
+        if expected is None:
+            return set()
+        rules = coordinates.variables or {}
+        by_name = {
+            str(rule.name.variable_name if rule.name else key): rule
+            for key, rule in rules.items()
+        }
+        axis_entries = getattr(self, "CTcoords", {}).get("axis_entry", {})
+        registered_out_names = getattr(expected, "coordinate_out_names", None) or {}
+        registered_bounds = (
+            getattr(expected, "coordinate_bounds_required", None) or {}
+        )
+        required = set()
+        for raw_identifier in expected.dimensions or []:
+            identifier = str(raw_identifier)
+            entry = axis_entries.get(identifier, {})
+            bounds_required = registered_bounds.get(identifier)
+            if bounds_required is None:
+                bounds_required = entry.get("must_have_bounds") == "yes"
+            if not bounds_required:
+                continue
+            name = str(
+                entry.get("out_name")
+                or registered_out_names.get(identifier)
+                or identifier
+            )
+            rule = rules.get(identifier) or by_name.get(name)
+            if rule is not None:
+                required.add(str(rule.name.variable_name if rule.name else name))
+        return required
+
+    def _coordinate_rule_enabled_for_axis(
+        self, axis, rule_name, minimum_severity=None
+    ):
+        """Whether a sufficiently severe rule applies to a catalogue axis."""
+        coordinates = getattr(self.config, "coordinates", None) if self.config else None
+        catalog = getattr(self, "_coordinate_catalog", None)
+        if coordinates is None or catalog is None:
+            return False
+
+        coordinate_names = set()
+        for identifier in catalog.coordinate_ids:
+            entry = catalog.data_coordinates.get(identifier, {})
+            if entry.get("axis") != axis:
+                continue
+            coordinate_names.add(str(identifier))
+            coordinate_names.add(str(entry.get("out_name") or identifier))
+
+        for key, rule in (coordinates.variables or {}).items():
+            name = str(rule.name.variable_name if rule.name else key)
+            configured_rule = getattr(rule, rule_name, None)
+            if not (str(key) in coordinate_names or name in coordinate_names):
+                continue
+            if configured_rule is None:
+                continue
+            if minimum_severity is not None and self.get_severity(
+                configured_rule.severity
+            ) < int(minimum_severity):
+                continue
+            return True
         return False
+
+    def _coordinate_registry_owns(self, family, consumer_severity):
+        """Whether one COORD family outranks a dependent prerequisite check."""
+        coordinates = getattr(self.config, "coordinates", None) if self.config else None
+        registry = coordinates.registry if coordinates is not None else None
+        rule = getattr(registry, family, None) if registry is not None else None
+        return bool(
+            rule is not None
+            and self.get_severity(rule.severity) >= int(consumer_severity)
+        )
 
     def _drs_directory_structure_owner(self, drs):
         """Select one enabled owner for an unusable DRS directory structure."""
@@ -353,6 +556,15 @@ class WCRPBaseCheck(BaseCheck):
             severity=lambda candidate: self.get_severity(candidate[1].severity),
         )[0][0]
 
+    def _drs_rule_owns(self, rule_name, consumer_severity):
+        """Whether one DRS check outranks a dependent structural check."""
+        drs = getattr(self.config, "drs", None) if self.config else None
+        rule = getattr(drs, rule_name, None) if drs is not None else None
+        return bool(
+            rule is not None
+            and self.get_severity(rule.severity) >= int(consumer_severity)
+        )
+
     def _check_global_attributes(self, dataset):
         """Run ESGVoc validation, then TOML rules absent from ESGVoc."""
         if self._esgvoc_project_setup_error:
@@ -361,6 +573,8 @@ class WCRPBaseCheck(BaseCheck):
             return []
 
         rules = self.config.global_.attributes
+        if not rules:
+            return []
         try:
             validator = get_global_attribute_validator(self.project_name)
             esgvoc_names = get_global_attribute_names(validator)
@@ -385,8 +599,9 @@ class WCRPBaseCheck(BaseCheck):
             dataset,
             self.project_name,
             severity_by_attribute=severities,
-            default_severity=BaseCheck.HIGH,
+            default_severity=max(severities.values(), default=BaseCheck.HIGH),
             validator=validator,
+            enabled_attributes=set(severities),
         )
 
         for name, rule in local_rules.items():

@@ -127,9 +127,9 @@ def check_time_chunking(CheckerObject, severity=BaseCheck.MEDIUM):
         nyears = 1
 
     # Apply calendar- and frequency-dependent adjustments
-    offset = 0
+    offset = 0.0
     if CheckerObject.calendar == "360_day" and CheckerObject.frequency == "mon":
-        offset = timedelta(hours=12)
+        offset = timedelta(hours=12).total_seconds()
 
     # Modify expected start and end dates based on cell_methods and above offset
     if bool(
@@ -279,7 +279,13 @@ def check_time_range(CheckerObject, severity=BaseCheck.MEDIUM):
     return [testctx.to_result()]
 
 
-def check_calendar(CheckerObject, severity=BaseCheck.MEDIUM):
+def check_calendar(
+    CheckerObject,
+    severity=BaseCheck.MEDIUM,
+    *,
+    time_presence_delegated=True,
+    attribute_presence_delegated=True,
+):
     """
     Checks if the time attributes are as recommended.
 
@@ -300,6 +306,8 @@ def check_calendar(CheckerObject, severity=BaseCheck.MEDIUM):
 
     # Check calendar
     if CheckerObject.time is not None:
+        if CheckerObject.calendar is None and attribute_presence_delegated:
+            return []
         if CheckerObject.calendar not in ["standard", "proleptic_gregorian"]:
             msg = (
                 f"Your 'calendar' attribute is not one of the {severity_word(severity)} calendars "
@@ -316,12 +324,23 @@ def check_calendar(CheckerObject, severity=BaseCheck.MEDIUM):
         else:
             testctx.add_pass()
     else:
-        testctx.add_pass()
+        if time_presence_delegated:
+            return []
+        testctx.add_failure(
+            "Coordinate variable 'time' is missing, so its calendar could not "
+            "be checked."
+        )
 
     return [testctx.to_result()]
 
 
-def check_time_units(CheckerObject, severity=BaseCheck.MEDIUM):
+def check_time_units(
+    CheckerObject,
+    severity=BaseCheck.MEDIUM,
+    *,
+    time_presence_delegated=True,
+    attribute_presence_delegated=True,
+):
     """
     Checks if the time units are as requested.
 
@@ -341,6 +360,8 @@ def check_time_units(CheckerObject, severity=BaseCheck.MEDIUM):
     testctx = TestCtx(severity, desc)
 
     if CheckerObject.time is not None:
+        if CheckerObject.timeunits is None and attribute_presence_delegated:
+            return []
         if CheckerObject.timeunits not in [
             "days since 1950-01-01T00:00:00Z",
             "days since 1950-01-01T00:00:00",
@@ -361,6 +382,11 @@ def check_time_units(CheckerObject, severity=BaseCheck.MEDIUM):
         else:
             testctx.add_pass()
     else:
-        testctx.add_pass()
+        if time_presence_delegated:
+            return []
+        testctx.add_failure(
+            "Coordinate variable 'time' is missing, so its units could not be "
+            "checked."
+        )
 
     return [testctx.to_result()]
