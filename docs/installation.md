@@ -76,10 +76,10 @@ Beta and release candidate versions are available for testing upcoming changes b
 
 **Using pip (PyPI)**
 
-To install a specific pre-release (for example, `2.4.0b2`):
+To install a specific pre-release (for example, `2.4.0b3`):
 
 ```bash
-pip install "cc-plugin-wcrp==2.4.0b2"
+pip install "cc-plugin-wcrp==2.4.0b3"
 ```
 
 **Using conda (conda-forge)**
@@ -92,7 +92,7 @@ To install a specific pre-release in a new conda environment:
 conda create -n cc-wcrp-beta \
   -c conda-forge/label/cc-plugin-wcrp_rc \
   -c conda-forge \
-  "cc-plugin-wcrp=2.4.0b2"
+  "cc-plugin-wcrp=2.4.0b3"
 
 conda activate cc-wcrp-beta
 ```
