@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=42", "wheel", "setuptools_scm[toml]>=3.4"]
+requires = ["setuptools>=77", "wheel", "setuptools_scm[toml]>=3.4"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "cc-plugin-wcrp"
 description = "This IOOS Compliance-Checker plugins checks compliance with WCRP Projects specifications "
 readme = "README.md"
 keywords = ["compliance checker", "plugin", "esgf-qc","esgf-qa", "wcrp", "cmip6", "c3scmip6", "cordex_cmip6"]
-license = {file = "LICENSE"}
+license = "CECILL-C"
+license-files = ["LICENSE"]
 authors = [
   { name = "Ayoub Nachite", email = "anachite@ipsl.fr" },
   { name = "Martin Schupfner", email = "schupfner@dkrz.de" },
@@ -22,12 +23,12 @@ dependencies = [
   "netCDF4",
   "cftime",
   "toml",
-  "esgvoc>=7.0.0",
+  "esgvoc>=7.1.0",
   "pooch",
-  "pyfive >= 1.1.2",
+  "pyfive >= 1.3.0",
   "pydantic>=2.12.5",
 ]
-version = "2.4.0b2"
+version = "2.4.0b3"
 
 [project.optional-dependencies]
 test = [

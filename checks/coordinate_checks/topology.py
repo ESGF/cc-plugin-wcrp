@@ -57,6 +57,12 @@ class GridTopologyConfig:
     recommended_grid_labels_by_horizontal_label_and_region: dict[
         tuple[str, str], str
     ] = field(default_factory=dict)
+    accepted_grid_labels_by_horizontal_label_and_region: dict[
+        tuple[str, str], frozenset[str]
+    ] = field(default_factory=dict)
+    recommended_grid_types_by_horizontal_label: dict[str, str] = field(
+        default_factory=dict
+    )
     reduced_horizontal_labels: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -148,15 +154,48 @@ def _parse_config(source: Mapping) -> GridTopologyConfig:
         by_horizontal_label_and_region[tuple(part.strip() for part in parts)] = str(
             value
         )
+    accepted_by_horizontal_label_and_region = {}
+    for key, values in _mapping_table(
+        recommendations, "accepted_horizontal_label_and_region"
+    ).items():
+        parts = str(key).split("|", 1)
+        if len(parts) != 2 or not all(part.strip() for part in parts):
+            raise GridTopologyConfigError(
+                "[grid_label_recommendation."
+                "accepted_horizontal_label_and_region] keys must have the form "
+                "'horizontal_label|region'."
+            )
+        if not isinstance(values, list):
+            raise GridTopologyConfigError(
+                "[grid_label_recommendation."
+                "accepted_horizontal_label_and_region] values must be TOML arrays."
+            )
+        accepted_by_horizontal_label_and_region[
+            tuple(part.strip() for part in parts)
+        ] = frozenset(str(value) for value in values)
+    grid_type_by_horizontal_label = {
+        str(key): str(value)
+        for key, value in _mapping_table(
+            recommendations, "grid_type_by_horizontal_label"
+        ).items()
+    }
     return GridTopologyConfig(
-        labels,
-        grid_types,
-        grid_mappings,
-        combinations,
-        allow_standard_name_fallback,
-        by_horizontal_label,
-        by_horizontal_label_and_region,
-        frozenset(str(value) for value in reduced_horizontal_labels),
+        grid_labels=labels,
+        grid_types=grid_types,
+        grid_mappings=grid_mappings,
+        grid_type_and_mapping=combinations,
+        allow_standard_name_fallback=allow_standard_name_fallback,
+        recommended_grid_labels_by_horizontal_label=by_horizontal_label,
+        recommended_grid_labels_by_horizontal_label_and_region=(
+            by_horizontal_label_and_region
+        ),
+        accepted_grid_labels_by_horizontal_label_and_region=(
+            accepted_by_horizontal_label_and_region
+        ),
+        recommended_grid_types_by_horizontal_label=grid_type_by_horizontal_label,
+        reduced_horizontal_labels=frozenset(
+            str(value) for value in reduced_horizontal_labels
+        ),
     )
 
 

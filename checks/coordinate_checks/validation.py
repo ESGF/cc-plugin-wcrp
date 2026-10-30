@@ -5,11 +5,13 @@ from __future__ import annotations
 import numpy as np
 from compliance_checker.base import TestCtx
 
+from checks.coordinate_checks.scanning import iter_bounded_spatial_chunks
 from checks.coordinate_checks.utils import (
     bound_tolerances,
     bounds_pairs,
     compare_units,
     direct_numeric_equal,
+    direct_numeric_slack,
     formatted,
     ncattr,
     neutral_dtype,
@@ -33,17 +35,25 @@ _LONGITUDE_PERIOD = 360.0
 PREREQUISITE_FALLBACKS = {
     "identity": (
         "attributes",
+        "missing_value_integrity",
+        "missing_value_prohibited",
+        "missing_value_attributes",
         "recommendations",
         "direction",
         "valid_range",
         "requested_values",
         "bounds",
         "bounds_name",
+        "bounds_name_recommendations",
         "associations",
         "formula",
         "dimension_order",
     ),
     "grid": (
+        "missing_value_integrity",
+        "missing_value_prohibited",
+        "missing_value_attributes",
+        "grid_geometry_missing_values",
         "grid_latitude_valid_range",
         "grid_longitude_valid_range",
         "grid_longitude_single_cycle",
@@ -54,6 +64,7 @@ PREREQUISITE_FALLBACKS = {
         "requested_values",
         "bounds",
         "bounds_name",
+        "bounds_name_recommendations",
         "associations",
         "formula",
         "dimension_order",
@@ -72,6 +83,7 @@ class Findings:
         vertices_dimension_name: str = "vertices",
         climatology_bounds_name: str = "climatology_bnds",
         time_bounds_delegated: bool = False,
+        missing_value_attribute_policy=None,
     ):
         self.severities = severities
         self.messages: dict[str, list[str]] = {key: [] for key in severities}
@@ -79,7 +91,9 @@ class Findings:
         self.vertices_dimension_name = vertices_dimension_name
         self.climatology_bounds_name = climatology_bounds_name
         self.time_bounds_delegated = time_bounds_delegated
+        self.missing_value_attribute_policy = missing_value_attribute_policy
         self._reported_prerequisites: set[object] = set()
+        self._checked_missing_value_attributes: set[str] = set()
 
     def add(self, family: str, message: str):
         if family in self.messages and message not in self.messages[family]:
@@ -138,11 +152,31 @@ class Findings:
         """Return wording matching the configured severity of one family."""
         return configured_severity_word(self.severities.get(family), noun=noun)
 
+    def bounds_naming_family(self, *, recommendation: bool = False) -> str:
+        """Select the configured family for one bounds-related name check.
+
+        Projects with one naming severity retain the original ``bounds_name``
+        family.  A project may configure the additional family to keep
+        recommendations separate from required names.
+        """
+        if recommendation and "bounds_name_recommendations" in self.messages:
+            return "bounds_name_recommendations"
+        return "bounds_name"
+
     def results(self):
         labels = {
             "identity": "[COORD001] Coordinate identity and structure",
             "dimension_order": "[COORD002] Data-variable coordinate order",
             "attributes": "[COORD003] Coordinate metadata",
+            "missing_value_attributes": (
+                "[COORD003] Coordinate missing-value attributes"
+            ),
+            "missing_value_integrity": (
+                "[COORD003] Coordinate missing-value attribute integrity"
+            ),
+            "missing_value_prohibited": (
+                "[COORD003] Prohibited coordinate missing-value attributes"
+            ),
             "recommendations": (
                 "[COORD004] Coordinate metadata "
                 f"{self.severity_word('recommendations', noun=True)}s"
@@ -152,6 +186,9 @@ class Findings:
             ),
             "direction": "[COORD005] Coordinate monotonicity and stored direction",
             "valid_range": "[COORD006] Coordinate valid range",
+            "grid_geometry_missing_values": (
+                "[COORD011] Horizontal grid geometry completeness"
+            ),
             "grid_latitude_valid_range": (
                 "[COORD006] Grid-latitude valid range"
             ),
@@ -176,9 +213,15 @@ class Findings:
             "grid_cell_count_consistency": (
                 "[COORD011] Horizontal grid cell count"
             ),
+            "nominal_resolution": (
+                "[COORD011] Nominal horizontal resolution"
+            ),
             "requested_values": "[COORD007] Requested coordinate values",
             "bounds": "[COORD008] Coordinate bounds",
             "bounds_name": "[COORD009] Coordinate bounds naming",
+            "bounds_name_recommendations": (
+                "[COORD009] Coordinate bounds naming recommendations"
+            ),
             "associations": "[COORD010] Auxiliary-coordinate associations",
             "grid": "[COORD011] Horizontal grid coordinates",
             "formula": "[COORD012] Parametric vertical coordinate",
@@ -204,6 +247,191 @@ def check_dtype(findings: Findings, var, name: str, entry: dict, family="identit
             family,
             f"'{name}' has storage type {actual or str(var.dtype)!r}; the "
             f"{findings.severity_word(family)} storage type is {expected!r}.",
+        )
+
+
+def _missing_attribute_value(var, attribute):
+    if attribute not in var.ncattrs():
+        return None
+    return var.getncattr(attribute)
+
+
+def _contains_nan(value) -> bool:
+    try:
+        array = np.asarray(value)
+        return bool(
+            np.issubdtype(array.dtype, np.number)
+            and np.any(np.isnan(array.astype("float64")))
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _same_missing_value(left, right, variable_dtype) -> bool:
+    """Compare scalar attributes in the variable's storage representation."""
+    left_array = np.asarray(left)
+    right_array = np.asarray(right)
+    if left_array.size != 1 or right_array.size != 1:
+        return False
+    expected_dtype = np.dtype(variable_dtype)
+    try:
+        left_value = left_array.astype(expected_dtype).reshape(-1)[0]
+        right_value = right_array.astype(expected_dtype).reshape(-1)[0]
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return bool(left_value == right_value)
+
+
+def _matches_configured_missing_value(value, expected, variable_dtype) -> bool | None:
+    """Compare one scalar attribute after its CF data type is established."""
+    array = np.asarray(value)
+    expected_dtype = np.dtype(variable_dtype)
+    if array.size != 1:
+        return False
+    if array.dtype != expected_dtype:
+        return None
+    expected_value = np.asarray(expected, dtype=expected_dtype).reshape(-1)[0]
+    return bool(array.reshape(-1)[0] == expected_value)
+
+
+def check_missing_value_attributes(
+    findings: Findings,
+    var,
+    name: str,
+    entry: dict | None,
+    *,
+    role: str,
+):
+    """Check missing-value metadata without duplicating CF coordinate rules.
+
+    Numeric netCDF coordinate variables are left to the CF checker. Numeric
+    auxiliary coordinates follow the optional project policy. Scalar and
+    character coordinates may not define missing-value attributes.
+    """
+    policy = findings.missing_value_attribute_policy
+    enabled = {
+        family
+        for family in (
+            "missing_value_attributes",
+            "missing_value_integrity",
+            "missing_value_prohibited",
+        )
+        if family in findings.messages
+    }
+    if policy is None or not enabled:
+        return
+    if name in findings._checked_missing_value_attributes:
+        return
+    findings._checked_missing_value_attributes.add(name)
+
+    attribute_names = ("_FillValue", "missing_value")
+    present = [
+        attribute for attribute in attribute_names if attribute in var.ncattrs()
+    ]
+    values_by_attribute = {
+        attribute: _missing_attribute_value(var, attribute) for attribute in present
+    }
+    data_type = neutral_dtype(var)
+
+    invalid_attributes = [
+        attribute
+        for attribute, value in values_by_attribute.items()
+        if _contains_nan(value)
+    ]
+    if invalid_attributes and "missing_value_integrity" in enabled:
+        findings.add(
+            "missing_value_integrity",
+            f"Coordinate '{name}' defines NaN for missing-value attribute(s) "
+            f"{invalid_attributes}; it is "
+            f"{findings.severity_word('missing_value_integrity')} for configured "
+            "missing-value attributes to be finite.",
+        )
+        # NaN is the decisive root cause; avoid derivative mismatch findings.
+        return
+
+    if role == "scalar" or data_type == "character":
+        family = (
+            "missing_value_prohibited"
+            if "missing_value_prohibited" in enabled
+            else "missing_value_attributes"
+        )
+        if present and family in enabled:
+            description = "Scalar" if role == "scalar" else "Character"
+            findings.add(
+                family,
+                f"{description} coordinate '{name}' defines missing-value "
+                f"attribute(s) {present}; it is "
+                f"{findings.severity_word(family)} for these "
+                "coordinates not to define _FillValue or missing_value.",
+            )
+        return
+
+    if role not in {"auxiliary", "vertex"}:
+        # Numeric coordinate-variable prohibition is already a CF requirement.
+        return
+
+    subject = "Vertex variable" if role == "vertex" else "Auxiliary coordinate"
+
+    if len(present) == 2:
+        agreement = _same_missing_value(
+            values_by_attribute["_FillValue"],
+            values_by_attribute["missing_value"],
+            var.dtype,
+        )
+        if agreement is False and "missing_value_integrity" in enabled:
+            findings.add(
+                "missing_value_integrity",
+                f"{subject} '{name}' defines _FillValue="
+                f"{formatted(values_by_attribute['_FillValue'])} and "
+                f"missing_value={formatted(values_by_attribute['missing_value'])}; "
+                f"it is {findings.severity_word('missing_value_integrity')} for "
+                "both attributes to agree.",
+            )
+            # Disagreement owns the root cause instead of two value findings.
+            return
+
+    if "missing_value_attributes" not in enabled:
+        return
+    prescribed_type = str((entry or {}).get("data_type") or "")
+    if prescribed_type and prescribed_type != data_type:
+        # The coordinate data-type check owns this prerequisite failure.
+        return
+    selected_type = prescribed_type or data_type
+    expected_values = getattr(policy, "expected_values_by_data_type", {})
+    expected = expected_values.get(selected_type)
+    if expected is None:
+        return
+
+    required = role == "auxiliary" and bool(
+        getattr(policy, "required_for_auxiliary", False)
+    )
+    if required:
+        absent = [
+            attribute for attribute in attribute_names if attribute not in present
+        ]
+        if absent:
+            findings.add(
+                "missing_value_attributes",
+                f"{subject} '{name}' does not define {absent}; it is "
+                f"{findings.severity_word('missing_value_attributes')} for both "
+                f"missing-value attributes to be present for data type "
+                f"{selected_type!r}.",
+            )
+
+    mismatches = []
+    for attribute, value in values_by_attribute.items():
+        matches = _matches_configured_missing_value(value, expected, var.dtype)
+        if matches is False:
+            mismatches.append((attribute, value))
+    if mismatches:
+        rendered = ", ".join(
+            f"{attribute}={formatted(value)}" for attribute, value in mismatches
+        )
+        findings.add(
+            "missing_value_attributes",
+            f"{subject} '{name}' defines {rendered}; the "
+            f"{findings.severity_word('missing_value_attributes')} value for "
+            f"data type {selected_type!r} is {expected!r}.",
         )
 
 
@@ -341,9 +569,9 @@ def numeric_values(var) -> np.ndarray | None:
 
 
 def valid_range_slack(lower=None, upper=None) -> float:
-    """Return symmetric numerical slack, including when one limit is zero."""
+    """Return symmetric range slack with a small absolute numerical floor."""
     limits = [abs(float(value)) for value in (lower, upper) if value is not None]
-    return 1.0e-6 * max([1.0, *limits])
+    return max(1.0e-12, 1.0e-6 * max(limits, default=0.0))
 
 
 def check_valid_range(
@@ -393,13 +621,18 @@ def check_single_longitude_cycle(
 ):
     """Require a grid-longitude variable to use no more than one cycle."""
     minimum = maximum = None
-    chunks = value_chunks if value_chunks is not None else (var[...],)
+    chunks = (
+        value_chunks
+        if value_chunks is not None
+        else (chunk for _, chunk in iter_bounded_spatial_chunks(var))
+    )
     try:
         for chunk in chunks:
             array = np.ma.asarray(chunk, dtype="float64")
             array = np.asarray(array.filled(np.nan), dtype="float64").reshape(-1)
-            if not array.size or not np.all(np.isfinite(array)):
-                return
+            array = array[np.isfinite(array)]
+            if not array.size:
+                continue
             chunk_min = float(np.min(array))
             chunk_max = float(np.max(array))
             minimum = chunk_min if minimum is None else min(minimum, chunk_min)
@@ -435,7 +668,20 @@ def _unwrap_longitude_pairs(
         references = pairs[:, :1]
     offsets = (pairs - references + 0.5 * _LONGITUDE_PERIOD) % _LONGITUDE_PERIOD
     offsets -= 0.5 * _LONGITUDE_PERIOD
-    return references + offsets
+    unwrapped = references + offsets
+    raw_spans = pairs[:, 1] - pairs[:, 0]
+    full_cycle = (
+        np.abs(np.abs(raw_spans) - _LONGITUDE_PERIOD)
+        <= valid_range_slack(0.0, _LONGITUDE_PERIOD)
+    )
+    if np.any(full_cycle):
+        # Modulo arithmetic maps both edges of an exact full-cycle cell onto
+        # the same point. Preserve its direction and centre it on the parent.
+        signs = np.where(raw_spans[full_cycle] >= 0.0, 1.0, -1.0)
+        centres = references[full_cycle, 0]
+        unwrapped[full_cycle, 0] = centres - 0.5 * _LONGITUDE_PERIOD * signs
+        unwrapped[full_cycle, 1] = centres + 0.5 * _LONGITUDE_PERIOD * signs
+    return unwrapped
 
 
 def _cyclic_absolute_difference(actual, expected):
@@ -544,12 +790,16 @@ def check_direction(findings: Findings, var, name: str, entry: dict):
         )
         return None
     array = numeric_values(var)
-    if array is None or array.size < 2 or not np.all(np.isfinite(array)):
+    if array is None or not array.size or not np.all(np.isfinite(array)):
         findings.add(
             "direction",
             f"'{name}' has insufficient finite values to verify strict monotonicity.",
         )
         return None
+    if array.size == 1:
+        # A singleton coordinate has no adjacent pair that can violate its
+        # prescribed direction or general strict-monotonicity requirement.
+        return expected or None
     actual = _strict_direction(array)
     if actual is None:
         requirement = (
@@ -641,6 +891,7 @@ def check_trailing_dimension(
     recommended: str,
     *,
     description: str,
+    family: str = "bounds_name",
 ):
     """Check a bounds-like variable's trailing dimension name."""
     if not recommended or not var.ndim:
@@ -648,9 +899,9 @@ def check_trailing_dimension(
     actual = var.dimensions[-1]
     if actual != recommended:
         findings.add(
-            "bounds_name",
+            family,
             f"{description} '{name}' uses trailing dimension {actual!r}; the "
-            f"configured {findings.severity_word('bounds_name')} name is "
+            f"configured {findings.severity_word(family)} name is "
             f"{recommended!r}.",
         )
 
@@ -669,11 +920,15 @@ def check_requested_numeric(findings: Findings, var, name: str, entry: dict):
     factor = entry.get("tolerance")
     missing = []
     for index, expected_value in enumerate(expected):
+        representation_slack = float(direct_numeric_slack(expected_value))
         if factor is None:
-            tolerance = 0.0
+            tolerance = representation_slack
             matched = np.any(direct_numeric_equal(array, expected_value))
         else:
-            tolerance = requested_tolerance(index, expected, float(factor))
+            tolerance = max(
+                representation_slack,
+                requested_tolerance(index, expected, float(factor)),
+            )
             matched = np.any(np.abs(array - expected_value) <= tolerance)
         if not matched:
             missing.append((expected_value, tolerance))
@@ -852,16 +1107,23 @@ def check_bounds(
                     "requested_values",
                     f"Scalar bounds '{declared}'={pairs[0].tolist()}; the "
                     f"{findings.severity_word('requested_values')} pair is "
-                    f"{expected_pair.tolist()} (no tolerance applies to scalars).",
+                    f"{expected_pair.tolist()} (only numerical representation "
+                    "slack applies to scalars).",
                 )
         else:
             factor = entry.get("tolerance")
             for expected_pair in expected_pairs:
-                tolerances = (
-                    bound_tolerances(expected_pair, float(factor))
-                    if factor is not None
-                    else (0.0, 0.0)
+                representation_slack = tuple(
+                    float(value) for value in direct_numeric_slack(expected_pair)
                 )
+                if factor is None:
+                    tolerances = representation_slack
+                else:
+                    configured = bound_tolerances(expected_pair, float(factor))
+                    tolerances = tuple(
+                        max(representation_slack[edge], configured[edge])
+                        for edge in (0, 1)
+                    )
                 matches = [
                     pair
                     for pair in pairs

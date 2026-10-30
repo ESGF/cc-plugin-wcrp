@@ -111,10 +111,10 @@ def _checks(
                 ),
             ),
         ),
-        "check_Global_Attributes": ExpectedCheck(58),
+        "check_Global_Attributes": ExpectedCheck(56),
         "check_Global_Consistency": ExpectedCheck(4),
         "check_attributes_cordex": ExpectedCheck(8, (_GRID_MAPPING_FAILURE,)),
-        "check_calendar": ExpectedCheck(1),
+        "check_calendar": ExpectedCheck(1 if packing_time_results else 0),
         "check_consistency_output": ExpectedCheck(1),
         "check_horizontal_axes_bounds": ExpectedCheck(
             1, (_HORIZONTAL_AXES_BOUNDS_FAILURE,)
@@ -123,7 +123,7 @@ def _checks(
         "check_lon_value_range": ExpectedCheck(1),
         "check_setup_warnings": ExpectedCheck(1),
         "check_time_chunking": ExpectedCheck(1),
-        "check_time_units": ExpectedCheck(1),
+        "check_time_units": ExpectedCheck(1 if packing_time_results else 0),
     }
 
 
@@ -143,7 +143,7 @@ TAS_REMO = RemoteDataset(
     ),
     checks=_checks(
         coordinate_results=5,
-        standard_results=16,
+        standard_results=20,
         variable_results=43,
         variable_name="tas",
         packing_time_results=2,
@@ -167,7 +167,7 @@ OROG_REMO = RemoteDataset(
     ),
     checks=_checks(
         coordinate_results=1,
-        standard_results=15,
+        standard_results=19,
         variable_results=37,
         variable_name="orog",
         packing_time_results=0,

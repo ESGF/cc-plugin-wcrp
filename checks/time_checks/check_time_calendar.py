@@ -5,10 +5,16 @@ from compliance_checker.cf import util
 from checks.utils import severity_word
 
 
-def check_calendar_recommendation(ds, severity=BaseCheck.MEDIUM):
+def check_calendar_recommendation(
+    ds,
+    severity=BaseCheck.MEDIUM,
+    *,
+    discouraged_values=("standard",),
+    preferred_value="proleptic_gregorian",
+):
     """
-    Checks if the "standard" calendar is used, and if so, promotes the use of "proleptic_gregorian" instead.
-    1. The "standard" calendar includes "missing" dates in the transition from Gregorian to Julian, causing confusion.
+    Checks for configured discouraged calendars and promotes the preferred one.
+    1. The "standard" calendar includes "missing" dates in the transition from Julian to Gregorian, causing confusion.
     2. In the period following the Julian period (i.e., after October 1582) the "proleptic_gregorian" calendar is no different from the "standard" calendar.
     3. CF conventions 3.14 recommends that models avoid adopting the "standard" calendar.
     This check can likely be removed once a comparable check is implemented in the CF checker.
@@ -21,6 +27,12 @@ def check_calendar_recommendation(ds, severity=BaseCheck.MEDIUM):
     desc = f"[{check_id}] Calendar for time coordinate"
     testctx = TestCtx(severity, desc)
     failure_registered = False
+    discouraged = {
+        str(value).strip().lower()
+        for value in discouraged_values
+        if str(value).strip()
+    }
+    preferred = str(preferred_value).strip()
 
     # This will only fetch variables with time units defined
 
@@ -28,13 +40,16 @@ def check_calendar_recommendation(ds, severity=BaseCheck.MEDIUM):
         if time_var_name not in {var.name for var in util.find_coord_vars(ds)}:
             continue
         time_var = ds.variables[time_var_name]
-        # If has a calendar, raise an issue if the 'standard' calendar is used
+        # Allowed-value validation is owned separately by ATTR004. This check
+        # only reports values configured as valid but discouraged.
         if not hasattr(time_var, "calendar"):
             continue
-        if time_var.calendar.lower() == "standard":
+        calendar = str(time_var.calendar).strip()
+        if calendar.lower() in discouraged:
             err_msg = (
-                f"Variable '{time_var.name}' has a calendar attribute with the value 'standard'. "
-                f"It is {severity_word(severity)} to use 'proleptic_gregorian' instead."
+                f"Variable '{time_var.name}' has a calendar attribute with the "
+                f"value {calendar!r}. It is {severity_word(severity)} to use "
+                f"{preferred!r} instead."
             )
             testctx.add_failure(err_msg)
             failure_registered = True

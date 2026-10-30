@@ -99,10 +99,12 @@ def check_attributes_match_directory_structure(
     filename_template_keys=None,
     *,
     report_directory_structure_error=True,
+    missing_attributes_delegated=(),
 ):
     fixed_check_id = "PATH001"
     description = f"[{fixed_check_id}] Consistency: Directory Structure vs Global Attributes"
     ctx = TestCtx(severity, description)
+    delegated = set(missing_attributes_delegated)
 
     filepath = ds.filepath()
     if not isinstance(filepath, str):
@@ -114,6 +116,8 @@ def check_attributes_match_directory_structure(
         try:
             drs_specs = str(ds.getncattr("drs_specs"))
         except Exception:
+            if "drs_specs" in delegated:
+                return []
             ctx.add_failure("Could not perform check. Reason: missing global attribute 'drs_specs'.")
             return [ctx.to_result()]
 
@@ -146,11 +150,21 @@ def check_attributes_match_directory_structure(
     # when a sub-experiment is present, otherwise just "<variant_label>".
     member_id_projects = ("cmip6", "cmip6plus")
     failures = []
+    skipped = False
     for key, drs_value in dir_facets.items():
         if key in skip_keys:
             continue
 
         if key == "variant_label" and project_id in member_id_projects:
+            if key not in ds.ncattrs():
+                if key not in delegated:
+                    failures.append(
+                        "Global attribute 'variant_label' is missing, so the "
+                        "DRS member_id component could not be compared."
+                    )
+                else:
+                    skipped = True
+                continue
             expected = resolve_member_id(ds)
             if str(drs_value) != expected:
                 failures.append(
@@ -170,10 +184,18 @@ def check_attributes_match_directory_structure(
                  f"global attribute '{key}' ('{raw_attr_value}'; compared as '{attr_value}')."
         )
         else:
-             ctx.messages.append(f"Global attribute '{key}' not found, skipping comparison.")
+             if key not in delegated:
+                 failures.append(
+                     f"Global attribute '{key}' is missing, so its DRS path "
+                     "component could not be compared."
+                 )
+             else:
+                 skipped = True
 
     for f in failures:
         ctx.add_failure(f)
+    if not failures and skipped:
+        return []
     if not failures:
         ctx.add_pass()
 
@@ -188,6 +210,7 @@ def check_filename_matches_directory_structure(
     filename_template_keys=None,
     *,
     report_directory_structure_error=True,
+    missing_attributes_delegated=(),
 ):
     fixed_check_id = "PATH002"
     description = f"[{fixed_check_id}] Consistency: Directory Structure vs Filename"
@@ -202,6 +225,8 @@ def check_filename_matches_directory_structure(
         try:
             drs_specs = str(ds.getncattr("drs_specs"))
         except Exception:
+            if "drs_specs" in set(missing_attributes_delegated):
+                return []
             ctx.add_failure("Could not perform check. Reason: missing global attribute 'drs_specs'.")
             return [ctx.to_result()]
 

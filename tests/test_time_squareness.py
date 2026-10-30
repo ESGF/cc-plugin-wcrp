@@ -236,6 +236,79 @@ def test_time001_reports_count_numeric_and_decoded_first_incident(tmp_path):
     assert "expected value is 1.0 (decoded: 2000-01-02 00:00)" in found[0]
 
 
+@pytest.mark.parametrize(
+    ("frequency", "expected_cell_methods"),
+    [("yrPt", None), ("yr", ["time: point"])],
+)
+def test_annual_point_failure_explains_surrounding_valid_timestamps(
+    tmp_path, frequency, expected_cell_methods
+):
+    path = tmp_path / f"tas_{frequency}_test_2022-2022.nc"
+    units = "days since 2000-01-01 00:00:00"
+    calendar = "standard"
+    invalid = cftime.date2num(
+        cftime.datetime(2022, 12, 23, 12, calendar=calendar),
+        units=units,
+        calendar=calendar,
+    )
+
+    with Dataset(path, "w") as dataset:
+        dataset.frequency = frequency
+        dataset.variable_id = "tas"
+        dataset.createDimension("time", 1)
+        time = dataset.createVariable("time", "f8", ("time",))
+        time.units = units
+        time.calendar = calendar
+        time[:] = [invalid]
+        data = dataset.createVariable("tas", "f4", ("time",))
+        data.cell_methods = "time: point"
+
+        kwargs = {}
+        if expected_cell_methods is not None:
+            kwargs["expected_cell_methods"] = expected_cell_methods
+        found = messages(check_time_squareness(dataset, **kwargs))
+
+    assert len(found) == 1
+    assert "decoded: 2022-12-23 12:00" in found[0]
+    assert "Annual point values must be recorded at 24Z" in found[0]
+    assert "represented as 00:00 on 1 January" in found[0]
+    assert "2022-01-01 00:00 and 2023-01-01 00:00" in found[0]
+    assert "cannot be inferred by TIME001" in found[0]
+    assert "The expected value is" not in found[0]
+
+
+def test_annual_point_spacing_failure_retains_expected_axis_message(tmp_path):
+    path = tmp_path / "tas_yrPt_test_2022-2024.nc"
+    units = "days since 2000-01-01 00:00:00"
+    calendar = "standard"
+    values = cftime.date2num(
+        [
+            cftime.datetime(2022, 1, 1, calendar=calendar),
+            cftime.datetime(2024, 1, 1, calendar=calendar),
+        ],
+        units=units,
+        calendar=calendar,
+    )
+
+    with Dataset(path, "w") as dataset:
+        dataset.frequency = "yrPt"
+        dataset.variable_id = "tas"
+        dataset.createDimension("time", 2)
+        time = dataset.createVariable("time", "f8", ("time",))
+        time.units = units
+        time.calendar = calendar
+        time[:] = values
+        data = dataset.createVariable("tas", "f4", ("time",))
+        data.cell_methods = "time: point"
+
+        found = messages(check_time_squareness(dataset))
+
+    assert len(found) == 1
+    assert "The expected value is" in found[0]
+    assert "decoded: 2023-01-01 00:00" in found[0]
+    assert "Annual point values must" not in found[0]
+
+
 def test_time002_reports_count_numeric_and_decoded_first_incident(tmp_path):
     path = tmp_path / "tas_day_model_exp_r1i1p1f1_gn_20000101-20000103.nc"
     with Dataset(path, "w") as dataset:

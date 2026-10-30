@@ -285,7 +285,10 @@ severity = "H"
 
 [coordinates.time.calendar_recommendation]  
 # Checks TIME003a
+# These values remain valid under ATTR004 but are discouraged by TIME003a.
 severity = "M"
+discouraged_values = ["standard", "gregorian"]
+preferred_value = "proleptic_gregorian"
 # ==============================================================================
 # == Metadata checks applied to depth coordinate
 # ==============================================================================

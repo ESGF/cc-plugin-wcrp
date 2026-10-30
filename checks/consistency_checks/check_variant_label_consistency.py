@@ -82,7 +82,14 @@ def _parsed_variant_indices(ds):
 
 
 def _check_one_index(
-    ds, severity, check_id, index_name, prefix, *, report_selector_error=True
+    ds,
+    severity,
+    check_id,
+    index_name,
+    prefix,
+    *,
+    report_selector_error=True,
+    report_missing=True,
 ):
     label = f"Consistency: variant_label vs {index_name}"
     ctx = TestCtx(severity, f"[{check_id}] {label}")
@@ -95,6 +102,8 @@ def _check_one_index(
         return [ctx.to_result()]
 
     if index_name not in ds.ncattrs():
+        if not report_missing:
+            return []
         ctx.add_failure(f"Missing required global attribute: '{index_name}'.")
         return [ctx.to_result()]
 
@@ -119,7 +128,9 @@ def _check_one_index(
     return [ctx.to_result()]
 
 
-def check_variant_vs_realization_index(ds, severity, *, report_selector_error=True):
+def check_variant_vs_realization_index(
+    ds, severity, *, report_selector_error=True, report_missing=True
+):
     return _check_one_index(
         ds,
         severity,
@@ -127,10 +138,13 @@ def check_variant_vs_realization_index(ds, severity, *, report_selector_error=Tr
         "realization_index",
         "r",
         report_selector_error=report_selector_error,
+        report_missing=report_missing,
     )
 
 
-def check_variant_vs_initialization_index(ds, severity, *, report_selector_error=True):
+def check_variant_vs_initialization_index(
+    ds, severity, *, report_selector_error=True, report_missing=True
+):
     return _check_one_index(
         ds,
         severity,
@@ -138,10 +152,13 @@ def check_variant_vs_initialization_index(ds, severity, *, report_selector_error
         "initialization_index",
         "i",
         report_selector_error=report_selector_error,
+        report_missing=report_missing,
     )
 
 
-def check_variant_vs_physics_index(ds, severity, *, report_selector_error=True):
+def check_variant_vs_physics_index(
+    ds, severity, *, report_selector_error=True, report_missing=True
+):
     return _check_one_index(
         ds,
         severity,
@@ -149,10 +166,13 @@ def check_variant_vs_physics_index(ds, severity, *, report_selector_error=True):
         "physics_index",
         "p",
         report_selector_error=report_selector_error,
+        report_missing=report_missing,
     )
 
 
-def check_variant_vs_forcing_index(ds, severity, *, report_selector_error=True):
+def check_variant_vs_forcing_index(
+    ds, severity, *, report_selector_error=True, report_missing=True
+):
     return _check_one_index(
         ds,
         severity,
@@ -160,10 +180,17 @@ def check_variant_vs_forcing_index(ds, severity, *, report_selector_error=True):
         "forcing_index",
         "f",
         report_selector_error=report_selector_error,
+        report_missing=report_missing,
     )
 
 
-def check_variant_label_consistency_group(ds, configured_checks):
+def check_variant_label_consistency_group(
+    ds,
+    configured_checks,
+    *,
+    missing_attributes_delegated=(),
+    attribute_severities=None,
+):
     """Run index comparisons with one severity-aware selector-error owner."""
     if not configured_checks:
         return []
@@ -174,13 +201,55 @@ def check_variant_label_consistency_group(ds, configured_checks):
             configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
         ),
     )
-    owner = severity_ordered(
+    owner_entry = severity_ordered(
         configured_checks,
         severity=lambda configured: configured[1],
         priority=lambda configured: _SELECTOR_OWNER_PRIORITY.get(
             configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
         ),
-    )[0][0]
+    )[0]
+    owner = owner_entry[0]
+    delegated = set(missing_attributes_delegated)
+    attribute_severities = attribute_severities or {}
+
+    def attribute_owns(name, consumer_severity):
+        if name in delegated:
+            return True
+        owner_severity = attribute_severities.get(name)
+        return owner_severity is not None and owner_severity >= consumer_severity
+
+    _parsed, selector_error = _parsed_variant_indices(ds)
+    if selector_error:
+        if attribute_owns("variant_label", owner_entry[1]):
+            return []
+        return owner(
+            ds,
+            owner_entry[1],
+            report_selector_error=True,
+            report_missing=False,
+        )
+
+    index_names = {
+        check_variant_vs_realization_index: "realization_index",
+        check_variant_vs_initialization_index: "initialization_index",
+        check_variant_vs_physics_index: "physics_index",
+        check_variant_vs_forcing_index: "forcing_index",
+    }
     for check, severity in hierarchy:
-        results.extend(check(ds, severity, report_selector_error=(check is owner)))
+        try:
+            index_name = index_names[check]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unsupported variant-label consistency check: {check.__name__}"
+            ) from exc
+        results.extend(
+            check(
+                ds,
+                severity,
+                report_selector_error=(
+                    check is owner and not attribute_owns("variant_label", severity)
+                ),
+                report_missing=not attribute_owns(index_name, severity),
+            )
+        )
     return results

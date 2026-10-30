@@ -13,7 +13,7 @@ from checks.coordinate_checks.model import (
     reference_ids,
 )
 
-MINIMUM_ESGVOC_VERSION = Version("7.0.0")
+MINIMUM_ESGVOC_VERSION = Version("7.1.0")
 
 DATA_COORDINATE_FIELDS = [
     "id",
@@ -252,7 +252,16 @@ def load_catalog(
             project_id,
             branded_collection,
             lookup_id,
-            ["id", "out_name", "variable_root_name", "dimensions", "cell_methods"],
+            [
+                "id",
+                "out_name",
+                "variable_root_name",
+                "dimensions",
+                "frequency",
+                "compound_name",
+                "cell_methods",
+                "horizontal_label",
+            ],
         )
     except Exception as exc:
         raise CoordinateMetadataError(

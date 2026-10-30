@@ -126,6 +126,7 @@ def check_filename_vs_global_attrs(
     filename_template_keys=None,
     *,
     filename_structure_delegated=False,
+    missing_attributes_delegated=(),
 ):
     """
     [ATTR005] Consistency: Filename vs Global Attributes
@@ -192,8 +193,19 @@ def check_filename_vs_global_attrs(
     # token against the resolved member_id rather than variant_label alone.
     member_id_projects = ("cmip6", "cmip6plus")
     failures = []
+    delegated = set(missing_attributes_delegated)
+    skipped = False
     for key in compare_keys:
         if key == "variant_label" and project_id in member_id_projects:
+            if key not in ds.ncattrs():
+                if key not in delegated:
+                    failures.append(
+                        "Global attribute 'variant_label' is missing, so the "
+                        "filename member_id component could not be compared."
+                    )
+                else:
+                    skipped = True
+                continue
             file_value = str(facets.get(key))
             expected = resolve_member_id(ds)
             if file_value != expected:
@@ -212,13 +224,19 @@ def check_filename_vs_global_attrs(
                     f"Filename component '{key}' ('{file_value}') does not match global attribute ('{attr_value}')."
                 )
         else:
-            ctx.messages.append(
-                f"Global attribute '{key}' not found, skipping comparison."
-            )
+            if key not in delegated:
+                failures.append(
+                    f"Global attribute '{key}' is missing, so its filename "
+                    "component could not be compared."
+                )
+            else:
+                skipped = True
 
     for f in failures:
         ctx.add_failure(f)
 
+    if not failures and skipped:
+        return []
     if not failures:
         ctx.add_pass()
 

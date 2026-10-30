@@ -45,7 +45,7 @@ def check_compression(
         variable_name = vars_non_dim[0] if vars_non_dim else None
 
     if variable_name is None:
-        testctx.add_pass("No data variable found, skipping compression check.")
+        testctx.add_pass()
         return [testctx.to_result()]
 
     # Retrieve compression info
