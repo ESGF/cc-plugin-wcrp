@@ -281,14 +281,28 @@ def validate_scalar(
 
 def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
     dimension_name = str(entry.get("out_name") or entry_id)
-    name = "sector"
+    # The CMIP7 CMOR tables use the registry output name for the labels.
+    # The coordinate-check draft also describes sector(out_name, strlen),
+    # optionally with a numeric index variable named out_name. Support both
+    # representations without relaxing their dependent checks.
+    name = dimension_name
+    index = ds.variables.get(dimension_name)
+    if "sector" in ds.variables and (
+        index is None
+        or (
+            neutral_dtype(index) in {"integer", "real", "double"}
+            and index.dimensions == (dimension_name,)
+        )
+    ):
+        name = "sector"
     if name not in ds.variables:
         findings.add_prerequisite(
             "identity",
             lambda family: (
                 f"The {findings.severity_word(family)} text auxiliary coordinate "
-                f"'{name}' for coordinate ID {entry_id!r} is absent, so its "
-                "configured dependent coordinate checks could not be evaluated."
+                f"'{dimension_name}' (or 'sector') for coordinate ID {entry_id!r} "
+                "is absent, so its configured dependent coordinate checks could "
+                "not be evaluated."
             ),
             issue=("missing_coordinate", name),
         )
@@ -299,12 +313,12 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
             "associations",
             f"It is {findings.severity_word('associations')} for "
             f"'{data_var.name}' coordinates attribute to include text auxiliary "
-            "coordinate 'sector'.",
+            f"coordinate '{name}'.",
         )
     if var.ndim != 2 or not var.dimensions or var.dimensions[0] != dimension_name:
         findings.add(
             "identity",
-            f"It is {findings.severity_word('identity')} for 'sector' to be a "
+            f"It is {findings.severity_word('identity')} for '{name}' to be a "
             f"character array whose first dimension is "
             f"'{dimension_name}'; found {list(var.dimensions)}.",
         )
@@ -312,7 +326,7 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
         findings.add(
             "recommendations",
             f"The {findings.severity_word('recommendations')} string-length "
-            "dimension for 'sector' is 'strlen'; "
+            f"dimension for '{name}' is 'strlen'; "
             f"found {var.dimensions[1]!r}.",
         )
     check_dtype(findings, var, name, entry)
@@ -324,7 +338,7 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
         if missing:
             findings.add(
                 "requested_values",
-                f"'sector' is missing requested label(s) {missing}; found {actual}. "
+                f"'{name}' is missing requested label(s) {missing}; found {actual}. "
                 "Additional labels and any label order are allowed.",
             )
     return var
