@@ -1493,36 +1493,107 @@ def test_data_dimensions_follow_reverse_esgvoc_cmor_order(nc):
     )
 
 
-def test_text_auxiliary_requires_sector_but_accepts_extra_unordered_labels(nc):
-    nc.createDimension("basin", 3)
+@pytest.mark.parametrize(
+    ("entry_id", "out_name", "label_name", "numeric_index"),
+    [
+        ("basin", "basin", "basin", False),
+        ("modelvegtype", "type", "type", False),
+        ("siline", "line", "line", False),
+        ("basin", "basin", "sector", False),
+        ("basin", "basin", "sector", True),
+    ],
+)
+def test_text_auxiliary_names_and_extra_unordered_labels(
+    nc, entry_id, out_name, label_name, numeric_index
+):
+    nc.createDimension(out_name, 3)
+    if numeric_index:
+        nc.createVariable(out_name, "i4", (out_name,))[:] = [1, 2, 3]
     nc.createDimension("strlen", 8)
-    sector = nc.createVariable("sector", "S1", ("basin", "strlen"))
+    sector = nc.createVariable(label_name, "S1", (out_name, "strlen"))
     sector[:] = np.asarray(
         [list("atlantic"), list("pacific "), list("indian  ")], dtype="S1"
     )
     sector.standard_name = "region"
+    ta = nc.createVariable("ta", "f4", (out_name,))
+    ta.coordinates = label_name
+    entry = coordinate(
+        entry_id,
+        "auxiliary",
+        out_name,
+        data_type="character",
+        cf_standard_name="region",
+        coordinate_values=["indian", "atlantic"],
+    )
+    result = check_coordinate_catalog(
+        nc, catalog({entry_id: entry}), severities=FAMILIES
+    )
+    assert_coordinate_families_pass(
+        result, "COORD001", "COORD002", "COORD003", "COORD007", "COORD010"
+    )
+    ta.coordinates = ""
+    result = check_coordinate_catalog(
+        nc, catalog({entry_id: entry}), severities=FAMILIES
+    )
+    assert any(
+        "required for 'ta' coordinates attribute to include text auxiliary" in msg
+        for msg in messages(result)
+    )
+
+
+@pytest.mark.parametrize(
+    ("defect", "message"),
+    [
+        ("absent", "is absent"),
+        ("unregistered_name", "is absent"),
+        ("wrong_type", "storage type"),
+        ("wrong_dimension", "whose first dimension is 'basin'"),
+        ("missing_label", "missing requested label(s)"),
+        ("missing_standard_name", "standard_name"),
+        ("strlen_name", "string-length dimension for 'basin' is 'strlen'"),
+        ("malformed_with_sector", "whose first dimension is 'basin'"),
+    ],
+)
+def test_text_auxiliary_registry_name_keeps_dependent_failures(nc, defect, message):
+    nc.createDimension("basin", 2)
+    nc.createDimension("other", 2)
+    nc.createDimension("strlen", 8)
+    nc.createDimension("custom_strlen", 8)
     ta = nc.createVariable("ta", "f4", ("basin",))
-    ta.coordinates = "sector"
+    ta.coordinates = "basin"
+    if defect != "absent":
+        name = "arbitrary_labels" if defect == "unregistered_name" else "basin"
+        dtype = "i4" if defect == "wrong_type" else "S1"
+        dim = (
+            "other" if defect in {"wrong_dimension", "malformed_with_sector"} else "basin"
+        )
+        length = "custom_strlen" if defect == "strlen_name" else "strlen"
+        label = nc.createVariable(name, dtype, (dim, length))
+        if defect != "missing_standard_name":
+            label.standard_name = "region"
+        if dtype == "S1":
+            second = "pacific " if defect == "missing_label" else "indian  "
+            label[:] = np.asarray([list("atlantic"), list(second)], dtype="S1")
+        else:
+            label[:] = 1
+        if defect == "malformed_with_sector":
+            # A valid legacy array must not hide a malformed registry-named array.
+            sector = nc.createVariable("sector", "S1", ("basin", "strlen"))
+            sector[:] = np.asarray([list("atlantic"), list("indian  ")], dtype="S1")
+            sector.standard_name = "region"
+            ta.coordinates = "basin sector"
     entry = coordinate(
         "basin",
         "auxiliary",
         "basin",
         data_type="character",
         cf_standard_name="region",
-        coordinate_values=["indian", "atlantic"],
+        coordinate_values=["atlantic", "indian"],
     )
-    result = check_coordinate_catalog(
+    results = check_coordinate_catalog(
         nc, catalog({"basin": entry}), severities=FAMILIES
     )
-    assert not any("missing requested label" in msg for msg in messages(result))
-    ta.coordinates = ""
-    result = check_coordinate_catalog(
-        nc, catalog({"basin": entry}), severities=FAMILIES
-    )
-    assert any(
-        "required for 'ta' coordinates attribute to include text auxiliary" in msg
-        for msg in messages(result)
-    )
+    assert any(message in msg for msg in messages(results)), messages(results)
 
 
 def test_site_requires_linked_latitude_and_longitude(nc):
