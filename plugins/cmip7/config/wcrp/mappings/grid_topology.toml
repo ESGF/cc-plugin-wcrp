@@ -18,6 +18,9 @@ reduced_horizontal_labels = ["hm", "hy", "hyb", "hys"]
 "hm|sh" = "g012"
 "hs|glb" = "g013"
 "ht|glb" = "g014"
+"hm|30S-90S" = "g015"
+"hm|grl" = "g016"
+"hm|ata" = "g017"
 
 # A project may accept registered alternatives without changing the canonical
 # recommendation. No CMIP7 alternatives are currently configured.

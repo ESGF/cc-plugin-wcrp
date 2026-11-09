@@ -535,6 +535,9 @@ def test_default_grid_topology_mapping_is_loaded_from_toml():
         ("hm", "sh"): "g012",
         ("hs", "glb"): "g013",
         ("ht", "glb"): "g014",
+        ("hm", "30S-90S"): "g015",
+        ("hm", "grl"): "g016",
+        ("hm", "ata"): "g017",
     }
     assert config.accepted_grid_labels_by_horizontal_label_and_region == {}
     assert config.recommended_grid_types_by_horizontal_label == {
