@@ -666,9 +666,12 @@ def _unwrap_longitude_pairs(
         references = coordinates.reshape(-1, 1)
     else:
         references = pairs[:, :1]
-    offsets = (pairs - references + 0.5 * _LONGITUDE_PERIOD) % _LONGITUDE_PERIOD
-    offsets -= 0.5 * _LONGITUDE_PERIOD
-    unwrapped = references + offsets
+    cycles = np.floor((pairs - references + 0.5 * _LONGITUDE_PERIOD) / _LONGITUDE_PERIOD)
+    # If necessary, shift the value to the longitude range of the parent value
+    # (i.e. the value of the grid cell center). Also, shift only by whole cycles.
+    # If no shift is required, leave the values untouched to not introduce rounding
+    # errors.
+    unwrapped = pairs - cycles * _LONGITUDE_PERIOD
     raw_spans = pairs[:, 1] - pairs[:, 0]
     full_cycle = (
         np.abs(np.abs(raw_spans) - _LONGITUDE_PERIOD)
@@ -1080,9 +1083,34 @@ def check_bounds(
         if pairs.shape[0] > 1:
             interval_low = lower
             interval_high = upper
-            overlap = np.maximum(interval_low[:-1], interval_low[1:]) < np.minimum(
-                interval_high[:-1], interval_high[1:]
+            overlap_width = np.minimum(interval_high[:-1], interval_high[1:]) - np.maximum(
+                interval_low[:-1], interval_low[1:]
             )
+            allowance = np.zeros_like(overlap_width)
+            if _is_longitude(coord_var, entry):
+                # Bounds may be shifted by whole multiples of 360 degrees to place them
+                # around their parent coordinate. This may introduce rounding errors.
+                # Therefore we have to allow a minimal numerical slack when testing for an overlap of
+                # bounds. The numerical allowance is set to two float64 rounding steps per
+                # shifted bound, using the largest magnitude of the original bound, the
+                # shift, or the result. This also covers rounding when the result is near
+                # zero. Unshifted bounds receive no such allowance.
+                scale = np.maximum.reduce((
+                    np.abs(pairs), np.abs(comparison_pairs),
+                    np.abs(comparison_pairs - pairs),
+                ))
+                errors = np.where(
+                    comparison_pairs != pairs, 2 * np.spacing(scale), 0.0
+                )
+                forward = comparison_pairs[:, 0] <= comparison_pairs[:, 1]
+                low_error = np.where(forward, errors[:, 0], errors[:, 1])
+                high_error = np.where(forward, errors[:, 1], errors[:, 0])
+                allowance = np.where(
+                    interval_low[:-1] >= interval_low[1:], low_error[:-1], low_error[1:]
+                ) + np.where(
+                    interval_high[:-1] <= interval_high[1:], high_error[:-1], high_error[1:]
+                )
+            overlap = overlap_width > allowance
             if np.any(overlap):
                 findings.add(
                     "bounds", f"Adjacent cells in '{declared}' have overlapping bounds."

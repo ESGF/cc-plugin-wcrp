@@ -28,6 +28,7 @@ from checks.coordinate_checks.validation import (
     _cyclic_absolute_difference,
     _is_longitude,
     _unwrap_longitude_pairs,
+    check_bounds,
     check_single_longitude_cycle,
     check_valid_range,
     valid_range_slack,
@@ -846,6 +847,49 @@ def test_unwrap_longitude_pairs_uses_parent_or_first_bound_as_reference():
 
     np.testing.assert_allclose(with_parents, [[-0.5, 0.5], [0.5, 1.5]])
     np.testing.assert_allclose(without_parents, [[359.5, 360.5], [0.5, 1.5]])
+
+
+def test_longitude_unwrapping_preserves_unshifted_shared_edges():
+    # Reproduce the size 272 longitude grid in the reported IITM test
+    #  file of issue https://github.com/ESGF/cc-plugin-wcrp/issues/100
+    centres = np.arange(272) * (360.0 / 272)
+    edges = (np.arange(273) - 0.5) * (360.0 / 272)
+    pairs = np.column_stack((edges[:-1], edges[1:]))
+    np.testing.assert_array_equal(_unwrap_longitude_pairs(pairs, centres), pairs)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "standard_name,shifted,overlap,expected_failure",
+    [
+        ("longitude", True, 0.0, False),
+        ("longitude", True, 1e-10, True),
+        ("longitude", False, 1e-14, True),
+        ("latitude", False, 1e-14, True),
+    ],
+)
+def test_bounds_overlap_allows_only_cyclic_arithmetic_rounding(
+    tmp_path, reverse, standard_name, shifted, overlap, expected_failure
+):
+    from netCDF4 import Dataset
+
+    # 360.1 - 360 differs slightly from 0.1 after float64 cancellation.
+    pairs = np.asarray([[-0.5, 360.1 if shifted else 0.1], [0.1 - overlap, 0.5]])
+    centres = np.asarray([0.0, 0.3])
+    if reverse:
+        pairs = pairs[::-1, ::-1]
+        centres = centres[::-1]
+    with Dataset(tmp_path / "bounds.nc", "w") as ds:
+        ds.createDimension("coord", 2)
+        ds.createDimension("bnds", 2)
+        coordinate = ds.createVariable("coord", "f8", ("coord",))
+        coordinate[:] = centres
+        coordinate.standard_name = standard_name
+        coordinate.bounds = "coord_bnds"
+        ds.createVariable("coord_bnds", "f8", ("coord", "bnds"))[:] = pairs
+        findings = Findings({"bounds": BaseCheck.HIGH})
+        check_bounds(findings, ds, coordinate, "coord", {"data_type": "double"})
+    assert any("overlapping" in msg for msg in findings.messages["bounds"]) == expected_failure
 
 
 @pytest.mark.parametrize(
