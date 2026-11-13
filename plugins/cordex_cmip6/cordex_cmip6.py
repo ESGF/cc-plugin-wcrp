@@ -788,7 +788,47 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 "driving_source_id",
                 "driving_source",
             ),
+            ("source_id_vs_institution_id", "source_id", "institution_id"),
+            (
+                "driving_source_id_vs_driving_institution_id",
+                "driving_source_id", "driving_institution_id",
+            ),
+            ("source_id_vs_source_type", "source_id", "source_type"),
+            ("source_id_vs_activity_id", "source_id", "activity_id"),
+            ("source_id_vs_license", "source_id", "license"),
+            ("domain_id_vs_domain", "domain_id", "domain"),
+            (
+                "driving_experiment_id_vs_driving_experiment",
+                "driving_experiment_id", "driving_experiment",
+            ),
+            (
+                "driving_source_id_vs_driving_experiment_id",
+                "driving_source_id", "driving_experiment_id",
+            ),
         )
+        relationship_options = {
+            "source_id_vs_activity_id": dict(
+                term_field="activity_participation", reference_collection="activity_id",
+                whitespace_separated=True,
+            ),
+            "source_id_vs_institution_id": dict(
+                term_field="organisation_id", reference_collection="institution_id",
+                check_id="ATTR010",
+            ),
+            "driving_source_id_vs_driving_institution_id": dict(
+                term_field="organisation_id",
+                reference_collection="driving_institution_id", check_id="ATTR010",
+            ),
+            "source_id_vs_license": dict(
+                term_field="license.id", reference_collection="license",
+            ),
+            "domain_id_vs_domain": dict(term_field="description"),
+            "driving_experiment_id_vs_driving_experiment": dict(term_field="experiment"),
+            "driving_source_id_vs_driving_experiment_id": dict(
+                unrestricted_when_absent=True,
+                reference_collection="driving_experiment_id",
+            ),
+        }
         for rule_name, id_attribute, value_attribute in pairs:
             rule = getattr(consistency, rule_name)
             if rule is None:
@@ -800,6 +840,10 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     project_id=self.project_name,
                     id_attribute=id_attribute,
                     value_attribute=value_attribute,
+                    invalid_selector_delegated=self._global_attribute_owns(
+                        id_attribute, self.get_severity(rule.severity)
+                    ),
+                    **relationship_options.get(rule_name, {}),
                     missing_attributes_delegated=(
                         self._global_attributes_owning(
                             self.get_severity(rule.severity)

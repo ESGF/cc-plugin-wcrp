@@ -247,7 +247,14 @@ class GlobalConsistency(BaseModel):
     institution_id_vs_institution: Optional[ConsistencyRule] = None
     source_id_vs_source: Optional[ConsistencyRule] = None
     driving_source_id_vs_driving_source: Optional[ConsistencyRule] = None
-    source_id_vs_institution_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+    source_id_vs_institution_id: Optional[ConsistencyRule] = None
+    driving_source_id_vs_driving_institution_id: Optional[ConsistencyRule] = None
+    source_id_vs_source_type: Optional[ConsistencyRule] = None
+    source_id_vs_activity_id: Optional[ConsistencyRule] = None
+    source_id_vs_license: Optional[ConsistencyRule] = None
+    domain_id_vs_domain: Optional[ConsistencyRule] = None
+    driving_experiment_id_vs_driving_experiment: Optional[ConsistencyRule] = None
+    driving_source_id_vs_driving_experiment_id: Optional[ConsistencyRule] = None
 
     # Data Request associations
     frequency_vs_table_id: Optional[ConsistencyRule] = None  # CMIP6/plus only

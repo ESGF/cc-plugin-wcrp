@@ -112,7 +112,7 @@ def _checks(
             ),
         ),
         "check_Global_Attributes": ExpectedCheck(56),
-        "check_Global_Consistency": ExpectedCheck(4),
+        "check_Global_Consistency": ExpectedCheck(12),
         "check_attributes_cordex": ExpectedCheck(8, (_GRID_MAPPING_FAILURE,)),
         "check_calendar": ExpectedCheck(1 if packing_time_results else 0),
         "check_consistency_output": ExpectedCheck(1),

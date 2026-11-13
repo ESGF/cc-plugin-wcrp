@@ -99,3 +99,31 @@ severity = "H"
 
 [global.consistency.driving_source_id_vs_driving_source]
 severity = "H"
+
+# Check relationships on the selected CV entry, not only vocabulary membership.
+[global.consistency.source_id_vs_institution_id]
+severity = "H"
+
+[global.consistency.driving_source_id_vs_driving_institution_id]
+severity = "H"
+
+[global.consistency.source_id_vs_source_type]
+severity = "H"
+
+# Every activity_id in the file must occur in the source's activity_participation.
+[global.consistency.source_id_vs_activity_id]
+severity = "H"
+
+[global.consistency.source_id_vs_license]
+severity = "H"
+
+[global.consistency.domain_id_vs_domain]
+severity = "H"
+
+[global.consistency.driving_experiment_id_vs_driving_experiment]
+severity = "H"
+
+# An absent driving_experiment_id field means unrestricted. An explicit empty
+# list is an unusable catalogue definition and is reported as such.
+[global.consistency.driving_source_id_vs_driving_experiment_id]
+severity = "H"
