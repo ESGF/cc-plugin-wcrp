@@ -52,17 +52,39 @@ def test_formula_evaluator_rejects_unsupported_or_incomplete_expressions(
 def test_ocean_sigma_z_formula_and_required_terms():
     terms = {
         "eta": 1.0,
-        "sigma": np.array([-1.0, -0.5, 0.0]),
+        "sigma": np.ma.array([-1.0, -0.5, 0.0], mask=[False, False, True]),
         "depth": 100.0,
         "depth_c": 20.0,
         "nsigma": 2,
-        "zlev": np.array([-50.0, -25.0, -10.0]),
+        "zlev": np.ma.array([-50.0, -25.0, -10.0], mask=[True, True, False]),
     }
     result = _evaluate_formula("unused", "ocean_sigma_z_coordinate", terms, 3)
     np.testing.assert_allclose(result, [-20.0, -9.5, -10.0])
+    del terms["nsigma"]
+    np.testing.assert_allclose(
+        _evaluate_formula("unused", "ocean_sigma_z_coordinate", terms, 3), result
+    )
 
     del terms["eta"]
     with pytest.raises(KeyError, match="eta"):
+        _evaluate_formula("unused", "ocean_sigma_z_coordinate", terms, 3)
+
+
+@pytest.mark.parametrize("count", [-1, 0, 1.5, 3, np.nan, [1, 2]])
+def test_ocean_sigma_z_rejects_inconsistent_nsigma(count):
+    terms = dict(eta=0., depth=100., depth_c=20., nsigma=count,
+                 sigma=np.ma.array([-0.1, -0.5, 0.], mask=[False, False, True]),
+                 zlev=np.ma.array([0., 0., -70.], mask=[True, True, False]))
+    with pytest.raises(ValueError, match="nsigma"):
+        _evaluate_formula("unused", "ocean_sigma_z_coordinate", terms, 3)
+
+
+@pytest.mark.parametrize("sigma_mask,zlev_mask", [([False]*3, [False]*3), ([True]*3, [True]*3)])
+def test_ocean_sigma_z_rejects_noncomplementary_masks(sigma_mask, zlev_mask):
+    terms = dict(eta=0., depth=100., depth_c=20.,
+                 sigma=np.ma.array([-0.1, -0.5, -0.9], mask=sigma_mask),
+                 zlev=np.ma.array([-30., -50., -70.], mask=zlev_mask))
+    with pytest.raises(ValueError, match="exactly one"):
         _evaluate_formula("unused", "ocean_sigma_z_coordinate", terms, 3)
 
 
