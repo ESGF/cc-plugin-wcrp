@@ -12,7 +12,7 @@ Four sub-checks, each producing an independent Result:
   FILE004c — Time bounds variable: single chunk or contiguous
   FILE004d — Data variable: single chunk / contiguous, or chunk >= 4 MiB
 
-Requires: pyfive >= 1.1.2 (pure-Python HDF5 reader, no libhdf5 needed)
+Requires: pyfive >= 1.3.0 (pure-Python HDF5 reader, no libhdf5 needed)
 """
 
 from math import prod
@@ -29,7 +29,7 @@ try:
     from packaging.version import Version
     import pyfive
 
-    _PYFIVE_MIN = Version("1.1.2")
+    _PYFIVE_MIN = Version("1.3.0")
     _pyfive_version = Version(
         __import__("importlib.metadata", fromlist=["version"]).version("pyfive")
     )

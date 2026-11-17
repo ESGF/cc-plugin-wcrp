@@ -29,5 +29,10 @@ It provides automated quality control (QC) and compliance validation for WCRP-re
 
 🧠 **Extensible design** : easily add new checks or adapt existing ones per project or dataset type  
 
+## License
 
+`cc-plugin-wcrp` is distributed under the
+[CeCILL-C Free Software License Agreement](https://www.cecill.info/licences/Licence_CeCILL-C_V1-en.html)
+(`CECILL-C`). The complete license text is available in the repository's
+[`LICENSE`](https://github.com/ESGF/cc-plugin-wcrp/blob/master/LICENSE) file.
 
