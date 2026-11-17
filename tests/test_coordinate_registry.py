@@ -18,6 +18,7 @@ from checks.coordinate_checks.esgvoc import (
     require_supported_version,
 )
 from checks.coordinate_checks.grid import (
+    _reduced_grid_guidance,
     _horizontal_label_for_grid_guidance,
     check_grid_cell_count,
     check_grid_label_recommendation,
@@ -2833,8 +2834,9 @@ def test_g190_hm_recommends_canonical_registered_global_mean_grid(nc):
     assert len(failures) == 1
     assert failures[0].weight == BaseCheck.MEDIUM
     assert failures[0].msgs == [
-        "The file uses grid_label='g190', but for horizontal_label='hm' and "
-        "region='glb' it is recommended to use the registered grid_label='g010'."
+        "The file uses grid_label='g190' for horizontal_label='hm' and "
+        "region='glb'. Reusing the parent grid_label is permitted for this reduced output. "
+        "It is, however, recommended to use the registered grid_label='g010'."
     ]
 
 
@@ -2916,6 +2918,54 @@ def test_registered_grid_region_accepts_matching_or_unavailable_values(
     assert result.weight == BaseCheck.MEDIUM
     assert result.value == (1, 1)
     assert not result.msgs
+
+
+@pytest.mark.parametrize("label,dimensions,reduced", [
+    ("hm", ("time",), True),
+    ("hy", ("latitude", "time"), True),
+    ("hyb", ("latitude", "basin", "time"), True),
+    ("ht", ("gridlatitude", "basin", "time"), True),
+    ("hs", ("site", "time"), True),
+    ("ht", ("oline", "time"), True),
+    ("hxy", ("longitude", "latitude", "time"), False),
+])
+@pytest.mark.parametrize("severity,word", [(BaseCheck.MEDIUM, "recommended"), (BaseCheck.HIGH, "required"), (BaseCheck.LOW, "alternative")])
+def test_grid_region_guidance_acknowledges_parent_labels(nc, label, dimensions, reduced, severity, word):
+    nc.region = "nh"
+    nc.horizontal_label = label
+    config = load_grid_topology_config(
+        Path(__file__).parents[1] / "plugins/cmip7/config/wcrp/mappings/grid_topology.toml"
+    )
+    findings = Findings({"grid_region_consistency": severity})
+    check_grid_region_consistency(
+        findings, nc, {"id": "parent", "region": {"drs_name": "glb"}},
+        catalog=catalog({}, dimensions=dimensions), grid_topology_config=config,
+    )
+    result = findings.results()[0]
+    assert result.weight == severity
+    assert len(result.msgs) == 1
+    assert ("Reusing the parent grid_label is permitted" in result.msgs[0]) is (reduced and severity != BaseCheck.HIGH)
+    if reduced:
+        assert word in result.msgs[0]
+    else:
+        assert "make the region and grid_label selections consistent" in result.msgs[0]
+
+
+@pytest.mark.parametrize("family,action", [
+    ("grid_label_recommendation", "use the registered grid_label='g010'"),
+    ("grid_label_recommendation", "register and/or use a grid_label with grid_type='basin_by_latitude'"),
+    ("grid_label_recommendation", "register and/or use a grid_label with grid_type='regular_latitude_longitude'"),
+    ("grid_cell_count_consistency", "register or select a separate grid_label describing the reduced output"),
+    ("grid_region_consistency", "register or select a grid_label describing the output region"),
+])
+@pytest.mark.parametrize("severity", [BaseCheck.HIGH, BaseCheck.MEDIUM, BaseCheck.LOW])
+def test_reduced_grid_guidance_respects_each_result_severity(family, action, severity):
+    message = _reduced_grid_guidance(Findings({family: severity}), family, action)
+    assert action in message
+    assert ("permitted" in message) is (severity != BaseCheck.HIGH)
+    assert ("required" in message) is (severity == BaseCheck.HIGH)
+    assert ("however, recommended" in message) is (severity == BaseCheck.MEDIUM)
+    assert ("An alternative" in message) is (severity == BaseCheck.LOW)
 
 
 def test_registered_grid_region_rejects_conflicting_file_value(nc):
@@ -3030,6 +3080,9 @@ def test_grid_cell_count_guidance_uses_configured_horizontal_layout(
     message = consistency.msgs[0]
     assert "register and/or use an appropriate grid_label" in message
     assert ("For reduced spatial output" in message) is reduced
+    assert ("Reusing the parent grid_label is permitted" in message) is reduced
+    if reduced:
+        assert "recommended to register or select a separate grid_label describing the reduced output" in message
 
 
 @pytest.mark.parametrize(
@@ -3065,6 +3118,7 @@ def test_special_layout_recommends_grid_label_without_cell_count(
     result = findings.results()[0]
     assert result.value == (0, 1)
     assert f"registered grid_label='{expected}'" in result.msgs[0]
+    assert "Reusing the parent grid_label is permitted" in result.msgs[0]
 
 
 def test_configured_alternative_grid_label_suppresses_canonical_recommendation(
@@ -3246,6 +3300,7 @@ def test_basin_layout_recommends_basin_by_latitude_grid_type(
     assert "registered grid_type='regular_latitude_longitude'" in result.msgs[0]
     assert f"horizontal_label='{expected_label}'" in result.msgs[0]
     assert "grid_type='basin_by_latitude'" in result.msgs[0]
+    assert "Reusing the parent grid_label is permitted for this reduced output." in result.msgs[0]
     assert "g014" not in result.msgs[0]
 
 
@@ -3281,6 +3336,7 @@ def test_zonal_mean_recommends_regular_latitude_longitude_grid_type(
     if expected_failures:
         assert "horizontal_label='hy'" in result.msgs[0]
         assert "grid_type='regular_latitude_longitude'" in result.msgs[0]
+        assert "Reusing the parent grid_label is permitted" in result.msgs[0]
     else:
         assert not result.msgs
 

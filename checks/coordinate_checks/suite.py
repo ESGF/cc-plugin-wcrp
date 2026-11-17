@@ -356,6 +356,8 @@ def check_coordinate_catalog(
         ds,
         registered_grid_metadata,
         attribute_presence_delegated=grid_region_presence_delegated,
+        catalog=catalog,
+        grid_topology_config=grid_topology_config,
     )
     check_grid_label_recommendation(
         findings,

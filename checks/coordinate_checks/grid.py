@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from compliance_checker.base import BaseCheck
 
 from checks.coordinate_checks.model import as_dict, reference_id, reference_ids
 from checks.coordinate_checks.scanning import (
@@ -167,6 +168,17 @@ def check_nominal_resolution(
         )
 
 
+def _reduced_grid_guidance(findings, family, action):
+    """Keep permission to retain a parent label consistent with local policy."""
+    severity = findings.severities.get(family)
+    if severity == BaseCheck.HIGH:
+        return f"It is required to {action}."
+    permission = "Reusing the parent grid_label is permitted for this reduced output. "
+    if severity == BaseCheck.MEDIUM:
+        return permission + f"It is, however, recommended to {action}."
+    return permission + f"An alternative is to {action}."
+
+
 def check_grid_label_recommendation(
     findings,
     ds,
@@ -207,9 +219,9 @@ def check_grid_label_recommendation(
             selectors += f" and region={region!r}"
         findings.add(
             "grid_label_recommendation",
-            f"The file uses grid_label='{current_label}', but for {selectors} it is "
-            f"{findings.severity_word('grid_label_recommendation')} to use the "
-            f"registered grid_label='{recommended_label}'.",
+            f"The file uses grid_label='{current_label}' for {selectors}. "
+            + _reduced_grid_guidance(findings, "grid_label_recommendation",
+                                     f"use the registered grid_label='{recommended_label}'"),
         )
         return
 
@@ -224,12 +236,15 @@ def check_grid_label_recommendation(
         if current_type
         else "no registered grid_type"
     )
+    action = f"register and/or use a grid_label with grid_type='{recommended_type}'"
+    guidance = f"It is {findings.severity_word('grid_label_recommendation')} to {action}."
+    if (_basin_by_latitude_axis(catalog)
+            or horizontal_label in grid_topology_config.reduced_horizontal_labels):
+        guidance = _reduced_grid_guidance(findings, "grid_label_recommendation", action)
     findings.add(
         "grid_label_recommendation",
         f"The file uses grid_label='{current_label}' with {current_description}, "
-        f"but for horizontal_label={horizontal_label!r} it is "
-        f"{findings.severity_word('grid_label_recommendation')} to register and/or "
-        f"use a grid_label with grid_type='{recommended_type}'.",
+        f"for horizontal_label={horizontal_label!r}. {guidance}",
     )
 
 
@@ -440,11 +455,9 @@ def check_grid_cell_count(
             "appropriate grid_label for this grid."
         )
         if horizontal_label in reduced_labels:
-            guidance += (
-                " For reduced spatial output such as hemispheric, global, or "
-                "zonal means, it is "
-                f"{findings.severity_word('grid_cell_count_consistency')} to "
-                "register or select a separate grid_label."
+            guidance += " For reduced spatial output: " + _reduced_grid_guidance(
+                findings, "grid_cell_count_consistency",
+                "register or select a separate grid_label describing the reduced output",
             )
         findings.add(
             "grid_cell_count_consistency",
@@ -502,6 +515,8 @@ def check_grid_region_consistency(
     registered_grid_metadata,
     *,
     attribute_presence_delegated=True,
+    catalog=None,
+    grid_topology_config=None,
 ):
     """Compare the file region with the registered grid's DRS region."""
     if not registered_grid_metadata:
@@ -527,11 +542,31 @@ def check_grid_region_consistency(
         return
     label = reference_id(registered_grid_metadata.get("id"))
     grid = f" for registered grid {label!r}" if label else ""
+    guidance = (
+        "Verify the intended output region and make the region and grid_label "
+        "selections consistent."
+    )
+    if catalog is not None and grid_topology_config is not None:
+        horizontal_label = _horizontal_label_for_grid_guidance(
+            catalog, str(ncattr(ds, "horizontal_label") or "").strip()
+        )
+        if (
+            horizontal_label in grid_topology_config.reduced_horizontal_labels
+            or _basin_by_latitude_axis(catalog)
+            or _configured_grid_label(grid_topology_config, horizontal_label, actual)
+            or any(
+                key[0] == horizontal_label
+                for key in grid_topology_config.recommended_grid_labels_by_horizontal_label_and_region
+            )
+        ):
+            guidance = "Verify that these selections are intentional. " + _reduced_grid_guidance(
+                findings, "grid_region_consistency",
+                "register or select a grid_label describing the output region",
+            )
     findings.add(
         "grid_region_consistency",
         f"File region={actual!r} is inconsistent with the registered grid "
-        f"region={expected!r}{grid}. Verify the intended output region and "
-        "make the region and grid_label selections consistent.",
+        f"region={expected!r}{grid}. {guidance}",
     )
 
 
