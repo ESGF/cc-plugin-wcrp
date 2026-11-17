@@ -2237,6 +2237,93 @@ def test_text_auxiliary_requires_sector_but_accepts_extra_unordered_labels(nc):
     )
 
 
+@pytest.mark.parametrize("padding", [" ", "\0"])
+@pytest.mark.parametrize("labels,missing", [
+    (["indian", "atlantic", "pacific"], False),
+    (["indian", "atlantic", "atlantic"], False),
+    (["indian", "pacific", "arctic"], True),
+])
+def test_text_auxiliary_padding_and_required_label_membership(nc, padding, labels, missing):
+    nc.createDimension("basin", 3)
+    nc.createDimension("strlen", 8)
+    sector = nc.createVariable("sector", "S1", ("basin", "strlen"))
+    sector[:] = np.asarray([list(label.ljust(8, padding)) for label in labels], dtype="S1")
+    sector.standard_name = "region"
+    nc.createVariable("ta", "f4", ("basin",)).coordinates = "sector"
+    entry = coordinate("basin", "auxiliary", "basin", data_type="character",
+                       cf_standard_name="region", coordinate_values=["atlantic", "indian"])
+    results = check_coordinate_catalog(nc, catalog({"basin": entry}), severities=FAMILIES)
+    found = messages(results)
+    if missing:
+        assert len(found) == 1
+        assert "missing requested label(s) ['atlantic']" in found[0]
+    else:
+        assert found == []
+
+
+@pytest.mark.parametrize("dimensions,dtype,family", [
+    (("strlen", "basin"), "S1", "COORD001"),
+    (("basin",), "S1", "COORD001"),
+    (("basin", "strlen"), "f8", "COORD001"),
+    (("basin", "text_length"), "S1", "COORD004"),
+])
+def test_text_auxiliary_structure_and_string_dimension(nc, dimensions, dtype, family):
+    for dim, size in (("basin", 2), ("strlen", 8), ("text_length", 8)):
+        nc.createDimension(dim, size)
+    nc.createVariable("sector", dtype, dimensions)
+    nc.createVariable("ta", "f4", ("basin",)).coordinates = "sector"
+    entry = coordinate("basin", "auxiliary", "basin", data_type="character")
+    results = check_coordinate_catalog(nc, catalog({"basin": entry}), severities=FAMILIES)
+    assert any(family in result.name and result.msgs for result in results)
+
+
+@pytest.mark.parametrize("role", ["latitude", "longitude"])
+@pytest.mark.parametrize("problem", [None, "wrong-dimension", "scalar", "two-dimensional", "wrong-units", "missing-variable"])
+def test_site_pair_reports_individual_coordinate_problems(nc, role, problem):
+    # Deliberately use neither 'site' nor conventional lat/lon variable names.
+    nc.createDimension("station", 2)
+    nc.createDimension("other", 2)
+    data = nc.createVariable("ta", "f4", ("station",))
+    data.coordinates = "northing easting"
+    for current, name, units in (("latitude", "northing", "degrees_north"),
+                                  ("longitude", "easting", "degrees_east")):
+        affected = current == role
+        if affected and problem == "missing-variable":
+            continue
+        dimensions = ("station",)
+        if affected:
+            dimensions = {"wrong-dimension": ("other",), "scalar": (),
+                          "two-dimensional": ("station", "other")}.get(problem, dimensions)
+        var = nc.createVariable(name, "f8", dimensions)
+        var[...] = 10.
+        var.standard_name = current
+        var.units = "m" if affected and problem == "wrong-units" else units
+    entry = coordinate("site", "site", "station", data_type="integer")
+    results = check_coordinate_catalog(
+        nc, catalog({"site": entry}), severities=FAMILIES,
+        unstructured_latitude_longitude_for=("site",),
+    )
+    found = messages(results)
+    if problem is None:
+        assert found == []
+        return
+    assert len(found) == 1, found
+    assert role in found[0]
+    assert_coordinate_families_pass(results, "COORD005", "COORD006", "COORD008")
+
+
+def test_missing_text_auxiliary_reports_one_prerequisite(nc):
+    nc.createDimension("basin", 2)
+    nc.createVariable("ta", "f4", ("basin",)).coordinates = "sector"
+    entry = coordinate("basin", "auxiliary", "basin", data_type="character",
+                       coordinate_values=["atlantic", "indian"])
+    results = check_coordinate_catalog(nc, catalog({"basin": entry}), severities=FAMILIES)
+    found = messages(results)
+    assert len(found) == 1
+    assert "'sector'" in found[0] and "absent" in found[0]
+    assert_coordinate_families_pass(results, "COORD007", "COORD010")
+
+
 def test_site_requires_linked_latitude_and_longitude(nc):
     nc.createDimension("site", 2)
     ta = nc.createVariable("ta", "f4", ("site",))
