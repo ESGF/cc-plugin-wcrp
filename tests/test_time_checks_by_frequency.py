@@ -13,7 +13,17 @@ from netCDF4 import Dataset
 from checks.time_checks.check_time_range_vs_filename import (
     check_time_range_vs_filename,
 )
-from checks.time_checks.check_time_squareness import check_time_squareness
+from checks.time_checks.check_time_squareness import check_time_squareness as _time001
+
+
+def check_time_squareness(dataset):
+    # These fixtures explicitly select the same interpretation as project TOML.
+    kind = {
+        "monC": "monthly_climatology",
+        "monClim": "monthly_climatology",
+        "1hrCM": "daily_cycle",
+    }.get(getattr(dataset, "frequency", ""))
+    return _time001(dataset, climatology_type=kind)
 
 
 DRS_CONFIG = Path(__file__).parents[1] / "plugins/cmip7/config/wcrp/drs.toml"
@@ -89,17 +99,26 @@ def _time_definition(frequency, calendar="360_day"):
         bounds_dates = [
             (
                 cftime.datetime(2000, 1, 1, calendar=calendar),
-                cftime.datetime(2101, 1, 1, calendar=calendar),
+                cftime.datetime(2100, 2, 1, calendar=calendar),
             ),
             (
                 cftime.datetime(2000, 2, 1, calendar=calendar),
-                cftime.datetime(2101, 2, 1, calendar=calendar),
+                cftime.datetime(2100, 3, 1, calendar=calendar),
             ),
         ]
         precision = PRECISION["climatology"]
         start_label = _label(bounds_dates[0][0], precision)
         # An exact first-of-month endpoint represents the preceding month.
-        end_label = "210101"
+        end_label = "210002"
+        if frequency == "1hrCM":
+            bounds_dates = [
+                (
+                    cftime.datetime(2000, 1, 1, hour, calendar=calendar),
+                    cftime.datetime(2000, 1, 30, hour + 1, calendar=calendar),
+                )
+                for hour in (0, 1)
+            ]
+            end_label = "200001"
     else:
         start = (
             cftime.datetime(1990, 1, 1, calendar=calendar)
@@ -120,6 +139,32 @@ def _time_definition(frequency, calendar="360_day"):
         for begin, end in bounds_dates
     ]
     times = [pair[0] if point else 0.5 * (pair[0] + pair[1]) for pair in bounds]
+    if climatology:
+        dates = (
+            [
+                cftime.datetime(2000, 1, 15, hour, 30, calendar=calendar)
+                for hour in (0, 1)
+            ]
+            if frequency == "1hrCM"
+            else None
+        )
+        if dates:
+            times = list(cftime.date2num(dates, units, calendar))
+        else:
+            times = [
+                0.5
+                * sum(
+                    cftime.date2num(
+                        [
+                            cftime.datetime(2050, month, 1, calendar=calendar),
+                            cftime.datetime(2050, month + 1, 1, calendar=calendar),
+                        ],
+                        units,
+                        calendar,
+                    )
+                )
+                for month in (1, 2)
+            ]
 
     if not climatology:
         dates = cftime.num2date(times, units=units, calendar=calendar)
@@ -141,7 +186,11 @@ def _make_file(tmp_path, frequency, *, calendar="360_day", wrong_end=False):
         climatology,
         point,
     ) = _time_definition(frequency, calendar)
-    filename_end = start_label if wrong_end else end_label
+    filename_end = (
+        "199901"
+        if wrong_end and climatology
+        else (start_label if wrong_end else end_label)
+    )
     path = tmp_path / f"tas_{frequency}_test_{start_label}-{filename_end}.nc"
     dataset = Dataset(path, "w")
     dataset.frequency = frequency
@@ -221,9 +270,11 @@ def test_bad_time_or_bounds_fails_time001_only(tmp_path, frequency, calendar):
     dataset, bounds_name = _make_file(tmp_path, frequency, calendar=calendar)
     with dataset:
         if bounds_name:
-            dataset.variables[bounds_name][0, 1] += 1.0
+            dataset.variables[bounds_name][0, 1] += (
+                1.0 / 24 if FREQUENCIES[frequency][3] else 1.0
+            )
             expected_message = (
-                "midpoint"
+                ("climatology" if frequency != "1hrCM" else "midpoint")
                 if FREQUENCIES[frequency][3]
                 else "time-bounds interval"
             )

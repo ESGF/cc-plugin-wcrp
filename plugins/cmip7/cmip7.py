@@ -624,7 +624,10 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
         directory_structure_owner = self._drs_directory_structure_owner(drs)
         if drs.filename:
             sev = self.get_severity(drs.filename.severity)
-            res.extend(check_drs_filename(ds, sev, project_id=self.project_name))
+            res.extend(check_drs_filename(
+                ds, sev, project_id=self.project_name,
+                climatology_suffix=drs.time_range.climatology_suffix if drs.time_range else "",
+            ))
 
         if drs.directory:
             sev = self.get_severity(drs.directory.severity)
@@ -1369,6 +1372,16 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                             calendar=rule.squareness.ref_calendar or "",
                             ref_time_units=rule.squareness.ref_time_units or "",
                             frequency=None,  # increments injected from TOML in setup()
+                            expected_is_climatology=next(
+                                (bool(entry.get("is_climatology"))
+                                 for _, entry in self._coordinate_entries_for_axis("T")),
+                                None,
+                            ),
+                            climatology_type=next(
+                                (rule.squareness.climatology_types.get(identifier)
+                                 for identifier, _ in self._coordinate_entries_for_axis("T")),
+                                None,
+                            ),
                             expected_cell_methods=self._coordinate_catalog.branded_variable.get(
                                 "cell_methods"
                             ),

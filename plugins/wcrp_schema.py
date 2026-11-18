@@ -449,6 +449,10 @@ class TimeSquarenessRule(BaseModel):
     ref_calendar: Optional[str] = None
     ref_time_units: Optional[str] = None
     ref_increment: Optional[str] = None
+    # Keys are vocabulary coordinate IDs, not netCDF variable names.
+    climatology_types: dict[str, Literal[
+        "monthly_climatology", "daily_cycle", "monthly_daily_statistics"
+    ]] = Field(default_factory=dict)
 
 
 class TimeCoverageRule(BaseModel):

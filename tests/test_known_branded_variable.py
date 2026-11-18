@@ -282,15 +282,13 @@ def test_all_registry_backed_plugins_use_new_known_branded_variable_model(
         ("plugins.c3scmip6.c3scmip6.c3scmip6", C3SCmip6ProjectCheck),
     ],
 )
-def test_cmip6_family_time003_uses_resolved_coordinate_climatology(
+def test_cmip6_family_time003_uses_configured_dimension_climatology(
     tmp_path, monkeypatch, module_name, checker_class
 ):
     module = importlib.import_module(module_name)
     record = {
         **NEW_RECORD,
-        "dimensions": [
-            SimpleNamespace(id="time_climatology", axis="T", is_climatology=True)
-        ],
+        "dimensions": ["time2"],
     }
     monkeypatch.setattr(
         module,

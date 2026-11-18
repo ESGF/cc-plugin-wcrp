@@ -273,6 +273,11 @@ is_required = false
 as_variable = true
 
 [coordinates.time.squareness]
+# Yet, no resolved coordinate descriptors are available for this project. A branded
+# variable dimension listed here identifies climatological time for TIME001
+# and TIME003; otherwise ordinary time sampling is taken from cell_methods.
+# Keys are vocabulary dimension IDs, not the netCDF variable name "time".
+climatology_types = { time2 = "monthly_climatology", time3 = "daily_cycle" }
 # Check TIME001
 severity = "H"
 ref_calendar = ""

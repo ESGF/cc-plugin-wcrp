@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import re
 
 from compliance_checker.base import BaseCheck, TestCtx
 
@@ -38,7 +39,7 @@ def _find_drs_directory_from_drs_specs(filepath: str, drs_specs: str) -> str | N
     return os.sep.join(parts[i:-1])
 
 
-def check_drs_filename(ds, severity, project_id="cmip6"):
+def check_drs_filename(ds, severity, project_id="cmip6", *, climatology_suffix=""):
     fixed_check_id = "FILE001"
     description = f"[{fixed_check_id}] DRS Filename Vocabulary Check"
     ctx = TestCtx(severity, description)
@@ -53,10 +54,19 @@ def check_drs_filename(ds, severity, project_id="cmip6"):
         return [ctx.to_result()]
 
     filename = os.path.basename(filepath)
+    vocabulary_filename = filename
+    if climatology_suffix:
+        # ESGVoc validates the time-range vocabulary without project suffixes.
+        # TIME003 independently verifies whether the suffix is required/allowed.
+        match = re.search(
+            r"(_\d+-\d+)" + re.escape(climatology_suffix) + r"(?=\.nc$)", filename
+        )
+        if match:
+            vocabulary_filename = filename[:match.end(1)] + filename[match.end():]
 
     try:
         validator = DrsValidator(project_id=_normalize_project_id(project_id))
-        file_report = validator.validate_file_name(filename)
+        file_report = validator.validate_file_name(vocabulary_filename)
 
         if file_report.errors:
             error_details = "; ".join(str(e) for e in file_report.errors)

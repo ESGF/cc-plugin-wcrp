@@ -23,8 +23,9 @@ def check_time_bounds(
     severity=BaseCheck.MEDIUM,
     coord_name="time",
     report_bounds_prerequisites=False,
+    expected_is_climatology=False,
 ):
-    """Check regular bounds shape and containment for one time coordinate."""
+    """Check bounds shape and containment, including climatology envelopes."""
     check_id = "TIME002"
     ctx = TestCtx(severity, f"[{check_id}] Check time bounds for '{coord_name}'")
 
@@ -33,11 +34,12 @@ def check_time_bounds(
 
     time_var = ds.variables[coord_name]
 
-    bnds_name = getattr(time_var, "bounds", None)
+    attribute = "climatology" if expected_is_climatology else "bounds"
+    bnds_name = getattr(time_var, attribute, None)
     if not bnds_name:
         if report_bounds_prerequisites:
             ctx.add_failure(
-                f"Coordinate '{coord_name}' has no bounds attribute, so its "
+                f"Coordinate '{coord_name}' has no {attribute} attribute, so its "
                 "time bounds could not be checked."
             )
             return [ctx.to_result()]
