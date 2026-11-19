@@ -278,10 +278,12 @@ def check_coordinate_catalog(
     nominal_resolution_policy=None,
     nominal_resolution_presence_delegated=True,
     grid_region_presence_delegated=True,
+    unit_exponent_policy=None,
 ):
     """Validate all coordinate IDs required by one known branded variable."""
     findings = Findings(
         severities,
+        unit_exponent_policy=unit_exponent_policy,
         bounds_dimension_name=bounds_dimension_name,
         vertices_dimension_name=vertices_dimension_name,
         climatology_bounds_name=climatology_bounds_name,

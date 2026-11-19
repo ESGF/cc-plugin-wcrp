@@ -569,6 +569,15 @@ class CoordinatesSection(BaseModel):
 # =============================================================================
 # Full merged config
 # =============================================================================
+class ExponentSpellingRule(BaseModel):
+    enabled: bool = True
+    severity: Literal["L", "M"] = "L"
+
+
+class UnitsSection(BaseModel):
+    exponent_spelling: ExponentSpellingRule = Field(default_factory=ExponentSpellingRule)
+
+
 class WCRPConfig(ProjectConfig):
     model_config = ConfigDict(extra="forbid")
 
@@ -578,3 +587,4 @@ class WCRPConfig(ProjectConfig):
 
     variable: Optional[GeophysicalVariableSection] = None
     coordinates: Optional[CoordinatesSection] = None
+    units: UnitsSection = Field(default_factory=UnitsSection)

@@ -72,6 +72,9 @@ PREREQUISITE_FALLBACKS = {
 }
 
 
+from checks.units import exponent_spelling_severity, exponent_spelling_message
+
+
 class Findings:
     """Collect atomic findings and emit one configured Result per family."""
 
@@ -84,8 +87,10 @@ class Findings:
         climatology_bounds_name: str = "climatology_bnds",
         time_bounds_delegated: bool = False,
         missing_value_attribute_policy=None,
+        unit_exponent_policy=None,
     ):
         self.severities = severities
+        self.unit_exponent_policy = unit_exponent_policy
         self.messages: dict[str, list[str]] = {key: [] for key in severities}
         self.bounds_dimension_name = bounds_dimension_name
         self.vertices_dimension_name = vertices_dimension_name
@@ -168,6 +173,7 @@ class Findings:
             "identity": "[COORD001] Coordinate identity and structure",
             "dimension_order": "[COORD002] Data-variable coordinate order",
             "attributes": "[COORD003] Coordinate metadata",
+            "unit_exponent_spelling": "[COORD003] Coordinate units exponent spelling",
             "missing_value_attributes": (
                 "[COORD003] Coordinate missing-value attributes"
             ),
@@ -532,7 +538,14 @@ def check_attributes(
             actual_units,
             expected_units,
             qualifier=findings.severity_word("attributes"),
+            normalize_exponents=exponent_spelling_severity(findings.unit_exponent_policy) is not None,
         )
+        if matches and actual_units != expected_units and "?" not in expected_units and "attributes" in findings.severities:
+            family = "unit_exponent_spelling"
+            findings.severities = dict(findings.severities)
+            findings.severities[family] = exponent_spelling_severity(findings.unit_exponent_policy)
+            findings.messages.setdefault(family, [])
+            findings.add(family, f"'{name}': {exponent_spelling_message(actual_units, expected_units)}")
         if not matches:
             findings.add("attributes", f"'{name}' {detail}.")
     else:

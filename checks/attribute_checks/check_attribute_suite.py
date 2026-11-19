@@ -7,6 +7,7 @@ from typing import Any, Iterable, Optional
 
 import numpy as np
 from compliance_checker.base import TestCtx
+from checks.units import normalize_unit_exponents, exponent_spelling_severity, exponent_spelling_message
 
 _UNRESTRICTED_CELL_MEASURES = {"--MODEL", "--OPT", "--UGRID"}
 
@@ -129,6 +130,7 @@ def check_attribute_suite(
     attribute_nc_name: Optional[str] = None,
     # Optional label prefix for nicer report grouping
     context: Optional[str] = None,
+    unit_exponent_policy=None,
 ):
     """
     Attribute suite checks.
@@ -473,6 +475,15 @@ def check_attribute_suite(
                     if expected_term_comparison == "equal"
                     else any(expected in actual for expected in expected_options)
                 )
+                exception_severity = exponent_spelling_severity(unit_exponent_policy)
+                if not matches and attribute_name == "units" and expected_term_comparison == "equal" and exception_severity is not None:
+                    equivalent = next((value for value in expected_options
+                        if normalize_unit_exponents(actual) == normalize_unit_exponents(value)), None)
+                    if equivalent is not None:
+                        spelling = TestCtx(exception_severity, f"[ATTR004] {label} exponent spelling")
+                        spelling.add_failure(exponent_spelling_message(attr_value, equivalent))
+                        results.append(spelling.to_result())
+                        matches = True
                 if matches:
                     ctx.add_pass()
                 else:

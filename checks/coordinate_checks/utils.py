@@ -8,6 +8,7 @@ import numpy as np
 from compliance_checker.cf import util as cfutil
 
 from checks.coordinate_checks.model import as_dict, reference_id, reference_ids
+from checks.units import normalize_unit_exponents
 
 _DIRECT_NUMERIC_RTOL = 1e-12
 _DIRECT_NUMERIC_ATOL = 1e-12
@@ -57,7 +58,7 @@ def neutral_dtype(var) -> str:
     return ""
 
 
-def compare_units(actual: str, expected: str, *, qualifier: str) -> tuple[bool, str]:
+def compare_units(actual: str, expected: str, *, qualifier: str, normalize_exponents=True) -> tuple[bool, str]:
     if not expected:
         return True, ""
     if not actual:
@@ -65,7 +66,7 @@ def compare_units(actual: str, expected: str, *, qualifier: str) -> tuple[bool, 
             False,
             f"units are missing; the {qualifier} units are {expected!r}",
         )
-    if actual == expected:
+    if actual == expected or (normalize_exponents and normalize_unit_exponents(actual) == normalize_unit_exponents(expected)):
         return True, ""
     if "?" in expected:
         pattern = re.escape(expected).replace(r"\?", ".+")

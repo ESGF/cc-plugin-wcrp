@@ -763,6 +763,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     expected_term=expected_term,
                     cv_source_term_key=rule.cv_source_term_key,
                     expected_term_comparison=rule.expected_term_comparison,
+                    unit_exponent_policy=self.config.units.exponent_spelling,
                     report_missing_expected_term=rule.report_missing_expected_term,
                 )
             )
@@ -1276,6 +1277,7 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                 else ()
             ),
             missing_value_attribute_policy=missing_values,
+            unit_exponent_policy=self.config.units.exponent_spelling,
             nominal_resolution_policy=registry.nominal_resolution,
             nominal_resolution_presence_delegated=(
                 registry.nominal_resolution is not None

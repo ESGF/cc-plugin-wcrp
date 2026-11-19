@@ -554,6 +554,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                     expected_term=expected_term,
                     cv_source_term_key=rule.cv_source_term_key,
                     expected_term_comparison=rule.expected_term_comparison,
+                    unit_exponent_policy=self.config.units.exponent_spelling,
                     report_missing_expected_term=rule.report_missing_expected_term,
                 )
             )

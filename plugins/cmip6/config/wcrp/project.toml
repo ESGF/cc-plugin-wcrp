@@ -4,3 +4,11 @@
 # Documentation & check inventory at https://esgf.github.io/cc-plugin-wcrp/checks/
 project_name = "cmip6"
 project_version = "1.0"
+
+# Compare units literally first. Allow only equivalent scientific-exponent
+# spellings (e.g. 1E-09 / 1e-9) at L or M; false restores strict comparison.
+# Only single-digit exponents may have a padding zero (09, not 012).
+# Applies to registry-backed data-variable and coordinate units.
+[units.exponent_spelling]
+enabled = true
+severity = "L"

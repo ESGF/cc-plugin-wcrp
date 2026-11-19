@@ -554,6 +554,7 @@ class C3SCmip6ProjectCheck(WCRPBaseCheck):
                     cv_source_collection_key=rule.cv_source_collection_key,
                     project_name=self.project_name,
                     expected_term=expected_term,
+                    unit_exponent_policy=self.config.units.exponent_spelling,
                     cv_source_term_key=rule.cv_source_term_key,
                 )
             )
