@@ -289,6 +289,11 @@ class WCRPBaseCheck(BaseCheck):
             if isinstance(value, str) and value in self.varname:
                 preferred.append(value)
         self.varname = preferred + [v for v in self.varname if v not in preferred]
+        # CF standard_name heuristics can mistake the main field (e.g. depthsl)
+        # for a coordinate. Prefer an explicitly selected, existing data field.
+        main = self._expected_data_variable_name(self.dataset)
+        if main in self.dataset.variables and main not in self.dataset.dimensions:
+            self.varname = [main] + [v for v in self.varname if v != main]
 
     def _load_project_config(self):
         """Loads the project-specific TOML configuration file using self.project_config_path."""
@@ -763,6 +768,9 @@ class WCRPBaseCheck(BaseCheck):
         ]
 
     def _initialize_coords_info(self):
+        main = self._expected_data_variable_name(self.dataset)
+        if main in self.dataset.dimensions:
+            main = None
         """Get information about the infile coordinates."""
         self.coords_redundant = {}
         self.bounds_redundant = {}
@@ -793,6 +801,8 @@ class WCRPBaseCheck(BaseCheck):
             ),
         }
         for key, candidates in coordinate_groups.items():
+            candidates = [name for name in candidates if name != main]
+            coordinate_groups[key] = candidates
             candidates = list(dict.fromkeys(candidates))
             if len(candidates) > 1:
                 self.coords_redundant[key] = candidates
@@ -835,6 +845,7 @@ class WCRPBaseCheck(BaseCheck):
                 coord_names.update(terms.values())
 
         coord_names.difference_update(self.bounds)
+        coord_names.discard(main)
         self.coords = [name for name in self.dataset.variables if name in coord_names]
 
         # Get the external variables

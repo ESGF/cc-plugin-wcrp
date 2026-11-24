@@ -559,6 +559,31 @@ def test_cordex_does_not_repeat_cf_discovery_after_loading_tables(
     assert calls == {"time": 1, "coordinates": 1}
 
 
+def test_main_depth_field_is_not_a_coordinate(tmp_path):
+    path = tmp_path / "depthsl.nc"
+    with Dataset(path, "w") as ds:
+        ds.variable_id = "depthsl"
+        ds.createDimension("lat", 2)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lat.standard_name = "latitude"
+        lat.units = "degrees_north"
+        lat[:] = [0, 1]
+        depth = ds.createVariable("depthsl", "f8", ("lat",))
+        depth.standard_name = "depth"
+        depth.units = "m"
+        depth[:] = [1, 2]
+    with Dataset(path) as ds:
+        checker = WCRPBaseCheck()
+        checker.dataset = ds
+        checker.time = None
+        checker._initialize_data_variables()
+        checker._initialize_coords_info()
+        assert checker.varname[0] == "depthsl"
+        assert "depthsl" not in checker.coords
+        assert "depthsl" not in checker._get_time_invariant_vars()
+        assert "lat" in checker.coords
+
+
 def test_time_invariant_variables_are_selected_lazily(cf_dataset):
     checker = WCRPBaseCheck()
     checker.dataset = cf_dataset
@@ -620,7 +645,8 @@ def test_cf_discovery_failure_does_not_abort_setup(cf_dataset, monkeypatch):
 
     checker.setup(cf_dataset)
 
-    assert checker.varname == []
+    # Explicit project metadata still identifies the field when CF discovery fails.
+    assert checker.varname == ["tas"]
     assert any("geophysical variables" in warning for warning in checker.setup_warnings)
 
 
