@@ -152,6 +152,8 @@ def _is_flag_variable(ds, var_name):
 
 
 class Cmip7ProjectCheck(WCRPBaseCheck):
+    # Coordinate identities become available only after catalogue setup.
+    _defer_consistency_output = True
     _cc_spec = "wcrp_cmip7"
     _cc_spec_version = "1.0"
     _cc_description = "WCRP CMIP7 Project Checks"
@@ -381,6 +383,9 @@ class Cmip7ProjectCheck(WCRPBaseCheck):
                     if isinstance(exc, CoordinateMetadataError)
                     else f"Unexpected {type(exc).__name__}: {exc}"
                 )
+
+        if self.consistency_output:
+            self._write_consistency_output()
 
     # -------------------------------------------------------------------------
     # CF-based geophysical variable identification

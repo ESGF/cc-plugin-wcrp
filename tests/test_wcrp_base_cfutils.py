@@ -486,6 +486,7 @@ def test_derived_plugin_writes_consistency_output_with_existing_schema(
         "variable_dtypes",
         "dimensions",
         "coordinates",
+        "coordinate_ids",
         "time_info",
     }
     assert payload["dimensions"]["time"] == "n"

@@ -21,6 +21,7 @@ from checks.attribute_checks.check_global_attributes_esgvoc import (
     get_global_attribute_validator,
 )
 from checks.utils import infer_frequency, sanitize, severity_ordered
+from checks.coordinate_checks.consistency import coordinate_ids_for_summary
 
 # Compliance Checker 6 moved these helpers from compliance_checker.cfutil.
 if not hasattr(cfutil, "get_geophysical_variables"):
@@ -1070,6 +1071,9 @@ class WCRPBaseCheck(BaseCheck):
             "variable_dtypes": var_dtypes,
             "dimensions": dims,
             "coordinates": coord_checksums,
+            "coordinate_ids": coordinate_ids_for_summary(
+                self.dataset, getattr(self, "_coordinate_catalog", None), coord_checksums
+            ),
             "time_info": time_info,
         }
 
