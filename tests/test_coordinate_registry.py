@@ -3011,7 +3011,7 @@ def _cell_count_results(
     )
 
 
-def test_missing_registered_grid_cell_count_uses_consistency_severity(nc):
+def test_missing_registered_grid_cell_count_uses_availability_severity(nc):
     _rectilinear_cell_count_file(nc)
 
     results = _cell_count_results(nc, {"id": "g100", "n_cells": None})
@@ -3023,10 +3023,11 @@ def test_missing_registered_grid_cell_count_uses_consistency_severity(nc):
         result for result in results if result.name.endswith("grid cell count")
     )
     assert availability.weight == BaseCheck.LOW
-    assert availability.value == (1, 1)
+    assert availability.value == (0, 1)
+    assert "does not define n_cells" in availability.msgs[0]
     assert consistency.weight == BaseCheck.MEDIUM
-    assert consistency.value == (0, 1)
-    assert "does not define n_cells" in consistency.msgs[0]
+    assert consistency.value == (1, 1)
+    assert consistency.msgs == []
 
 
 @pytest.mark.parametrize(("registered", "passes"), [(6, True), (12, False)])
@@ -3853,6 +3854,38 @@ def test_basin_by_latitude_cell_count_reports_neither_permitted_interpretation(n
         "either 4 latitude-axis cells or 12 latitude-by-basin/sector positions"
         in consistency.msgs[0]
     )
+
+
+def test_basin_by_latitude_missing_cell_count_remains_low_availability(nc):
+    cv, data_var, config = _basin_by_latitude_cell_count_case(nc, "latitude")
+    findings = Findings(
+        {
+            "grid_cell_count_availability": BaseCheck.LOW,
+            "grid_cell_count_consistency": BaseCheck.MEDIUM,
+        }
+    )
+
+    check_grid_cell_count(
+        findings,
+        nc,
+        cv,
+        data_var,
+        topology=None,
+        registered_grid_metadata={
+            "id": "g262",
+            "grid_type": {"id": "basin_by_latitude"},
+            "n_cells": None,
+        },
+        grid_topology_config=config,
+        allow_standard_name_fallback=False,
+    )
+
+    availability, consistency = findings.results()
+    assert availability.weight == BaseCheck.LOW
+    assert availability.value == (0, 1)
+    assert "Registered grid 'g262' does not define n_cells" in availability.msgs[0]
+    assert consistency.weight == BaseCheck.MEDIUM
+    assert consistency.value == (1, 1)
 
 
 @pytest.mark.parametrize("axis_identifier", ["latitude", "gridlatitude"])

@@ -1081,7 +1081,10 @@ def _validate_vertices(
                 "its vertex variable; dependent vertex checks could not be evaluated."
             ),
             issue=("missing_vertices_attribute", coordinate.name),
-            fallbacks=(f"grid_{role}_valid_range",),
+            fallbacks=(
+                "grid_geometry_missing_values",
+                f"grid_{role}_valid_range",
+            ),
         )
         return None, None
     if declared != recommended:
@@ -1098,7 +1101,10 @@ def _validate_vertices(
             "vertex variable is absent, so dependent vertex checks could not be "
             "evaluated.",
             issue=("missing_vertices_variable", declared),
-            fallbacks=(f"grid_{role}_valid_range",),
+            fallbacks=(
+                "grid_geometry_missing_values",
+                f"grid_{role}_valid_range",
+            ),
         )
         return None, None
     vertices = ds.variables[declared]
@@ -1119,7 +1125,10 @@ def _validate_vertices(
                 f"{vertices.shape}. Dependent vertex checks could not be evaluated."
             ),
             issue=("invalid_vertices_structure", declared),
-            fallbacks=(f"grid_{role}_valid_range",),
+            fallbacks=(
+                "grid_geometry_missing_values",
+                f"grid_{role}_valid_range",
+            ),
         )
         return None, None
 

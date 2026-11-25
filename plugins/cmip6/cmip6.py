@@ -453,7 +453,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                         directory_structure_owner == "attributes_vs_directory"
                     ),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -469,7 +469,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                         directory_structure_owner == "filename_vs_directory"
                     ),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -582,11 +582,9 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     ds,
                     sev,
                     project_id=self.project_name,
-                    filename_structure_delegated=self._drs_rule_owns(
-                        "filename", sev
-                    ),
+                    filename_structure_delegated=self._drs_rule_owns("filename"),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -627,23 +625,12 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                         check,
                         self.get_severity(rule.severity),
                         {
-                            "report_missing": not self._global_attribute_owns(
-                                attribute, self.get_severity(rule.severity)
-                            )
+                            "report_missing": not self._global_attribute_owns(attribute)
                         },
                     )
                     for rule, check, attribute in experiment_checks
                 ],
-                selector_error_delegated=self._global_attribute_owns(
-                    "experiment_id",
-                    max(
-                        (
-                            self.get_severity(rule.severity)
-                            for rule, _, _ in experiment_checks
-                        ),
-                        default=BaseCheck.HIGH,
-                    ),
-                ),
+                selector_error_delegated=self._global_attribute_owns("experiment_id"),
             )
         )
 
@@ -658,7 +645,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     missing_attributes_delegated={
                         name
                         for name in ("institution_id", "institution")
-                        if self._global_attribute_owns(name, sev)
+                        if self._global_attribute_owns(name)
                     },
                 )
             )
@@ -673,7 +660,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     missing_attributes_delegated={
                         name
                         for name in ("source_id", "institution_id")
-                        if self._global_attribute_owns(name, sev)
+                        if self._global_attribute_owns(name)
                     },
                 )
             )
@@ -687,7 +674,7 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                     self.table_id_to_frequency,
                     sev,
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -931,12 +918,10 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                                 "units" not in owned_attributes
                             ),
                             report_frequency_prerequisite=(
-                                not self._global_attribute_owns("frequency", sev)
+                                not self._global_attribute_owns("frequency")
                             ),
                             increment_mapping=self._time_increment_mapping,
-                            filename_structure_delegated=self._drs_rule_owns(
-                                "filename", sev
-                            ),
+                            filename_structure_delegated=self._drs_rule_owns("filename"),
                         )
                     )
 
@@ -1028,16 +1013,14 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                 identity_owned = bool(
                     time_rule
                     and time_rule.name
-                    and _sev(time_rule.name.severity) >= severity
                 )
                 units_rule = time_attributes.get("units")
                 units_owned = bool(
-                    units_rule and _sev(units_rule.severity) >= severity
+                    units_rule is not None
                 )
                 squareness_owned = bool(
                     time_rule
                     and time_rule.squareness
-                    and _sev(time_rule.squareness.severity) >= severity
                 )
                 res.extend(
                     check_time_range_vs_filename(
@@ -1052,11 +1035,9 @@ class Cmip6ProjectCheck(WCRPBaseCheck):
                         report_climatology_bounds_prerequisite=not squareness_owned,
                         report_frequency_prerequisite=not (
                             squareness_owned
-                            or self._global_attribute_owns("frequency", severity)
+                            or self._global_attribute_owns("frequency")
                         ),
-                        filename_structure_delegated=self._drs_rule_owns(
-                            "filename", severity
-                        ),
+                        filename_structure_delegated=self._drs_rule_owns("filename"),
                     )
                 )
 

@@ -81,7 +81,19 @@ def select_model_level(findings: Findings, ds, catalog, generic_id: str):
             "identity",
             f"{expectation} Variable {out_name!r} does not exist in the file.",
             issue=("missing_coordinate", out_name),
-            fallbacks=("formula",),
+            fallbacks=(
+                "formula",
+                "attributes",
+                "missing_value_integrity",
+                "direction",
+                "valid_range",
+                "bounds",
+                "bounds_name",
+                "dimension_order",
+                "recommendations",
+                "bounds_name_recommendations",
+            ),
+            include_default_fallbacks=False,
         )
         return None
     var = ds.variables[out_name]

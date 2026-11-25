@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import importlib
 
 import pytest
 from compliance_checker.base import BaseCheck, TestCtx as ComplianceTestCtx
@@ -27,7 +28,9 @@ from checks.consistency_checks.check_institution_source_consistency import (
     check_id_attribute_consistency,
 )
 from checks.coordinate_checks.grid import check_grid_cell_count
+from checks.coordinate_checks.grid import _validate_vertices
 from checks.coordinate_checks.model import Catalog
+from checks.coordinate_checks.ordinary import _identity_fallbacks
 from checks.coordinate_checks.suite import (
     check_coordinate_catalog,
     coordinate_catalog_required,
@@ -54,6 +57,311 @@ from plugins.wcrp_schema import CoordinateVariableConfig, WCRPConfig
 
 def _messages(results):
     return [message for result in results for message in result.msgs]
+
+
+@pytest.mark.parametrize(
+    ("kind", "entry", "present", "absent"),
+    (
+        (
+            "standard_1d",
+            {"data_type": "double"},
+            {"attributes", "direction", "dimension_order", "recommendations"},
+            {"formula", "requested_values", "bounds", "associations"},
+        ),
+        (
+            "standard_1d",
+            {
+                "data_type": "double",
+                "valid_min": 0,
+                "coordinate_values": [1],
+                "bounds_required": True,
+            },
+            {"valid_range", "requested_values", "bounds", "bounds_name"},
+            {"formula", "associations"},
+        ),
+        (
+            "scalar",
+            {"data_type": "double", "valid_max": 1},
+            {"attributes", "missing_value_prohibited", "valid_range", "associations"},
+            {"formula", "direction", "dimension_order"},
+        ),
+        (
+            "auxiliary",
+            {"data_type": "character", "coordinate_values": ["atlantic"]},
+            {"attributes", "missing_value_prohibited", "associations", "requested_values"},
+            {"formula", "direction", "valid_range", "bounds", "dimension_order"},
+        ),
+    ),
+)
+def test_coordinate_identity_fallbacks_are_context_specific(
+    kind, entry, present, absent
+):
+    fallbacks = _identity_fallbacks(entry, kind)
+
+    assert present <= set(fallbacks)
+    assert set(fallbacks).isdisjoint(absent)
+    advice = ("recommendations", "bounds_name_recommendations")
+    assert fallbacks[-len(set(fallbacks) & set(advice)) :] == tuple(
+        family for family in advice if family in fallbacks
+    )
+
+
+def test_grid_fallbacks_exclude_unrelated_coordinate_checks_and_end_in_advice():
+    fallbacks = PREREQUISITE_FALLBACKS["grid"]
+
+    assert "formula" not in fallbacks
+    assert "requested_values" not in fallbacks
+    assert fallbacks.index("grid_geometry_missing_values") < fallbacks.index(
+        "grid_latitude_valid_range"
+    )
+    assert fallbacks[-2:] == ("recommendations", "bounds_name_recommendations")
+
+
+@pytest.mark.parametrize("weights", [(1, 3, 2), (3, 2, 1), (2, 1, 3)])
+@pytest.mark.parametrize("disabled", range(7))
+def test_complete_missing_time_chain(weights, disabled):
+    chain = [
+        "monotonicity",
+        "squareness",
+        "coverage",
+        "calendar",
+        "units",
+        "calendar_recommendation",
+    ]
+    enabled = set(chain[disabled:])
+    config = {
+        key: {"severity": "LMH"[weights[chain.index(key) % 3] - 1]}
+        for key in ("monotonicity", "squareness", "coverage", "calendar_recommendation")
+        if key in enabled
+    }
+    if "monotonicity" in config:
+        config["monotonicity"]["direction"] = "increasing"
+    config["attributes"] = {
+        key: {"severity": "LMH"[weights[chain.index(key) % 3] - 1]}
+        for key in ("calendar", "units")
+        if key in enabled
+    }
+    results = missing_configured_coordinate_result(
+        "time", CoordinateVariableConfig.model_validate(config), Cmip7ProjectCheck().get_severity
+    )
+    if disabled == len(chain):
+        assert results == []
+    else:
+        assert len(results) == 1
+        labels = ["VAR005", "TIME001", "TIME002", "ATTR004", "ATTR004", "TIME003a"]
+        assert results[0].name.startswith(f"[{labels[disabled]}]")
+        assert results[0].weight == weights[disabled % 3]
+        assert len(results[0].msgs) == 1
+        if 3 <= disabled <= 4:
+            assert f"'{chain[disabled]}'" in results[0].name
+
+
+@pytest.mark.parametrize("role", ["latitude", "longitude"])
+@pytest.mark.parametrize("problem", ["attribute", "variable", "shape"])
+@pytest.mark.parametrize("weights", [(1, 3, 2), (3, 2, 1), (2, 1, 3)])
+@pytest.mark.parametrize("disabled", range(len(PREREQUISITE_FALLBACKS["grid"]) + 2))
+def test_vertex_explicit_fallback_chain(tmp_path, role, problem, weights, disabled):
+    chain = list(dict.fromkeys(("grid", "grid_geometry_missing_values",
+                               f"grid_{role}_valid_range",
+                               *PREREQUISITE_FALLBACKS["grid"])))
+    severities = {key: weights[i % 3] for i, key in enumerate(chain) if i >= disabled}
+    findings = Findings(severities)
+    with Dataset(tmp_path / "vertices.nc", "w") as ds:
+        ds.createDimension("cells", 2)
+        coord = ds.createVariable(role, "f8", ("cells",))
+        if problem != "attribute":
+            coord.bounds = f"vertices_{role}"
+        if problem == "shape":
+            ds.createVariable(coord.bounds, "f8", ("cells",))
+        # Repeated consumers must not report the same root cause twice.
+        for _ in range(2):
+            _validate_vertices(findings, ds, coord, role, {}, _catalog({}))
+    populated = {key: messages for key, messages in findings.messages.items() if messages}
+    if disabled >= len(chain):
+        assert populated == {}
+    else:
+        assert list(populated) == [chain[disabled]]
+        assert len(populated[chain[disabled]]) == 1
+        failures = [r for r in findings.results() if r.msgs]
+        assert len(failures) == 1
+        assert failures[0].weight == weights[disabled % 3]
+
+
+_EMD_CHAIN = list(dict.fromkeys((
+    "grid", "grid_mapping_consistency", "grid_region_consistency",
+    "grid_label_recommendation", "grid_cell_count_availability",
+    "grid_cell_count_consistency", *PREREQUISITE_FALLBACKS["grid"],
+)))
+
+
+@pytest.mark.parametrize("weights", [(1, 3, 2), (3, 2, 1), (2, 1, 3)])
+@pytest.mark.parametrize("disabled", range(len(_EMD_CHAIN) + 1))
+def test_unavailable_emd_explicit_fallback_chain(tmp_path, weights, disabled):
+    severities = {key: weights[i % 3] for i, key in enumerate(_EMD_CHAIN) if i >= disabled}
+    with Dataset(tmp_path / "emd.nc", "w") as ds:
+        results = check_coordinate_catalog(
+            ds, _catalog({}), severities=severities,
+            registered_grid_metadata_error="Grid database unavailable",
+        )
+    failures = [r for r in results if r.msgs]
+    if disabled == len(_EMD_CHAIN):
+        assert failures == []
+    else:
+        expected = Findings(severities)
+        expected.add(_EMD_CHAIN[disabled], "Grid database unavailable")
+        expected_result = next(r for r in expected.results() if r.msgs)
+        assert len(failures) == 1
+        assert failures[0].name == expected_result.name
+        assert failures[0].weight == weights[disabled % 3]
+        assert len(failures[0].msgs) == 1
+
+
+@pytest.mark.parametrize("checker_class", [Cmip6ProjectCheck, Cmip6PlusProjectCheck, C3SCmip6ProjectCheck])
+@pytest.mark.parametrize("owner_severity,consumer_severity", [("L", "H"), ("H", "M"), ("M", "L")])
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("owner,flags", [
+    ("name", ("report_time_structure_prerequisite",)),
+    ("units", ("report_time_units_prerequisite",)),
+    ("squareness", ("report_time_values_prerequisite", "report_climatology_bounds_prerequisite", "report_frequency_prerequisite")),
+])
+def test_legacy_plugin_local_time_delegation(tmp_path, monkeypatch, checker_class,
+                                           owner_severity, consumer_severity, enabled, owner, flags):
+    checker = checker_class()
+    rule = {}
+    if enabled:
+        if owner == "units":
+            rule["attributes"] = {"units": {"severity": owner_severity}}
+        elif owner == "name":
+            rule["name"] = {"severity": owner_severity, "variable_name": "time"}
+        else:
+            rule[owner] = {"severity": owner_severity}
+    checker.config = WCRPConfig.model_validate({
+        "project_name": "test", "project_version": "1",
+        "coordinates": {"time": rule},
+        "drs": {"time_range": {"severity": consumer_severity}},
+    })
+    monkeypatch.setattr(checker, "_get_expected_from_registry", lambda *a, **k: (
+        ExpectedVariableMetadata(dimensions=["time"], cell_methods="time: point"), []))
+    calls = []
+    def capture(ds, severity, **kwargs):
+        calls.append((severity, kwargs))
+        return []
+    monkeypatch.setattr(importlib.import_module(checker_class.__module__),
+                        "check_time_range_vs_filename", capture)
+    with Dataset(tmp_path / "time.nc", "w") as ds:
+        ds.createDimension("time", 2)
+        time = ds.createVariable("time", "f8", ("time",))
+        time[:] = [0, 1]
+        time.units = "days since 2000-01-01"
+        time.calendar = "standard"
+        ds.frequency = "day"
+        checker.check_Coordinates(ds)
+    assert len(calls) == 1
+    assert calls[0][0] == checker.get_severity(consumer_severity)
+    for flag in flags:
+        assert calls[0][1][flag] is not enabled
+    for flag in ("report_time_structure_prerequisite", "report_time_units_prerequisite",
+                 "report_time_values_prerequisite", "report_climatology_bounds_prerequisite",
+                 "report_frequency_prerequisite"):
+        if flag not in flags:
+            assert calls[0][1][flag] is True
+
+
+@pytest.mark.parametrize("checker_class", [Cmip7ProjectCheck, Cmip6ProjectCheck,
+    Cmip6PlusProjectCheck, C3SCmip6ProjectCheck, CordexCmip6ProjectCheck])
+@pytest.mark.parametrize("owner_severity", ["L", "M", "H"])
+def test_project_ownership_uses_enabled_rules_not_severity(checker_class, owner_severity):
+    checker = checker_class()
+    checker.config = WCRPConfig.model_validate({
+        "project_name": "test", "project_version": "1",
+        "global": {"attributes": {"frequency": {"severity": owner_severity}}},
+        "variable": {"existence": {"severity": owner_severity},
+                     "attributes": {"units": {"severity": owner_severity, "cv_source_term_key": "units"}}},
+        "coordinates": {"registry": {"attributes": {"severity": owner_severity}}},
+        "drs": {"filename": {"severity": owner_severity}},
+    })
+    assertions = [
+        lambda: checker._global_attribute_owns("frequency"),
+        lambda: checker._variable_existence_owns(),
+        lambda: checker._variable_registry_owns(),
+        lambda: checker._coordinate_registry_owns("attributes"),
+        lambda: checker._drs_rule_owns("filename"),
+    ]
+    assert all(check() for check in assertions)
+    assert not checker._global_attribute_owns("region")
+    assert not checker._coordinate_registry_owns("bounds")
+    checker.config.global_.attributes.clear()
+    checker.config.variable.existence = None
+    checker.config.variable.attributes.clear()
+    checker.config.coordinates.registry.attributes = None
+    checker.config.drs.filename = None
+    assert not any(check() for check in assertions)
+
+
+@pytest.mark.parametrize("checker_class", [Cmip7ProjectCheck, CordexCmip6ProjectCheck])
+def test_unrelated_coordinate_check_cannot_own_time_prerequisites(checker_class):
+    checker = checker_class()
+    checker.config = WCRPConfig.model_validate({
+        "project_name": "test", "project_version": "1",
+        "coordinates": {"latitude": {"squareness": {"severity": "H"}},
+                        "time": {"squareness": {"severity": "L"}}},
+    })
+    checker._coordinate_catalog = _catalog({"time": _coordinate("time", axis="T")})
+    assert checker._coordinate_rule_enabled_for_axis("T", "squareness")
+    checker.config.coordinates.variables["time"].squareness = None
+    assert not checker._coordinate_rule_enabled_for_axis("T", "squareness")
+
+
+@pytest.mark.parametrize("checker_class", [Cmip7ProjectCheck, CordexCmip6ProjectCheck])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_time_bounds_delegation_keeps_low_owner_and_ignores_other_axes(tmp_path, monkeypatch, checker_class, enabled):
+    import importlib
+
+    checker = checker_class()
+    checker.config = WCRPConfig.model_validate({
+        "project_name": "test", "project_version": "1",
+        "coordinates": {"registry": {"bounds": {"severity": "H"}},
+                        "latitude": {"coverage": {"severity": "H"}},
+                        "time": {"coverage": {"severity": "L"}} if enabled else {}},
+    })
+    checker._coordinate_catalog = _catalog({"time": _coordinate("time", axis="T")})
+    for name in ("_coordinate_grid_topology", "_coordinate_grid_error", "_coordinate_grid_metadata",
+                 "_coordinate_grid_metadata_error", "_grid_topology_config"):
+        setattr(checker, name, None)
+    captured = {}
+    def capture(*args, **kwargs):
+        captured.update(kwargs)
+        return []
+    monkeypatch.setattr(importlib.import_module(checker_class.__module__), "check_coordinate_catalog", capture)
+    with Dataset(tmp_path / "bounds.nc", "w") as ds:
+        ds.createDimension("time", 1)
+        ds.createDimension("bnds", 2)
+        time = ds.createVariable("time", "f8", ("time",))
+        time.units = "days since 2000-01-01"
+        time.bounds = "time_bnds"
+        time[:] = [3]
+        ds.createVariable("time_bnds", "f8", ("time", "bnds"))[:] = [[0, 1]]
+        results = checker.check_Coordinate_Standard(ds)
+    assert captured["time_bounds_delegated"] == enabled
+    assert [r.weight for r in results if r.msgs] == ([BaseCheck.LOW] if enabled else [])
+
+
+@pytest.mark.parametrize("owner_enabled,fallback_enabled,expected", [
+    (True, True, 1), (False, True, 2), (False, False, None),
+])
+def test_ncells_ownership_does_not_inherit_severity(owner_enabled, fallback_enabled, expected):
+    severities = {}
+    if owner_enabled:
+        severities["grid_cell_count_availability"] = 1
+    if fallback_enabled:
+        severities["grid_cell_count_consistency"] = 2
+    findings = Findings(severities)
+    for _ in range(2):
+        findings.add_prerequisite("grid_cell_count_availability", "missing n_cells",
+            fallbacks=("grid_cell_count_consistency",), issue="n_cells")
+    failures = [r for r in findings.results() if r.msgs]
+    assert [r.weight for r in failures] == ([] if expected is None else [expected])
+    assert all(r.msgs == ["missing n_cells"] for r in failures)
 
 
 _COORDINATE_PREREQUISITE_WALK = [
@@ -451,10 +759,12 @@ def test_attr012_registry_failure_respects_metadata_owner(
         (("attribute", "squareness", "time_range"), None),
     ),
 )
+@pytest.mark.parametrize("weights", [(3, 3, 3), (1, 3, 2), (3, 2, 1)])
 def test_missing_frequency_hierarchy_walks_enabled_toml_rules(
     tmp_path,
     disabled_prefix,
     expected_check,
+    weights,
 ):
     enabled = {"attribute", "squareness", "time_range"} - set(disabled_prefix)
     config = {
@@ -462,7 +772,7 @@ def test_missing_frequency_hierarchy_walks_enabled_toml_rules(
         "project_version": "1.0",
         "global": {
             "attributes": (
-                {"frequency": {"severity": "H"}}
+                {"frequency": {"severity": {1: "L", 2: "M", 3: "H"}[weights[0]]}}
                 if "attribute" in enabled
                 else {}
             )
@@ -498,7 +808,7 @@ def test_missing_frequency_hierarchy_walks_enabled_toml_rules(
                 check_attribute_suite(
                     ds,
                     "frequency",
-                    BaseCheck.HIGH,
+                    weights[0],
                     is_required=True,
                 )
             )
@@ -506,10 +816,9 @@ def test_missing_frequency_hierarchy_walks_enabled_toml_rules(
             results.extend(
                 check_time_squareness(
                     ds,
+                    severity=weights[1],
                     expected_cell_methods="time: mean",
-                    report_frequency_prerequisite=not checker._global_attribute_owns(
-                        "frequency", BaseCheck.HIGH
-                    ),
+                    report_frequency_prerequisite=not checker._global_attribute_owns("frequency"),
                 )
             )
         if "time_range" in enabled:
@@ -517,10 +826,9 @@ def test_missing_frequency_hierarchy_walks_enabled_toml_rules(
             results.extend(
                 check_time_range_vs_filename(
                     ds,
+                    severity=weights[2],
                     report_frequency_prerequisite=not (
-                        checker._global_attribute_owns(
-                            "frequency", BaseCheck.HIGH
-                        )
+                        checker._global_attribute_owns("frequency")
                         or squareness_owns
                     ),
                 )
@@ -530,6 +838,7 @@ def test_missing_frequency_hierarchy_walks_enabled_toml_rules(
     assert len(failures) == (1 if expected_check is not None else 0)
     if expected_check is not None:
         assert failures[0].name.startswith(f"[{expected_check}]")
+        assert failures[0].weight == weights[("ATTR001", "TIME001", "TIME003").index(expected_check)]
 
 
 @pytest.mark.parametrize(
@@ -541,10 +850,12 @@ def test_missing_frequency_hierarchy_walks_enabled_toml_rules(
         (("coordinate_attributes", "squareness", "time_range"), None),
     ),
 )
+@pytest.mark.parametrize("weights", [(3, 3, 3), (1, 3, 2), (3, 2, 1)])
 def test_missing_time_units_hierarchy_walks_enabled_toml_rules(
     tmp_path,
     disabled_prefix,
     expected_check,
+    weights,
 ):
     enabled = {
         "coordinate_attributes",
@@ -600,13 +911,14 @@ def test_missing_time_units_hierarchy_walks_enabled_toml_rules(
                 check_coordinate_catalog(
                     ds,
                     catalog,
-                    severities={"attributes": BaseCheck.HIGH},
+                    severities={"attributes": weights[0]},
                 )
             )
         if "squareness" in enabled:
             results.extend(
                 check_time_squareness(
                     ds,
+                    severity=weights[1],
                     expected_cell_methods="time: mean",
                     report_units_prerequisite=(
                         "coordinate_attributes" not in enabled
@@ -617,6 +929,7 @@ def test_missing_time_units_hierarchy_walks_enabled_toml_rules(
             results.extend(
                 check_time_range_vs_filename(
                     ds,
+                    severity=weights[2],
                     report_time_units_prerequisite=not (
                         "coordinate_attributes" in enabled
                         or "squareness" in enabled
@@ -628,6 +941,7 @@ def test_missing_time_units_hierarchy_walks_enabled_toml_rules(
     assert len(failures) == (1 if expected_check is not None else 0)
     if expected_check is not None:
         assert failures[0].name.startswith(f"[{expected_check}]")
+        assert failures[0].weight == weights[("COORD003", "TIME001", "TIME003").index(expected_check)]
 
 
 @pytest.mark.parametrize(
@@ -638,11 +952,13 @@ def test_missing_time_units_hierarchy_walks_enabled_toml_rules(
         (False, False, None),
     ),
 )
+@pytest.mark.parametrize("weights", [(3, 3), (1, 3), (3, 2)])
 def test_missing_regular_time_bounds_walks_enabled_toml_rules(
     tmp_path,
     coordinate_bounds_enabled,
     time002_enabled,
     expected_check,
+    weights,
 ):
     catalog = _catalog(
         {
@@ -662,14 +978,14 @@ def test_missing_regular_time_bounds_walks_enabled_toml_rules(
                 check_coordinate_catalog(
                     ds,
                     catalog,
-                    severities={"bounds": BaseCheck.HIGH},
+                    severities={"bounds": weights[0]},
                 )
             )
         if time002_enabled:
             results.extend(
                 check_time_bounds(
                     ds,
-                    BaseCheck.HIGH,
+                    weights[1],
                     report_bounds_prerequisites=not coordinate_bounds_enabled,
                 )
             )
@@ -678,6 +994,7 @@ def test_missing_regular_time_bounds_walks_enabled_toml_rules(
     assert len(failures) == (1 if expected_check is not None else 0)
     if expected_check is not None:
         assert failures[0].name.startswith(f"[{expected_check}]")
+        assert failures[0].weight == weights[("COORD008", "TIME002").index(expected_check)]
 
 
 def test_grid_region_reports_missing_attribute_without_attr_owner(tmp_path):
@@ -745,17 +1062,16 @@ def test_frequency_consistency_reports_only_unowned_missing_attribute(tmp_path):
     ]
 
 
-def test_attribute_prerequisite_owner_must_not_lower_severity():
+def test_configured_attributes_own_their_prerequisites():
     checker = Cmip6ProjectCheck()
     checker._load_split_config()
 
-    assert not checker._global_attribute_owns("source", BaseCheck.HIGH)
-    assert not checker._global_attribute_owns("institution", BaseCheck.HIGH)
-    assert checker._global_attribute_owns("source_id", BaseCheck.HIGH)
-    assert checker._global_attribute_owns("source", BaseCheck.LOW)
+    assert checker._global_attribute_owns("source")
+    assert checker._global_attribute_owns("institution")
+    assert checker._global_attribute_owns("source_id")
 
 
-def test_variant_prerequisite_owner_is_selected_per_attribute_severity(tmp_path):
+def test_variant_prerequisite_defers_to_enabled_attribute_owner(tmp_path):
     with Dataset(tmp_path / "variant-severity.nc", "w") as dataset:
         dataset.variant_label = "r1i1p1f1"
         results = variant_checks.check_variant_label_consistency_group(
@@ -772,9 +1088,7 @@ def test_variant_prerequisite_owner_is_selected_per_attribute_severity(tmp_path)
             },
         )
 
-    assert _messages(results) == [
-        "Missing required global attribute: 'realization_index'."
-    ]
+    assert _messages(results) == []
 
 
 def test_attr011_reports_unowned_missing_attribute(tmp_path):
@@ -846,7 +1160,7 @@ def test_expected_data_variable_is_authoritative_for_every_project_plugin(tmp_pa
         assert "Variable 'ta' is missing" in _messages(results)[0]
 
 
-def test_missing_data_variable_fallback_uses_highest_dependent_severity(tmp_path):
+def test_known_missing_data_variable_uses_existence_owner(tmp_path):
     checker = Cmip7ProjectCheck()
     checker.config = WCRPConfig.model_validate(
         {
@@ -869,11 +1183,11 @@ def test_missing_data_variable_fallback_uses_highest_dependent_severity(tmp_path
         )
 
     assert name is None
-    assert results[0].weight == BaseCheck.HIGH
-    assert "dependent variable checks" in _messages(results)[0]
+    assert results[0].weight == BaseCheck.MEDIUM
+    assert "Variable 'ta' is missing" in _messages(results)[0]
 
 
-def test_cordex_compression_delegates_only_to_equal_severity_variable_owner(
+def test_cordex_compression_delegates_to_enabled_variable_owner(
     monkeypatch,
 ):
     checker = CordexCmip6ProjectCheck()
@@ -892,10 +1206,12 @@ def test_cordex_compression_delegates_only_to_equal_severity_variable_owner(
         checker, "_get_geo_var", lambda *_args, **_kwargs: (None, detection)
     )
 
-    assert checker.check_File_Compression(SimpleNamespace()) == detection
+    assert checker.check_File_Compression(SimpleNamespace()) == []
 
     checker.config.variable.type.severity = "H"
     assert checker.check_File_Compression(SimpleNamespace()) == []
+    checker.config.variable.type = None
+    assert checker.check_File_Compression(SimpleNamespace()) == detection
 
 
 def test_cmip6_family_reports_required_coordinate_missing_from_file(
@@ -1151,7 +1467,7 @@ def test_omitting_drs_time_range_really_disables_catalogue_dependency():
     assert coordinate_catalog_required(config) is False
 
 
-def test_missing_configured_time_uses_highest_severity_consumer():
+def test_missing_configured_time_uses_first_enabled_consumer():
     rule = CoordinateVariableConfig.model_validate(
         {
             "monotonicity": {"severity": "M", "direction": "increasing"},
@@ -1164,8 +1480,8 @@ def test_missing_configured_time_uses_highest_severity_consumer():
     )
 
     assert len(results) == 1
-    assert "[TIME001]" in results[0].name
-    assert results[0].weight == BaseCheck.HIGH
+    assert "[VAR005]" in results[0].name
+    assert results[0].weight == BaseCheck.MEDIUM
     assert "could not be evaluated" in results[0].msgs[0]
 
 
@@ -1186,7 +1502,7 @@ def test_missing_configured_time_uses_stable_hierarchy_for_equal_severities():
     assert results[0].weight == BaseCheck.HIGH
 
 
-def test_coordinate_prerequisite_uses_highest_severity_fallback():
+def test_coordinate_prerequisite_keeps_enabled_owner():
     findings = Findings(
         {
             "identity": BaseCheck.MEDIUM,
@@ -1199,11 +1515,11 @@ def test_coordinate_prerequisite_uses_highest_severity_fallback():
         issue="missing-coordinate",
     )
 
-    assert owner == "attributes"
+    assert owner == "identity"
     results = findings.results()
     failure = next(result for result in results if result.msgs)
-    assert failure.weight == BaseCheck.HIGH
-    assert failure.msgs == ["reported by attributes"]
+    assert failure.weight == BaseCheck.MEDIUM
+    assert failure.msgs == ["reported by identity"]
 
 
 def test_coordinate_prerequisite_tie_uses_hard_coded_hierarchy():
@@ -1227,14 +1543,16 @@ def test_coordinate_prerequisite_tie_uses_hard_coded_hierarchy():
     ("owner", "enabled_families", "expected_owner"),
     _COORDINATE_PREREQUISITE_WALK,
 )
+@pytest.mark.parametrize("weights", [(3, 3, 3), (1, 3, 2), (2, 1, 3), (3, 2, 1)])
 def test_coordinate_prerequisite_hierarchies_walk_enabled_fallbacks(
     owner,
     enabled_families,
     expected_owner,
+    weights,
 ):
     """Each disabled owner hands one root cause to the next configured check."""
     findings = Findings(
-        {family: BaseCheck.HIGH for family in enabled_families}
+        {family: weights[i % len(weights)] for i, family in enumerate(enabled_families)}
     )
 
     selected = findings.add_prerequisite(
@@ -1244,6 +1562,10 @@ def test_coordinate_prerequisite_hierarchies_walk_enabled_fallbacks(
     )
 
     assert selected == expected_owner
+    failures = [result for result in findings.results() if result.msgs]
+    if expected_owner is not None:
+        assert len(failures) == 1
+        assert failures[0].weight == findings.severities[expected_owner]
     populated = {
         family: messages
         for family, messages in findings.messages.items()
@@ -1260,12 +1582,14 @@ def test_coordinate_prerequisite_hierarchies_walk_enabled_fallbacks(
     ("enabled_families", "expected_owner"),
     _BLOCKED_DATA_VARIABLE_WALK,
 )
+@pytest.mark.parametrize("weights", [(3, 3, 3), (1, 3, 2), (2, 1, 3), (3, 2, 1)])
 def test_missing_data_variable_hierarchy_walks_enabled_consumers(
     enabled_families,
     expected_owner,
+    weights,
 ):
     findings = Findings(
-        {family: BaseCheck.HIGH for family in enabled_families}
+        {family: weights[i % len(weights)] for i, family in enumerate(enabled_families)}
     )
 
     selected = findings.add_blocked(
@@ -1292,7 +1616,7 @@ def test_missing_data_variable_hierarchy_walks_enabled_consumers(
     )
 
 
-def test_blocked_prerequisite_uses_severity_then_argument_order():
+def test_blocked_prerequisite_uses_argument_order():
     findings = Findings(
         {
             "dimension_order": BaseCheck.MEDIUM,
@@ -1306,7 +1630,7 @@ def test_blocked_prerequisite_uses_severity_then_argument_order():
         issue="missing-data-variable",
     )
 
-    assert owner == "associations"
+    assert owner == "dimension_order"
 
 
 @pytest.mark.parametrize(
@@ -1327,10 +1651,12 @@ def test_blocked_prerequisite_uses_severity_then_argument_order():
     )
     + (pytest.param((), None, id="all-disabled"),),
 )
+@pytest.mark.parametrize("weights", [(3, 3, 3), (1, 3, 2), (2, 1, 3), (3, 2, 1)])
 def test_variant_selector_hierarchy_walks_enabled_toml_checks(
     tmp_path,
     enabled_checks,
     expected_check,
+    weights,
 ):
     with Dataset(tmp_path / f"{expected_check}.nc", "w") as dataset:
         dataset.variant_label = "invalid"
@@ -1340,7 +1666,7 @@ def test_variant_selector_hierarchy_walks_enabled_toml_checks(
         dataset.forcing_index = 1
         results = variant_checks.check_variant_label_consistency_group(
             dataset,
-            [(check, BaseCheck.HIGH) for check in enabled_checks],
+            [(check, weights[i % len(weights)]) for i, check in enumerate(enabled_checks)],
         )
 
     failures = [result for result in results if result.msgs]
@@ -1367,11 +1693,13 @@ def test_variant_selector_hierarchy_walks_enabled_toml_checks(
     )
     + (pytest.param((), None, id="all-disabled"),),
 )
+@pytest.mark.parametrize("weights", [(3, 3, 3), (1, 3, 2), (2, 1, 3), (3, 2, 1)])
 def test_experiment_selector_hierarchy_walks_enabled_toml_checks(
     tmp_path,
     monkeypatch,
     enabled_checks,
     expected_check,
+    weights,
 ):
     monkeypatch.setattr(experiment_checks, "ESG_VOCAB_AVAILABLE", True)
     monkeypatch.setattr(
@@ -1389,8 +1717,8 @@ def test_experiment_selector_hierarchy_walks_enabled_toml_checks(
             dataset,
             "cmip6",
             [
-                (check, BaseCheck.HIGH, {"report_missing": True})
-                for check in enabled_checks
+                (check, weights[i % len(weights)], {"report_missing": True})
+                for i, check in enumerate(enabled_checks)
             ],
         )
 
@@ -1400,7 +1728,7 @@ def test_experiment_selector_hierarchy_walks_enabled_toml_checks(
         assert failures[0].name.startswith(f"[{expected_check}]")
 
 
-def test_variant_selector_owner_uses_severity_then_fixed_priority(tmp_path):
+def test_variant_selector_owner_uses_fixed_priority(tmp_path):
     with Dataset(tmp_path / "variant.nc", "w") as dataset:
         dataset.variant_label = "invalid"
         dataset.realization_index = 1
@@ -1434,7 +1762,8 @@ def test_variant_selector_owner_uses_severity_then_fixed_priority(tmp_path):
         )
 
     assert len(results) == 1
-    assert results[0].name.startswith("[ATTR006d]")
+    assert results[0].name.startswith("[ATTR006a]")
+    assert results[0].weight == BaseCheck.MEDIUM
     assert tied_results[0].name.startswith("[ATTR006c]")
 
 
@@ -1463,7 +1792,7 @@ def test_variant_selector_rejects_an_unknown_check_function(tmp_path):
             )
 
 
-def test_experiment_selector_owner_uses_severity_then_fixed_priority(
+def test_experiment_selector_owner_uses_fixed_priority(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(experiment_checks, "ESG_VOCAB_AVAILABLE", True)
@@ -1508,7 +1837,8 @@ def test_experiment_selector_owner_uses_severity_then_fixed_priority(
         )
 
     assert len(results) == 1
-    assert results[0].name.startswith("[ATTR007b]")
+    assert results[0].name.startswith("[ATTR007a]")
+    assert results[0].weight == BaseCheck.MEDIUM
     assert tied_results[0].name.startswith("[ATTR007a]")
 
 
@@ -1653,14 +1983,18 @@ def test_cmip7_directory_check_uses_mip_drs7_without_legacy_fallback(tmp_path):
         ),
     ),
 )
+@pytest.mark.parametrize("weights", [("H", "H", "H"), ("L", "H", "M"), ("H", "M", "L")])
 def test_drs_directory_hierarchy_walks_enabled_toml_rules(
     tmp_path,
     monkeypatch,
     disabled_rules,
     expected_check,
+    weights,
 ):
     checker = Cmip7ProjectCheck()
     checker._load_split_config()
+    for name, weight in zip(("directory", "attributes_vs_directory", "filename_vs_directory"), weights):
+        getattr(checker.config.drs, name).severity = weight
     for rule_name in disabled_rules:
         setattr(checker.config.drs, rule_name, None)
     monkeypatch.setattr(
@@ -1675,10 +2009,11 @@ def test_drs_directory_hierarchy_walks_enabled_toml_rules(
     assert len(results) == (1 if expected_check is not None else 0)
     if expected_check is not None:
         assert results[0].name.startswith(f"[{expected_check}]")
+        assert results[0].weight == checker.get_severity(weights[("PATH003", "PATH001", "PATH002").index(expected_check)])
         assert "MIP-DRS7" in results[0].msgs[0]
 
 
-def test_highest_severity_path_consumer_owns_structure_when_path003_is_disabled(
+def test_first_path_consumer_owns_structure_when_path003_is_disabled(
     tmp_path, monkeypatch
 ):
     checker = Cmip7ProjectCheck()
@@ -1697,8 +2032,8 @@ def test_highest_severity_path_consumer_owns_structure_when_path003_is_disabled(
         results = checker.check_DRS(dataset)
 
     assert len(results) == 1
-    assert results[0].name.startswith("[PATH002]")
-    assert results[0].weight == BaseCheck.HIGH
+    assert results[0].name.startswith("[PATH001]")
+    assert results[0].weight == BaseCheck.MEDIUM
     assert "MIP-DRS7" in results[0].msgs[0]
 
 

@@ -16,7 +16,6 @@ from checks.coordinate_checks.model import Catalog
 from checks.coordinate_checks.ordinary import validate_ordinary
 from checks.coordinate_checks.utils import coordinate_type
 from checks.coordinate_checks.validation import Findings
-from checks.utils import severity_ordered
 
 
 _REGISTRY_FAMILIES = (
@@ -170,7 +169,7 @@ def coordinate_metadata_setup_result(
 
 
 def missing_configured_coordinate_result(name, rule, get_severity):
-    """Route a missing coordinate to its highest-severity enabled consumer."""
+    """Route a missing coordinate to its first enabled consumer."""
     candidates = []
     if rule.monotonicity is not None:
         candidates.append(
@@ -183,10 +182,6 @@ def missing_configured_coordinate_result(name, rule, get_severity):
         candidates.append((rule.squareness, "[TIME001] Check Time Squareness "))
     if rule.coverage is not None:
         candidates.append((rule.coverage, "[TIME002] Time bounds"))
-    if rule.calendar_recommendation is not None:
-        candidates.append(
-            (rule.calendar_recommendation, "[TIME003a] Calendar for time coordinate")
-        )
     candidates.extend(
         (
             attribute_rule,
@@ -197,12 +192,13 @@ def missing_configured_coordinate_result(name, rule, get_severity):
         )
         for key, attribute_rule in sorted(rule.attributes.items())
     )
+    if rule.calendar_recommendation is not None:
+        candidates.append(
+            (rule.calendar_recommendation, "[TIME003a] Calendar for time coordinate")
+        )
     if not candidates:
         return []
-    selected, label = severity_ordered(
-        candidates,
-        severity=lambda candidate: get_severity(candidate[0].severity, "HIGH"),
-    )[0]
+    selected, label = candidates[0]
     ctx = TestCtx(get_severity(selected.severity, "HIGH"), label)
     ctx.add_failure(
         f"Coordinate variable '{name}' is missing, so this configured check "
@@ -412,6 +408,7 @@ def check_coordinate_catalog(
                 f"coordinate_type={kind!r}, so its configured dependent "
                 "coordinate checks could not be evaluated.",
                 issue=("unsupported_coordinate_type", identifier, kind),
+                include_default_fallbacks=False,
             )
 
     _check_dimension_order(findings, data_var, catalog, horizontal_dimensions)

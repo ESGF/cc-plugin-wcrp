@@ -12,6 +12,18 @@ from compliance_checker.suite import CheckSuite
 datadir = files("compliance_checker").joinpath("tests/data").resolve()
 
 
+@pytest.fixture(autouse=True)
+def isolate_esgvoc_project_setup_cache(monkeypatch):
+    """Keep mocked ESGVoc availability from affecting subsequent tests.
+
+    The production cache is process-wide. Each test gets its own cache, while
+    repeated checker setups within that test still exercise normal caching.
+    """
+    from plugins import wcrp_base
+
+    monkeypatch.setattr(wcrp_base, "_ESGVOC_PROJECT_SETUP_ERRORS", {})
+
+
 def glob_down(pth, suffix, lvls):
     """globs down up to (lvls: int) levels of subfolders\n
     suffix in the form ".ipynb"\n

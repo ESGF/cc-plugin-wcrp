@@ -19,9 +19,6 @@ from checks.coordinate_checks.utils import (
     values,
 )
 from checks.utils import (
-    severity_ordered,
-)
-from checks.utils import (
     severity_word as configured_severity_word,
 )
 
@@ -33,41 +30,23 @@ _LONGITUDE_PERIOD = 360.0
 # owner's semantic checks: it only prevents an enabled dependent check from
 # disappearing without explaining why it could not run.
 PREREQUISITE_FALLBACKS = {
-    "identity": (
-        "attributes",
-        "missing_value_integrity",
-        "missing_value_prohibited",
-        "missing_value_attributes",
-        "recommendations",
-        "direction",
-        "valid_range",
-        "requested_values",
-        "bounds",
-        "bounds_name",
-        "bounds_name_recommendations",
-        "associations",
-        "formula",
-        "dimension_order",
-    ),
     "grid": (
+        "grid_geometry_missing_values",
         "missing_value_integrity",
         "missing_value_prohibited",
         "missing_value_attributes",
-        "grid_geometry_missing_values",
+        "attributes",
+        "direction",
         "grid_latitude_valid_range",
         "grid_longitude_valid_range",
         "grid_longitude_single_cycle",
-        "attributes",
-        "recommendations",
-        "direction",
         "valid_range",
-        "requested_values",
         "bounds",
         "bounds_name",
-        "bounds_name_recommendations",
         "associations",
-        "formula",
         "dimension_order",
+        "recommendations",
+        "bounds_name_recommendations",
     ),
 }
 
@@ -111,22 +90,25 @@ class Findings:
         *,
         issue: object | None = None,
         fallbacks=(),
+        include_default_fallbacks: bool = True,
     ) -> str | None:
         """Report one unusable prerequisite through the best enabled owner.
 
-        The highest configured severity wins.  The hard-coded hierarchy is a
-        stable tie-breaker.  ``issue`` deduplicates a shared root cause when
-        several dependent validators encounter it.
+        The first enabled family in the declared hierarchy owns the finding,
+        at its own configured severity. Disabled owners do not transfer severity.
+        ``issue`` deduplicates a shared root cause when several dependent
+        validators encounter it.
         """
-        candidates = (owner, *fallbacks, *PREREQUISITE_FALLBACKS.get(owner, ()))
+        defaults = (
+            PREREQUISITE_FALLBACKS.get(owner, ())
+            if include_default_fallbacks
+            else ()
+        )
+        candidates = (owner, *fallbacks, *defaults)
         enabled = list(
             dict.fromkeys(name for name in candidates if name in self.messages)
         )
-        ordered = severity_ordered(
-            enabled,
-            severity=lambda name: self.severities[name],
-        )
-        family = ordered[0] if ordered else None
+        family = enabled[0] if enabled else None
         if family is None:
             return None
         rendered = message(family) if callable(message) else message
@@ -142,11 +124,7 @@ class Findings:
         enabled = list(
             dict.fromkeys(name for name in families if name in self.messages)
         )
-        ordered = severity_ordered(
-            enabled,
-            severity=lambda name: self.severities[name],
-        )
-        family = ordered[0] if ordered else None
+        family = enabled[0] if enabled else None
         if family is None or issue in self._reported_prerequisites:
             return family
         self._reported_prerequisites.add(issue)

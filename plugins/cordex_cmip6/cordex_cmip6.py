@@ -515,12 +515,11 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         if not geo:
             # The configured variable suite owns data-variable selection and
             # reports its failure once. Keep the detection result here only
-            # when compression is used without an equal- or higher-severity
-            # owner.
+            # when compression is used without an enabled variable-check owner.
             if (
                 self.config.variable is not None
-                and self._configured_variable_severity()
-                >= self.get_severity(rule.severity)
+                and any((self.config.variable.existence, self.config.variable.type,
+                         self.config.variable.dimensions, self.config.variable.attributes))
             ):
                 return []
             return detection
@@ -573,9 +572,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 run_time=True,
                 run_data=False,
                 time_expected=(str(self.frequency) != "fx"),
-                time_presence_delegated=self._coordinate_registry_owns(
-                    "identity", self.get_severity(rule.time.severity)
-                ),
+                time_presence_delegated=self._coordinate_registry_owns("identity"),
             )
         finally:
             finalize_internal_packing_session(ds)
@@ -602,13 +599,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 run_time=False,
                 run_data=True,
                 variable_id_presence_delegated=(
-                    self._global_attribute_owns(
-                        "variable_id", self.get_severity(rule.data.severity)
-                    )
+                    self._global_attribute_owns("variable_id")
                 ),
-                data_variable_presence_delegated=self._variable_existence_owns(
-                    self.get_severity(rule.data.severity)
-                ),
+                data_variable_presence_delegated=self._variable_existence_owns(),
             )
         finally:
             finalize_internal_packing_session(ds)
@@ -657,7 +650,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                         directory_structure_owner == "attributes_vs_directory"
                     ),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -674,7 +667,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                         directory_structure_owner == "filename_vs_directory"
                     ),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -771,13 +764,9 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     ds,
                     sev,
                     project_id=self.project_name,
-                    filename_structure_delegated=self._drs_rule_owns(
-                        "filename", sev
-                    ),
+                    filename_structure_delegated=self._drs_rule_owns("filename"),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(
-                            self.get_severity(rule.severity)
-                        )
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -842,14 +831,10 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     project_id=self.project_name,
                     id_attribute=id_attribute,
                     value_attribute=value_attribute,
-                    invalid_selector_delegated=self._global_attribute_owns(
-                        id_attribute, self.get_severity(rule.severity)
-                    ),
+                    invalid_selector_delegated=self._global_attribute_owns(id_attribute),
                     **relationship_options.get(rule_name, {}),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(
-                            self.get_severity(rule.severity)
-                        )
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -934,14 +919,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             severities["allowed_when_unset"] = self.get_severity(
                 attributes.allowed_when_unset_severity, "LOW"
             )
-        coverage_rule = next(
-            (
-                rule.coverage
-                for rule in self.config.coordinates.variables.values()
-                if rule.coverage is not None
-            ),
-            None,
-        )
+        coverage_rule = self._coordinate_rule_for_axis("T", "coverage")
         data_variable_severity = max(
             (
                 severities[family]
@@ -978,19 +956,11 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
             ),
             time_bounds_delegated=bool(
                 coverage_rule is not None
-                and self.get_severity(coverage_rule.severity)
-                >= severities.get("bounds", BaseCheck.HIGH)
             ),
             time_monotonicity_delegated=(
-                self._coordinate_rule_enabled_for_axis(
-                    "T",
-                    "monotonicity",
-                    severities.get("direction", BaseCheck.HIGH),
-                )
+                self._coordinate_rule_enabled_for_axis("T", "monotonicity")
             ),
-            data_variable_presence_delegated=self._variable_existence_owns(
-                data_variable_severity
-            ),
+            data_variable_presence_delegated=self._variable_existence_owns(),
             check_direct_physical_values=(
                 direction.check_direct_physical_values if direction else False
             ),
@@ -1017,9 +987,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                             ds,
                             severity=severity,
                             coord_name=str(entry.get("out_name") or identifier),
-                            report_bounds_prerequisites=not self._coordinate_registry_owns(
-                                "bounds", severity
-                            ),
+                            report_bounds_prerequisites=not self._coordinate_registry_owns("bounds"),
                         )
                     )
         return results
@@ -1075,21 +1043,19 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                                 "cell_methods"
                             ),
                             report_structural_prerequisites=(
-                                not self._coordinate_registry_owns("identity", sev)
+                                not self._coordinate_registry_owns("identity")
                             ),
                             increment_mapping=self._time_increment_mapping,
                             report_units_prerequisite=(
-                                not self._coordinate_registry_owns("attributes", sev)
+                                not self._coordinate_registry_owns("attributes")
                             ),
                             report_bounds_prerequisites=(
-                                not self._coordinate_registry_owns("bounds", sev)
+                                not self._coordinate_registry_owns("bounds")
                             ),
                             report_frequency_prerequisite=(
-                                not self._global_attribute_owns("frequency", sev)
+                                not self._global_attribute_owns("frequency")
                             ),
-                            filename_structure_delegated=self._drs_rule_owns(
-                                "filename", sev
-                            ),
+                            filename_structure_delegated=self._drs_rule_owns("filename"),
                         )
                     )
             if rule.calendar_recommendation:
@@ -1132,11 +1098,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         ):
             time_range = self.config.drs.time_range
             severity = self.get_severity(time_range.severity, "HIGH")
-            squareness_owned = any(
-                self.get_severity(rule.squareness.severity) >= severity
-                for rule in (coords_cfg.variables or {}).values()
-                if rule.squareness is not None
-            )
+            squareness_owned = self._coordinate_rule_enabled_for_axis("T", "squareness")
             results.extend(
                 check_time_range_vs_filename(
                     ds,
@@ -1152,28 +1114,24 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                         if time_entries
                         else False
                     ),
-                    report_climatology_mismatch=not self._coordinate_registry_owns(
-                        "bounds", severity
-                    ),
+                    report_climatology_mismatch=not self._coordinate_registry_owns("bounds"),
                     report_time_structure_prerequisite=(
-                        not self._coordinate_registry_owns("identity", severity)
+                        not self._coordinate_registry_owns("identity")
                     ),
                     report_time_units_prerequisite=not (
-                        self._coordinate_registry_owns("attributes", severity)
+                        self._coordinate_registry_owns("attributes")
                         or squareness_owned
                     ),
                     report_time_values_prerequisite=not squareness_owned,
                     report_climatology_bounds_prerequisite=not (
-                        self._coordinate_registry_owns("bounds", severity)
+                        self._coordinate_registry_owns("bounds")
                         or squareness_owned
                     ),
                     report_frequency_prerequisite=not (
                         squareness_owned
-                        or self._global_attribute_owns("frequency", severity)
+                        or self._global_attribute_owns("frequency")
                     ),
-                    filename_structure_delegated=self._drs_rule_owns(
-                        "filename", severity
-                    ),
+                    filename_structure_delegated=self._drs_rule_owns("filename"),
                 )
             )
         return results
@@ -1197,12 +1155,8 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         return check_calendar(
             self,
             severity=severity,
-            time_presence_delegated=self._coordinate_registry_owns(
-                "identity", severity
-            ),
-            attribute_presence_delegated=self._coordinate_registry_owns(
-                "attributes", severity
-            ),
+            time_presence_delegated=self._coordinate_registry_owns("identity"),
+            attribute_presence_delegated=self._coordinate_registry_owns("attributes"),
         )
 
     def check_time_units(self, ds):
@@ -1213,12 +1167,8 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         return check_time_units(
             self,
             severity=severity,
-            time_presence_delegated=self._coordinate_registry_owns(
-                "identity", severity
-            ),
-            attribute_presence_delegated=self._coordinate_registry_owns(
-                "attributes", severity
-            ),
+            time_presence_delegated=self._coordinate_registry_owns("identity"),
+            attribute_presence_delegated=self._coordinate_registry_owns("attributes"),
         )
 
     def check_attributes_cordex(self, ds):
@@ -1251,9 +1201,7 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                 )
                 kwargs["topology_error_delegated"] = bool(
                     registry
-                    and self._coordinate_registry_owns(
-                        "grid", kwargs["severity"]
-                    )
+                    and self._coordinate_registry_owns("grid")
                 )
             elif name == "check_domain_id":
                 registry = (
@@ -1262,17 +1210,15 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
                     else None
                 )
                 kwargs["missing_attribute_delegated"] = (
-                    self._global_attribute_owns("domain_id", kwargs["severity"])
+                    self._global_attribute_owns("domain_id")
                 )
                 kwargs["topology_error_delegated"] = bool(
                     registry
-                    and self._coordinate_registry_owns(
-                        "grid", kwargs["severity"]
-                    )
+                    and self._coordinate_registry_owns("grid")
                 )
             elif name == "check_grid":
                 kwargs["missing_attribute_delegated"] = (
-                    self._global_attribute_owns("grid", kwargs["severity"])
+                    self._global_attribute_owns("grid")
                 )
             if name in {
                 "check_domain_id",
@@ -1310,7 +1256,5 @@ class CordexCmip6ProjectCheck(WCRPBaseCheck):
         return check_lon_value_range(
             self,
             severity=severity,
-            topology_error_delegated=self._coordinate_registry_owns(
-                "grid", severity
-            ),
+            topology_error_delegated=self._coordinate_registry_owns("grid"),
         )
