@@ -6,7 +6,10 @@ from hashlib import md5
 import pytest
 from netCDF4 import Dataset
 
-from checks.coordinate_checks.consistency import coordinate_ids_for_summary
+from checks.coordinate_checks.consistency import (
+    coordinate_ids_for_summary,
+    dimension_metadata_for_summary,
+)
 from checks.coordinate_checks.model import Catalog
 from plugins import wcrp_base
 
@@ -72,6 +75,9 @@ def test_coordinate_ids_use_requested_identity(tmp_path, text_id):
         grid_axes={"x": {"out_name": "x"}},
     )
     with Dataset(tmp_path / "test.nc", "w") as ds:
+        ds.createDimension("type", 2)
+        ds.createDimension("strlen", 8)
+        ds.createVariable("sector", "S1", ("type", "strlen"))
         assert coordinate_ids_for_summary(
             ds, cv, ["height", "sector", "nav_lat", "unresolved"]
         ) == {"height": "height2m", "sector": text_id, "nav_lat": "latitude"}
@@ -85,7 +91,19 @@ def test_ambiguous_coordinate_identity_is_omitted(tmp_path):
                           for key in ("basin", "soilpools")},
     )
     with Dataset(tmp_path / "test.nc", "w") as ds:
+        ds.createDimension("type", 2)
+        ds.createDimension("strlen", 8)
+        ds.createVariable("sector", "S1", ("type", "strlen"))
         assert coordinate_ids_for_summary(ds, cv, ["sector"]) == {}
+
+
+def test_string_length_dimension_also_used_as_data_axis_is_not_ignored(tmp_path):
+    with Dataset(tmp_path / "shared.nc", "w") as ds:
+        ds.createDimension("type", 2)
+        ds.createDimension("width", 8)
+        ds.createVariable("sector", "S1", ("type", "width"))
+        ds.createVariable("data", "f4", ("width",))
+        assert dimension_metadata_for_summary(ds, {}) == ({}, [])
 
 
 @pytest.mark.parametrize("standard_name,expected", [("depth", {"lev": "ocean_sigma"}), ("unknown", {})])
@@ -98,6 +116,48 @@ def test_model_level_identity(tmp_path, standard_name, expected):
     with Dataset(tmp_path / "test.nc", "w") as ds:
         ds.createVariable("lev", "f8").standard_name = standard_name
         assert coordinate_ids_for_summary(ds, cv, ["lev"]) == expected
+
+
+@pytest.mark.parametrize("variable,dimension", [("sector", "type"), ("labels", "type"), ("sector", "categories")])
+def test_text_dimension_metadata_uses_actual_dimensions(tmp_path, variable, dimension):
+    cv = catalog(
+        coordinate_ids=("soilpools",),
+        data_coordinates={"soilpools": {"coordinate_type": "auxiliary", "out_name": "type"}},
+    )
+    with Dataset(tmp_path / "text.nc", "w") as ds:
+        ds.createDimension(dimension, 3)
+        ds.createDimension("label_width", 32)
+        ds.createVariable(variable, "S1", (dimension, "label_width"))
+        identities = coordinate_ids_for_summary(ds, cv, [variable])
+        assert identities == {variable: "soilpools"}
+        assert dimension_metadata_for_summary(ds, identities) == (
+            {dimension: "soilpools"}, ["label_width"]
+        )
+
+
+@pytest.mark.parametrize("dimensions,dtype", [((), "S1"), (("a", "b", "c"), "S1"), (("a", "b"), "f8")])
+def test_malformed_text_coordinate_does_not_break_summary(tmp_path, monkeypatch, dimensions, dtype):
+    from plugins.cmip6.cmip6 import Cmip6ProjectCheck
+
+    monkeypatch.setattr(wcrp_base, "ESG_VOCAB_AVAILABLE", False)
+    output = tmp_path / "summary.json"
+    with Dataset(tmp_path / "malformed.nc", "w") as ds:
+        for dimension in dimensions:
+            ds.createDimension(dimension, 2)
+        ds.createVariable("sector", dtype, dimensions)
+        ds.createVariable("tas", "f4")
+        ds.variable_id = "tas"
+        ds.frequency = "fx"
+        checker = Cmip6ProjectCheck({"consistency_output": str(output)})
+        checker._coordinate_catalog = catalog(
+            coordinate_ids=("soilpools",),
+            data_coordinates={"soilpools": {"coordinate_type": "auxiliary", "out_name": "type"}},
+        )
+        checker.setup(ds)
+        assert checker.consistency_output_error is None
+    payload = json.loads(output.read_text())
+    assert payload["dimension_ids"] == {}
+    assert "sector" in payload["variable_attributes"]
 
 
 @pytest.mark.parametrize("project", ["cmip7", "cordex_cmip6"])
