@@ -30,6 +30,10 @@ from checks.utils import infer_frequency, sanitize
 if not hasattr(cfutil, "get_geophysical_variables"):
     from compliance_checker import cfutil
 
+# Temporary fixes for compliance-checker CF checks (see cc_patches).
+from plugins.cc_patches import apply_patches as _apply_cc_patches
+
+_apply_cc_patches()
 
 FORMULA_TERM_PATTERN = re.compile(r"(\w+)\s*:\s*([^\s]+)")
 
