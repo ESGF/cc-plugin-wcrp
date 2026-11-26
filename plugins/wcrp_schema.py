@@ -247,7 +247,14 @@ class GlobalConsistency(BaseModel):
     institution_id_vs_institution: Optional[ConsistencyRule] = None
     source_id_vs_source: Optional[ConsistencyRule] = None
     driving_source_id_vs_driving_source: Optional[ConsistencyRule] = None
-    source_id_vs_institution_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
+    source_id_vs_institution_id: Optional[ConsistencyRule] = None
+    driving_source_id_vs_driving_institution_id: Optional[ConsistencyRule] = None
+    source_id_vs_source_type: Optional[ConsistencyRule] = None
+    source_id_vs_activity_id: Optional[ConsistencyRule] = None
+    source_id_vs_license: Optional[ConsistencyRule] = None
+    domain_id_vs_domain: Optional[ConsistencyRule] = None
+    driving_experiment_id_vs_driving_experiment: Optional[ConsistencyRule] = None
+    driving_source_id_vs_driving_experiment_id: Optional[ConsistencyRule] = None
 
     # Data Request associations
     frequency_vs_table_id: Optional[ConsistencyRule] = None  # CMIP6/plus only
@@ -442,6 +449,10 @@ class TimeSquarenessRule(BaseModel):
     ref_calendar: Optional[str] = None
     ref_time_units: Optional[str] = None
     ref_increment: Optional[str] = None
+    # Keys are vocabulary coordinate IDs, not netCDF variable names.
+    climatology_types: dict[str, Literal[
+        "monthly_climatology", "daily_cycle", "monthly_daily_statistics"
+    ]] = Field(default_factory=dict)
 
 
 class TimeCoverageRule(BaseModel):
@@ -558,6 +569,15 @@ class CoordinatesSection(BaseModel):
 # =============================================================================
 # Full merged config
 # =============================================================================
+class ExponentSpellingRule(BaseModel):
+    enabled: bool = True
+    severity: Literal["L", "M"] = "L"
+
+
+class UnitsSection(BaseModel):
+    exponent_spelling: ExponentSpellingRule = Field(default_factory=ExponentSpellingRule)
+
+
 class WCRPConfig(ProjectConfig):
     model_config = ConfigDict(extra="forbid")
 
@@ -567,3 +587,4 @@ class WCRPConfig(ProjectConfig):
 
     variable: Optional[GeophysicalVariableSection] = None
     coordinates: Optional[CoordinatesSection] = None
+    units: UnitsSection = Field(default_factory=UnitsSection)

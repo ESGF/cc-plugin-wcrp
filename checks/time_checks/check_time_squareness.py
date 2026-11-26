@@ -3,6 +3,7 @@
 
 import os
 import re
+from datetime import timedelta
 import numpy as np
 import cftime
 from compliance_checker.base import BaseCheck, TestCtx
@@ -236,6 +237,8 @@ def _check_declared_bounds_midpoints(
     ds,
     time_var,
     report_mismatch=True,
+    bounds_name=None,
+    climatology_type=None,
 ) -> tuple[bool, np.ndarray | None]:
     """Check time values against declared regular or climatological bounds.
 
@@ -244,7 +247,8 @@ def _check_declared_bounds_midpoints(
     owned by the coordinate and CF bounds checks; TIME001 does not repeat them.
     """
     climatology_name = str(getattr(time_var, "climatology", "") or "")
-    bounds_name = climatology_name or str(getattr(time_var, "bounds", "") or "")
+    if bounds_name is None:
+        bounds_name = climatology_name or str(getattr(time_var, "bounds", "") or "")
     if not bounds_name or bounds_name not in ds.variables:
         return False, None
     bounds_var = ds.variables[bounds_name]
@@ -259,28 +263,54 @@ def _check_declared_bounds_midpoints(
         bounds = np.ma.asarray(bounds_var[:], dtype="float64")
     except (TypeError, ValueError, IndexError):
         return False, None
-    if np.ma.is_masked(bounds):
-        affected = np.where(np.any(np.ma.getmaskarray(bounds), axis=1))[0]
+    actual = actual.filled(np.nan).reshape(-1)
+    bounds = bounds.filled(np.nan)
+    usable = np.all(np.isfinite(bounds), axis=1)
+    if not np.all(usable):
+        affected = np.flatnonzero(~usable)
         index = int(affected[0])
         units = time_var.units
         calendar = getattr(time_var, "calendar", "standard")
         agreement = "contains" if len(affected) == 1 else "contain"
         ctx.add_failure(
-            f"{count_phrase(len(affected), bounds_name + ' interval')} {agreement} missing "
+            f"{count_phrase(len(affected), bounds_name + ' interval')} {agreement} missing or non-finite "
             f"values, so their time midpoints cannot be verified. At the first "
             f"incident, index {index}, the interval is "
             f"{format_time_interval(bounds[index], units=units, calendar=calendar, decimals=NDECIMALS)}."
         )
-        return True, None
-    actual = np.asarray(actual, dtype="float64").reshape(-1)
-    bounds = np.asarray(bounds, dtype="float64")
     expected = 0.5 * (bounds[:, 0] + bounds[:, 1])
+    if climatology_type in {"monthly_climatology", "daily_cycle"}:
+        units = time_var.units
+        calendar = getattr(time_var, "calendar", "standard")
+        expected = _climatology_midpoints(
+            actual, bounds, units, calendar, climatology_type, ctx
+        )
+        usable &= np.isfinite(expected)
     rounded_actual = _round(actual, NDECIMALS)
     rounded_expected = _round(expected, NDECIMALS)
-    bad = np.where(rounded_actual != rounded_expected)[0]
+    midpoint_matches = rounded_actual == rounded_expected
+    if climatology_type == "monthly_climatology":
+        # CF requires a representative climatological timestamp rather than a
+        # particular midpoint algorithm. A whole-envelope midpoint is also
+        # representative when it remains in the contributing month; reject it
+        # when the multi-year span places it in another part of the year.
+        midpoint_matches |= _monthly_envelope_midpoint_matches(
+            actual,
+            bounds,
+            time_var.units,
+            getattr(time_var, "calendar", "standard"),
+        )
+    bad = np.where(usable & ~midpoint_matches)[0]
+    if climatology_type:
+        bad = np.union1d(
+            bad, np.where(usable & ((actual < bounds[:, 0]) | (actual > bounds[:, 1])))[0]
+        )
     if bad.size and report_mismatch:
         index = int(bad[0])
-        kind = "climatology" if climatology_name else "bounds"
+        kind = (
+            climatology_type.replace("_", " ")
+            if climatology_type else ("climatology" if climatology_name else "bounds")
+        )
         units = time_var.units
         calendar = getattr(time_var, "calendar", "standard")
         if bad.size == 1:
@@ -294,9 +324,208 @@ def _check_declared_bounds_midpoints(
             f"{summary}. First incident at index {index}: "
             f"the file contains {format_time_value(actual[index], units=units, calendar=calendar, decimals=NDECIMALS)}. "
             f"The expected midpoint is {format_time_value(expected[index], units=units, calendar=calendar, decimals=NDECIMALS)}. "
-            f"The {kind} interval is {format_time_interval(bounds[index], units=units, calendar=calendar, decimals=NDECIMALS)}."
+            f"The declared {kind} interval is {format_time_interval(bounds[index], units=units, calendar=calendar, decimals=NDECIMALS)}."
         )
     return True, bounds
+
+
+def _climatology_boundary_date(value, date, units, calendar, *, monthly=False, step=1):
+    """Snap only boundaries equal at the regular TIME001 comparison precision.
+
+    Work in the file's units, not with a separate tolerance in seconds. This
+    also prevents tiny offsets before midnight/month start selecting the wrong
+    contributing day/month. Only the local calculation changes, not the file.
+    """
+    if monthly:
+        start = date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        candidates = [start, add_time_increment(start, 1, "months", calendar)]
+    else:
+        start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds = (date - start).total_seconds()
+        candidates = [start + timedelta(seconds=round(seconds / step) * step)]
+    expected = np.asarray(cftime.date2num(candidates, units=units, calendar=calendar))
+    matches = np.flatnonzero(_round(expected, NDECIMALS) == _round(value, NDECIMALS))
+    if matches.size:
+        return candidates[int(matches[0])]
+    if date in candidates:
+        # Decoding can itself round away a small difference, especially when
+        # units are seconds. Do not let that bypass the numeric comparison.
+        raise ValueError("time boundary differs from the expected boundary at the configured numeric precision")
+    return date
+
+
+def _climatology_midpoints(actual, bounds, units, calendar, kind, ctx):
+    """Report invalid intervals with a count and the first concrete example."""
+    result = np.full(len(actual), np.nan)
+    failures = 0
+    first = None
+    for index, (value, pair) in enumerate(zip(actual, bounds)):
+        if not np.all(np.isfinite(pair)):
+            continue  # Already reported by the missing-bounds guard.
+        try:
+            result[index] = _contributing_midpoints([value], [pair], units, calendar, kind)[0]
+        except (ValueError, OverflowError, TypeError) as exc:
+            failures += 1
+            if first is None:
+                first = (index, pair, str(exc))
+    if first is not None:
+        index, pair, reason = first
+        interval = format_time_interval(
+            pair, units=units, calendar=calendar, decimals=NDECIMALS
+        )
+        ctx.add_failure(
+            f"{count_phrase(failures, 'climatology interval')} could not be interpreted. "
+            f"First incident at index {index}: the declared interval is {interval}. "
+            f"Reason: {reason}. Midpoint verification was skipped for these intervals."
+        )
+    return np.asarray(result)
+
+
+def _monthly_envelope_midpoint_matches(actual, bounds, units, calendar):
+    """Accept an envelope midpoint only if it still represents the requested month."""
+    envelope_midpoints = np.mean(bounds, axis=1)
+    numeric_matches = (
+        _round(actual, NDECIMALS) == _round(envelope_midpoints, NDECIMALS)
+    )
+    result = np.zeros(len(actual), dtype=bool)
+    for index in np.flatnonzero(numeric_matches):
+        try:
+            month = cftime.num2date(
+                envelope_midpoints[index], units=units, calendar=calendar
+            ).month
+            required_month = cftime.num2date(
+                bounds[index, 0], units=units, calendar=calendar
+            ).month
+        except (ValueError, OverflowError, TypeError):
+            continue
+        result[index] = month == required_month
+    return result
+
+
+def _contributing_midpoints(actual, bounds, units, calendar, kind):
+    """Use a contributing month/day, not the midpoint of a multi-year envelope.
+
+    The representative year/day comes from the time value. The bounds provide
+    the month or clock interval, including intervals crossing New Year/midnight.
+    """
+    result = []
+    for value, pair in zip(actual, bounds):
+        stamp = cftime.num2date(value, units, calendar)
+        lower, upper = cftime.num2date(pair, units, calendar)
+        lower, upper = [
+            _climatology_boundary_date(number, date, units, calendar,
+                                      monthly=kind == "monthly_climatology")
+            for number, date in zip(pair, (lower, upper))
+        ]
+        if upper <= lower:
+            raise ValueError("climatology bounds must increase")
+        if kind == "monthly_climatology":
+            # Each entry represents one month in any contributing year.
+            lower_fields = (lower.day, lower.hour, lower.minute, lower.second, lower.microsecond)
+            if lower_fields != (1, 0, 0, 0, 0):
+                raise ValueError("monthly climatology must start at a month boundary")
+            start = lower.replace(year=stamp.year)
+            end = add_time_increment(start, 1, "months", calendar)
+            upper_fields = (upper.month, upper.day, upper.hour, upper.minute, upper.second, upper.microsecond)
+            if upper_fields != (end.month, 1, 0, 0, 0, 0):
+                raise ValueError(
+                    "monthly climatology must end at the next month boundary in its final year"
+                )
+        else:
+            start = lower.replace(year=stamp.year, month=stamp.month, day=stamp.day)
+            end = upper.replace(year=stamp.year, month=stamp.month, day=stamp.day)
+            if end <= start:
+                end += timedelta(days=1)
+            if stamp < start:
+                start -= timedelta(days=1)
+                end -= timedelta(days=1)
+        result.append(float(np.mean(cftime.date2num([start, end], units, calendar))))
+    return np.asarray(result)
+
+
+def _check_daily_cycle_intervals(ctx, bounds, units, calendar, increment, frequency):
+    """Check clock intervals, ignoring the days separating contributing samples."""
+    count, unit = increment
+    seconds_per_unit = {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400}
+    step = float(count) * seconds_per_unit.get(unit, 0)
+    if not 0 < step <= 86400 or 86400 % step:
+        ctx.add_failure(
+            f"Cannot verify daily-cycle boundaries for increment {count} {unit}: "
+            "the increment must divide one day into equal clock intervals."
+        )
+        return
+    dates, indices = [], []
+    for index, pair in enumerate(bounds):
+        if not np.all(np.isfinite(pair)) or pair[1] <= pair[0]:
+            continue
+        try:
+            date_pair = cftime.num2date(pair, units=units, calendar=calendar)
+            dates.append([
+                _climatology_boundary_date(value, date, units, calendar, step=step)
+                for value, date in zip(pair, date_pair)
+            ])
+            indices.append(index)
+        except (ValueError, OverflowError, TypeError):
+            continue  # The contributing-midpoint check reports interpretation errors.
+    if not dates:
+        return
+    clocks = np.asarray([
+        [date.hour * 3600 + date.minute * 60 + date.second + date.microsecond / 1e6
+         for date in pair] for pair in dates
+    ])
+    # Equal clock endpoints represent a full day, not an empty interval.
+    widths = (clocks[:, 1] - clocks[:, 0]) % 86400
+    widths[widths == 0] = 86400
+    aligned = np.all(clocks == np.round(clocks / step) * step, axis=1)
+    bad = np.flatnonzero(~aligned | (widths != step))
+    if bad.size:
+        local_index = int(bad[0])
+        index = indices[local_index]
+        agreement = "has" if bad.size == 1 else "have"
+
+        def clock_text(seconds):
+            hours, remainder = divmod(seconds % 86400, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            clock = f"{int(hours):02d}:{int(minutes):02d}"
+            if seconds:
+                clock += f":{seconds:09.6f}".rstrip("0").rstrip(".")
+            return clock
+
+        def duration_text(seconds):
+            for size, name in ((86400, "day"), (3600, "hour"), (60, "minute"), (1, "second")):
+                if seconds >= size and (size == 1 or seconds % size == 0):
+                    value = seconds / size
+                    return f"{value:g} {name}{'' if value == 1 else 's'}"
+
+        if step == 3600:
+            boundaries = "on full hours"
+        elif step == 86400:
+            boundaries = "at midnight"
+        else:
+            examples = ", ".join(clock_text(i * step) for i in range(min(3, int(86400 / step))))
+            boundaries = f"at times such as {examples}, repeating from midnight"
+        duration = duration_text(step)
+        start, end = clocks[local_index]
+        detail = (
+            f"These bounds describe a daily interval from {clock_text(start)} "
+            f"to {clock_text(end)}"
+        )
+        if end <= start:
+            detail += " the following day"
+        if widths[local_index] != step:
+            detail += f", lasting {duration_text(widths[local_index])} instead of {duration}."
+            if not aligned[local_index]:
+                detail += f" Its endpoints are also not {boundaries}."
+        else:
+            detail += f". Its duration is correct, but its endpoints are not {boundaries}."
+        ctx.add_failure(
+            f"{count_phrase(bad.size, 'daily-cycle interval')} {agreement} incorrect start or end times. "
+            f"For frequency {frequency!r}, each contributing interval must last "
+            f"{duration} and start and end {boundaries}. "
+            f"First incident at index {index}: the declared bounds are "
+            f"{format_time_interval(bounds[index], units=units, calendar=calendar, decimals=NDECIMALS)}. "
+            f"{detail}"
+        )
 
 
 def _parse_freq_token(token: str):
@@ -367,12 +596,14 @@ def check_time_squareness(
     report_frequency_prerequisite=True,
     increment_mapping=None,
     filename_structure_delegated=False,
+    expected_is_climatology=None,
+    climatology_type=None,
 ):
     """
     TIME001: Time axis check for a single file.
 
     - Declared regular bounds: configured interval spacing and coordinate midpoint
-    - Declared climatological bounds: coordinate midpoint
+    - Climatological bounds: project-configured contributing-period midpoint
     - Primary: FREQ_INC (table_id, frequency)
     - Start: filename start boundary
     - Sampling semantics: permitted branded-variable cell_methods when supplied,
@@ -430,6 +661,9 @@ def check_time_squareness(
         return [ctx.to_result()]
 
     raw_time = np.ma.asarray(time_var[:])
+    if raw_time.size == 0:
+        ctx.add_failure("Time axis is empty.")
+        return [ctx.to_result()]
     if np.ma.is_masked(raw_time):
         missing = np.where(np.ma.getmaskarray(raw_time).reshape(-1))[0]
         index = int(missing[0])
@@ -441,10 +675,26 @@ def check_time_squareness(
         )
         return [ctx.to_result()]
 
-    is_climatology = bool(getattr(time_var, "climatology", "") or "")
-    declared_name = str(
-        getattr(time_var, "climatology", "") or getattr(time_var, "bounds", "") or ""
+    is_climatology = (
+        bool(getattr(time_var, "climatology", "") or "")
+        if expected_is_climatology is None else expected_is_climatology
     )
+    declared_name = str(
+        getattr(time_var, "climatology" if is_climatology else "bounds", "") or ""
+    )
+    if is_climatology and not climatology_type:
+        ctx.add_failure(
+            "TIME001 cannot interpret the requested climatological time coordinate: "
+            "no climatology type is configured for its vocabulary ID."
+        )
+        return [ctx.to_result()]
+    if is_climatology and not declared_name:
+        if report_bounds_prerequisites:
+            ctx.add_failure(
+                "The requested climatological time coordinate has no climatology "
+                "attribute, so TIME001 cannot verify it."
+            )
+        return [ctx.to_result()] if ctx.messages else []
     if declared_name:
         bounds_var = ds.variables.get(declared_name)
         bounds_error = None
@@ -473,12 +723,33 @@ def check_time_squareness(
         ctx,
         ds,
         time_var,
-        report_mismatch=is_climatology,
+        report_mismatch=is_climatology and climatology_type != "monthly_daily_statistics",
+        bounds_name=declared_name,
+        climatology_type=climatology_type if is_climatology else None,
     )
-    if is_climatology:
-        # A climatological coordinate can represent an averaging interval
-        # spanning many years. Its correct value is determined by the declared
-        # climatology bounds, not by advancing once from the filename start.
+    if midpoint_checked and declared_bounds is None:
+        return [ctx.to_result()]
+    if is_climatology and climatology_type != "monthly_daily_statistics":
+        # Daily statistics use successive regular periods below. Monthly
+        # climatologies and daily cycles instead repeat contributing intervals.
+        if climatology_type == "daily_cycle" and declared_bounds is not None:
+            freq_id = _resolve_frequency(ds)
+            if not freq_id:
+                if report_frequency_prerequisite:
+                    ctx.add_failure(
+                        "Missing global attribute 'frequency'; cannot resolve expected step."
+                    )
+                return [ctx.to_result()] if ctx.messages else []
+            table_id = _resolve_table_id(ds)
+            increment = _resolve_increment(
+                table_id, freq_id, frequency or {}, increment_mapping=increment_mapping
+            )
+            if not increment:
+                ctx.add_failure(
+                    f"Cannot resolve increment for (table_id={table_id}, frequency={freq_id})."
+                )
+            else:
+                _check_daily_cycle_intervals(ctx, declared_bounds, units, cal, increment, freq_id)
         if midpoint_checked and not ctx.messages:
             ctx.add_pass()
         return [ctx.to_result()]

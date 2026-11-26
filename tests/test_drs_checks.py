@@ -1,6 +1,8 @@
 """Local tests for DRS vocabulary and consistency orchestration."""
 
 from types import SimpleNamespace
+import importlib
+import pytest
 
 from compliance_checker.base import BaseCheck
 
@@ -41,6 +43,46 @@ class _Validator:
 
     def validate_directory(self, _directory):
         return _Report(self.directory_errors)
+
+
+@pytest.mark.parametrize("configured,suffix,removed", [
+    ("-clim", "-clim", True), ("-custom", "-custom", True),
+    ("", "-clim", False), ("-clim", "-wrong", False),
+    ("-clim", "-clim-clim", False),
+])
+def test_filename_only_normalizes_configured_time_range_suffix(monkeypatch, configured, suffix, removed):
+    received = []
+    class Validator(_Validator):
+        def validate_file_name(self, filename):
+            received.append(filename)
+            return _Report(["other vocabulary error"])
+    monkeypatch.setattr(vocabulary, "DrsValidator", Validator)
+    filename = f"tas_Oclim_model-clim_198001-199912{suffix}.nc"
+    result = vocabulary.check_drs_filename(
+        _Dataset("/tmp/" + filename), BaseCheck.HIGH, climatology_suffix=configured
+    )[0]
+    assert received == ["tas_Oclim_model-clim_198001-199912.nc" if removed else filename]
+    assert filename in result.msgs[0]  # Report the original name, not the normalized copy.
+    assert "other vocabulary error" in result.msgs[0]
+
+
+@pytest.mark.parametrize("module_name,class_name,expected_suffix", [
+    ("plugins.cmip6.cmip6", "Cmip6ProjectCheck", "-clim"),
+    ("plugins.cmip6plus.cmip6plus", "Cmip6PlusProjectCheck", "-clim"),
+    ("plugins.c3scmip6.c3scmip6.c3scmip6", "C3SCmip6ProjectCheck", "-clim"),
+    ("plugins.cmip7.cmip7", "Cmip7ProjectCheck", ""),
+    ("plugins.cordex_cmip6.cordex_cmip6", "CordexCmip6ProjectCheck", ""),
+])
+def test_plugins_pass_configured_suffix_to_filename_check(monkeypatch, module_name, class_name, expected_suffix):
+    module = importlib.import_module(module_name)
+    checker = getattr(module, class_name)()
+    checker._load_split_config()
+    drs = checker.config.drs
+    drs.directory = drs.attributes_vs_directory = drs.filename_vs_directory = None
+    captured = []
+    monkeypatch.setattr(module, "check_drs_filename", lambda *a, **k: captured.append(k) or [])
+    checker.check_DRS(_Dataset("/tmp/file.nc"))
+    assert captured[0]["climatology_suffix"] == expected_suffix
 
 
 def test_drs_filename_vocabulary_passes_and_reports_validator_errors(monkeypatch):

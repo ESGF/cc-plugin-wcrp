@@ -72,13 +72,18 @@ def check_id_attribute_consistency(
     term_field=None,
     collection_id=None,
     missing_attributes_delegated=(),
+    invalid_selector_delegated=False,
+    reference_collection=None,
+    whitespace_separated=False,
+    unrestricted_when_absent=False,
+    check_id="ATTR011",
 ):
     """Compare an attribute with a field on the term selected by its ID."""
     term_field = term_field or value_attribute
     collection_id = collection_id or _get_cv_collection(project_id, id_attribute)
     ctx = TestCtx(
         severity,
-        f"[ATTR011] Consistency: {id_attribute} vs {value_attribute}",
+        f"[{check_id}] Consistency: {id_attribute} vs {value_attribute}",
     )
 
     attributes = set(ds.ncattrs())
@@ -113,15 +118,32 @@ def check_id_attribute_consistency(
         return [ctx.to_result()]
 
     if term is None:
+        if invalid_selector_delegated:
+            return []
         ctx.add_failure(
             f"The {id_attribute} value {identifier!r} was not found in ESGVoc "
             f"collection {collection_id!r}."
         )
         return [ctx.to_result()]
 
+    # Only an absent field can mean unrestricted. An explicit empty list or
+    # null value is an unusable definition, not permission to accept anything.
+    absent = object()
+    field_value = term
+    for key in term_field.split("."):
+        field_value = (
+            field_value.get(key, absent)
+            if isinstance(field_value, dict)
+            else getattr(field_value, key, absent)
+        )
+        if field_value is absent:
+            break
+    if field_value is absent and unrestricted_when_absent:
+        ctx.add_pass()
+        return [ctx.to_result()]
     expected = [
         str(value).strip()
-        for value in _as_list(getattr(term, term_field, None))
+        for value in _as_list(None if field_value is absent else field_value)
         if value is not None and str(value).strip()
     ]
     if not expected:
@@ -129,6 +151,41 @@ def check_id_attribute_consistency(
             f"ESGVoc term {identifier!r} has no value for field {term_field!r}, "
             f"so {value_attribute!r} could not be verified."
         )
+    elif reference_collection:
+        # Referenced IDs can differ from file values (e.g. lowercase institution
+        # IDs or a license ID representing a URL pattern). Validate against the
+        # selected terms, rather than against any term in the collection.
+        try:
+            reference_ids = []
+            for reference in expected:
+                resolved = _resolved_term(project_id, reference_collection, reference)
+                if resolved is None:
+                    raise ValueError(
+                        f"Referenced {reference_collection!r} term {reference!r} is absent"
+                    )
+                reference_ids.append(resolved.id)
+            actual_values = actual.split() if whitespace_separated else [actual]
+            matches = bool(actual_values) and all(
+                any(
+                    voc.valid_term(value, project_id, reference_collection, reference)
+                    for reference in reference_ids
+                )
+                for value in actual_values
+            )
+        except Exception as exc:  # noqa: BLE001 -- catalogue errors are findings
+            ctx.add_failure(
+                f"The {term_field!r} definition for {id_attribute}={identifier!r} "
+                f"could not be verified: {type(exc).__name__}: {exc}"
+            )
+        else:
+            if matches:
+                ctx.add_pass()
+            else:
+                ctx.add_failure(
+                    f"The global attribute {value_attribute!r} is inconsistent with "
+                    f"{id_attribute}={identifier!r}: found {actual!r}; expected a "
+                    f"value matching {reference_collection!r} term(s) {expected!r}."
+                )
     elif actual in expected:
         ctx.add_pass()
     else:

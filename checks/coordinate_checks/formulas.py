@@ -8,21 +8,23 @@ import re
 import numpy as np
 
 
-def _sample_formula_term(var, vertical_dimension: str, point: dict):
+def _sample_formula_term(var, vertical_dimension: str, point: dict, *, allow_masked=False):
     key = tuple(
         slice(None) if dimension == vertical_dimension else point.get(dimension, 0)
         for dimension in var.dimensions
     )
     masked = np.ma.asarray(var[key], dtype="float64")
-    if np.any(np.ma.getmaskarray(masked)):
+    if np.any(np.ma.getmaskarray(masked)) and not allow_masked:
         raise ValueError(f"formula term '{var.name}' is masked at the sampled point")
-    sampled = np.asarray(masked, dtype="float64").squeeze()
-    if not np.all(np.isfinite(sampled)):
+    sampled = masked.squeeze()
+    if not np.all(np.isfinite(sampled.compressed())):
         raise ValueError(
             f"formula term '{var.name}' is non-finite at the sampled point"
         )
     if vertical_dimension in var.dimensions:
-        return np.asarray(sampled).reshape(-1)
+        return sampled.reshape(-1) if allow_masked else np.asarray(sampled).reshape(-1)
+    if allow_masked:
+        raise ValueError(f"formula term '{var.name}' must include the vertical dimension")
     if np.asarray(sampled).size != 1:
         raise ValueError(
             f"formula term '{var.name}' did not reduce to a scalar at the "
@@ -86,16 +88,30 @@ def _evaluate_node(node, terms):
 
 def _evaluate_formula(formula: str, standard_name: str, terms, level_count: int):
     if standard_name == "ocean_sigma_z_coordinate":
-        required = {"eta", "sigma", "depth", "depth_c", "nsigma", "zlev"}
+        required = {"eta", "sigma", "depth", "depth_c", "zlev"}
         missing = sorted(required - terms.keys())
         if missing:
             raise KeyError(f"formula term(s) {missing} are not declared")
-        count = int(np.asarray(terms["nsigma"]).reshape(-1)[0])
-        count = max(0, min(count, level_count))
-        sigma = np.broadcast_to(terms["sigma"], (level_count,))
-        zlev = np.broadcast_to(terms["zlev"], (level_count,))
-        profile = np.array(zlev, dtype="float64", copy=True)
-        profile[:count] = terms["eta"] + sigma[:count] * (
+        sigma = np.ma.asarray(terms["sigma"], dtype="float64")
+        zlev = np.ma.asarray(terms["zlev"], dtype="float64")
+        if sigma.shape != (level_count,) or zlev.shape != (level_count,):
+            raise ValueError("sigma and zlev must each contain one value per level")
+        sigma_missing = np.ma.getmaskarray(sigma)
+        zlev_missing = np.ma.getmaskarray(zlev)
+        if np.any(sigma_missing == zlev_missing):
+            raise ValueError("exactly one of sigma and zlev must be defined at each level")
+        if not all(np.all(np.isfinite(v.compressed())) for v in (sigma, zlev)):
+            raise ValueError("sigma or zlev contains non-finite unmasked values")
+        # CF identifies the two regions through complementary missing values.
+        # nsigma is deprecated; when present it only confirms that split.
+        if "nsigma" in terms:
+            count = np.ma.asarray(terms["nsigma"])
+            if (count.size != 1 or np.any(np.ma.getmaskarray(count))
+                    or not np.isfinite(count.item())
+                    or count.item() != np.count_nonzero(zlev_missing)):
+                raise ValueError("nsigma must equal the number of missing zlev values")
+        profile = np.array(zlev.data, dtype="float64", copy=True)
+        profile[zlev_missing] = terms["eta"] + sigma.data[zlev_missing] * (
             min(terms["depth_c"], terms["depth"]) + terms["eta"]
         )
         return profile
@@ -149,7 +165,11 @@ def formula_vertical_profile(ds, coordinate, entry: dict, formula_terms: dict):
         point = dict(zip(sample_dimensions, indices))
         try:
             terms = {
-                term: _sample_formula_term(variable, vertical_dimension, point)
+                term: _sample_formula_term(
+                    variable, vertical_dimension, point,
+                    allow_masked=(entry.get("cf_standard_name") == "ocean_sigma_z_coordinate"
+                                  and term in {"sigma", "zlev"}),
+                )
                 for term, variable in variables.items()
             }
         except (TypeError, ValueError) as exc:

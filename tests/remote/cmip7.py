@@ -52,6 +52,17 @@ _COMMENT_FAILURE = ExpectedFailure(
     messages=("No variable 'zos' attribute 'comment' is defined",),
 )
 
+_GRID_AXIS_LONG_NAME_FAILURE = ExpectedFailure(
+    name="[COORD004] Coordinate metadata recommendations",
+    severity=2,
+    messages=(
+        "'j' long_name='second spatial index for variables stored on an unstructured grid'; "
+        "the recommended value is 'cell index along second dimension'.",
+        "'i' long_name='first spatial index for variables stored on an unstructured grid'; "
+        "the recommended value is 'cell index along first dimension'.",
+    ),
+)
+
 
 CURVILINEAR_OCEAN = RemoteDataset(
     id="zos_curvilinear_ocean",
@@ -69,9 +80,9 @@ CURVILINEAR_OCEAN = RemoteDataset(
     ),
     checks={
         "check_Coordinate_Metadata_Setup": ExpectedCheck(1),
-        # The current development vocabulary permits -180..360 for grid
-        # longitude and its vertices, so the real curvilinear grid passes.
-        "check_Coordinate_Standard": ExpectedCheck(28),
+        # Grid longitude and vertices pass their ranges. The published file's
+        # index long_names predate the updated grid_axis vocabulary.
+        "check_Coordinate_Standard": ExpectedCheck(28, (_GRID_AXIS_LONG_NAME_FAILURE,)),
         # FILE001 owns the malformed/missing filename time-range structure;
         # TIME001 and TIME003 therefore do not repeat that failure here.
         "check_Coordinates": ExpectedCheck(3),

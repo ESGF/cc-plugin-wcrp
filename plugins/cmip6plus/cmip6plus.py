@@ -424,7 +424,10 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
         directory_structure_owner = self._drs_directory_structure_owner(drs)
         if drs.filename:
             sev = self.get_severity(drs.filename.severity)
-            res.extend(check_drs_filename(ds, sev, project_id=self.project_name))
+            res.extend(check_drs_filename(
+                ds, sev, project_id=self.project_name,
+                climatology_suffix=drs.time_range.climatology_suffix if drs.time_range else "",
+            ))
 
         if drs.directory:
             sev = self.get_severity(drs.directory.severity)
@@ -450,7 +453,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                         directory_structure_owner == "attributes_vs_directory"
                     ),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -466,7 +469,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                         directory_structure_owner == "filename_vs_directory"
                     ),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -551,6 +554,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                     expected_term=expected_term,
                     cv_source_term_key=rule.cv_source_term_key,
                     expected_term_comparison=rule.expected_term_comparison,
+                    unit_exponent_policy=self.config.units.exponent_spelling,
                     report_missing_expected_term=rule.report_missing_expected_term,
                 )
             )
@@ -578,11 +582,9 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                     ds,
                     sev,
                     project_id=self.project_name,
-                    filename_structure_delegated=self._drs_rule_owns(
-                        "filename", sev
-                    ),
+                    filename_structure_delegated=self._drs_rule_owns("filename"),
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -623,23 +625,12 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                         check,
                         self.get_severity(rule.severity),
                         {
-                            "report_missing": not self._global_attribute_owns(
-                                attribute, self.get_severity(rule.severity)
-                            )
+                            "report_missing": not self._global_attribute_owns(attribute)
                         },
                     )
                     for rule, check, attribute in experiment_checks
                 ],
-                selector_error_delegated=self._global_attribute_owns(
-                    "experiment_id",
-                    max(
-                        (
-                            self.get_severity(rule.severity)
-                            for rule, _, _ in experiment_checks
-                        ),
-                        default=BaseCheck.HIGH,
-                    ),
-                ),
+                selector_error_delegated=self._global_attribute_owns("experiment_id"),
             )
         )
 
@@ -654,7 +645,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                     missing_attributes_delegated={
                         name
                         for name in ("institution_id", "institution")
-                        if self._global_attribute_owns(name, sev)
+                        if self._global_attribute_owns(name)
                     },
                 )
             )
@@ -669,7 +660,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                     missing_attributes_delegated={
                         name
                         for name in ("source_id", "institution_id")
-                        if self._global_attribute_owns(name, sev)
+                        if self._global_attribute_owns(name)
                     },
                 )
             )
@@ -683,7 +674,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                     self.table_id_to_frequency,
                     sev,
                     missing_attributes_delegated=(
-                        self._global_attributes_owning(sev)
+                        self._global_attributes_owning()
                     ),
                 )
             )
@@ -777,6 +768,19 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
         expected, lookup_results = self._get_expected_from_registry(ds, BaseCheck.HIGH)
         res.extend(lookup_results)
         required_names = self._legacy_required_coordinate_names(expected, coords_cfg)
+        # These projects expose dimension IDs rather than resolved coordinates.
+        # Resolve the configured climatology type once for TIME001/002/003.
+        time_rule = rule_by_nc.get("time")
+        climatology_types = (
+            time_rule.squareness.climatology_types
+            if time_rule and time_rule.squareness else {}
+        )
+        climatology_type = next((
+            climatology_types[dimension]
+            for dimension in ((expected.dimensions or []) if expected else [])
+            if dimension in climatology_types
+        ), None)
+        is_climatology = climatology_type is not None
         required_bounds_names = self._legacy_required_bounds_names(
             expected, coords_cfg
         )
@@ -908,16 +912,16 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                             ref_time_units=rule.squareness.ref_time_units or "",
                             frequency=None,
                             expected_cell_methods=expected.cell_methods,
+                            expected_is_climatology=is_climatology,
+                            climatology_type=climatology_type,
                             report_units_prerequisite=(
                                 "units" not in owned_attributes
                             ),
                             report_frequency_prerequisite=(
-                                not self._global_attribute_owns("frequency", sev)
+                                not self._global_attribute_owns("frequency")
                             ),
                             increment_mapping=self._time_increment_mapping,
-                            filename_structure_delegated=self._drs_rule_owns(
-                                "filename", sev
-                            ),
+                            filename_structure_delegated=self._drs_rule_owns("filename"),
                         )
                     )
 
@@ -925,7 +929,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             if getattr(rule, "coverage", None):
                 sev = _sev(rule.coverage.severity, default=BaseCheck.MEDIUM)
                 bounds_owned = any(
-                    (arule.attribute_name or key) == "bounds"
+                    (arule.attribute_name or key) == ("climatology" if is_climatology else "bounds")
                     and bool(arule.is_required)
                     for key, arule in (rule.attributes or {}).items()
                 )
@@ -934,6 +938,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                         ds,
                         severity=sev,
                         report_bounds_prerequisites=not bounds_owned,
+                        expected_is_climatology=is_climatology,
                     )
                 )
 
@@ -996,7 +1001,7 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
             precision_map = time_range.label_precision
             climatology_suffix = time_range.climatology_suffix
             severity = self.get_severity(time_range.severity, "HIGH")
-            if expected is not None and expected.time_is_climatology is not None:
+            if expected is not None and expected.dimensions is not None:
                 time_rule = rule_by_nc.get("time")
                 time_attributes = {
                     arule.attribute_name or key: arule
@@ -1007,16 +1012,14 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                 identity_owned = bool(
                     time_rule
                     and time_rule.name
-                    and _sev(time_rule.name.severity) >= severity
                 )
                 units_rule = time_attributes.get("units")
                 units_owned = bool(
-                    units_rule and _sev(units_rule.severity) >= severity
+                    units_rule is not None
                 )
                 squareness_owned = bool(
                     time_rule
                     and time_rule.squareness
-                    and _sev(time_rule.squareness.severity) >= severity
                 )
                 res.extend(
                     check_time_range_vs_filename(
@@ -1024,18 +1027,16 @@ class Cmip6PlusProjectCheck(WCRPBaseCheck):
                         severity,
                         precision_by_frequency=precision_map,
                         climatology_suffix=climatology_suffix,
-                        expected_is_climatology=expected.time_is_climatology,
+                        expected_is_climatology=is_climatology,
                         report_time_structure_prerequisite=not identity_owned,
                         report_time_units_prerequisite=not units_owned,
                         report_time_values_prerequisite=not squareness_owned,
                         report_climatology_bounds_prerequisite=not squareness_owned,
                         report_frequency_prerequisite=not (
                             squareness_owned
-                            or self._global_attribute_owns("frequency", severity)
+                            or self._global_attribute_owns("frequency")
                         ),
-                        filename_structure_delegated=self._drs_rule_owns(
-                            "filename", severity
-                        ),
+                        filename_structure_delegated=self._drs_rule_owns("filename"),
                     )
                 )
 

@@ -129,6 +129,11 @@ enum = [
 ]
 
 [coordinates.time.squareness]
+# Interprets vocabulary time-coordinate IDs only when is_climatology is true.
+# Monthly climatologies use a representative month. Daily-cycle clock bounds
+# must align from midnight and span the configured frequency (e.g. one hour).
+# netCDF out_name is usually "time" and cannot select the interpretation.
+climatology_types = { time2 = "monthly_climatology", time3 = "daily_cycle" }
 # TIME001
 severity = "H"
 ref_calendar = ""

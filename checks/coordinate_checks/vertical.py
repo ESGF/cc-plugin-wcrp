@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from checks.coordinate_checks.formulas import formula_vertical_profile
 from checks.coordinate_checks.model import reference_id, reference_ids
 from checks.coordinate_checks.utils import (
@@ -22,6 +24,34 @@ from checks.coordinate_checks.validation import (
     check_valid_range,
     report_allowed_when_unset,
 )
+
+
+def _allow_optional_nsigma(findings, ds, level, actual, expected, coordinate_terms):
+    """CF ocean sigma-z permits a deprecated count even without a CV entry."""
+    if (level.get("cf_standard_name") != "ocean_sigma_z_coordinate"
+            or "nsigma" not in actual or "nsigma" in expected):
+        return False
+    name = actual["nsigma"]
+    expected["nsigma"] = name
+    variable = ds.variables.get(name)
+    if variable is None:
+        findings.add("formula", f"Optional formula term 'nsigma' references missing variable '{name}'.")
+        return True
+    try:
+        if variable.ndim != 0:
+            raise ValueError("must be scalar")
+        count = np.ma.asarray(variable[...])
+        if (np.ma.is_masked(count) or not np.isfinite(count.item())
+                or count.item() < 0 or count.item() != int(count.item())):
+            raise ValueError("must be a finite non-negative integer")
+        zlev = ds.variables.get(coordinate_terms.get("zlev", ""))
+        if zlev is not None and zlev.ndim == 1:
+            expected_count = np.count_nonzero(np.ma.getmaskarray(zlev[:]))
+            if count.item() != expected_count:
+                raise ValueError(f"must equal the number of missing zlev values ({expected_count})")
+    except (TypeError, ValueError, OverflowError) as exc:
+        findings.add("formula", f"Optional formula term 'nsigma' variable '{name}' {exc}.")
+    return True
 
 
 def select_model_level(findings: Findings, ds, catalog, generic_id: str):
@@ -51,7 +81,19 @@ def select_model_level(findings: Findings, ds, catalog, generic_id: str):
             "identity",
             f"{expectation} Variable {out_name!r} does not exist in the file.",
             issue=("missing_coordinate", out_name),
-            fallbacks=("formula",),
+            fallbacks=(
+                "formula",
+                "attributes",
+                "missing_value_integrity",
+                "direction",
+                "valid_range",
+                "bounds",
+                "bounds_name",
+                "dimension_order",
+                "recommendations",
+                "bounds_name_recommendations",
+            ),
+            include_default_fallbacks=False,
         )
         return None
     var = ds.variables[out_name]
@@ -323,6 +365,9 @@ def validate_model_level(
         resolved=term_entries,
     )
     actual_terms = parse_formula_terms(ncattr(var, "formula_terms"))
+    optional_nsigma = _allow_optional_nsigma(
+        findings, ds, level, actual_terms, expected_terms, expected_terms
+    )
     if not expected_terms and "formula_terms" in var.ncattrs():
         if "formula_terms" in attributes_allowed_when_unset:
             report_allowed_when_unset(
@@ -348,6 +393,8 @@ def validate_model_level(
             f"{findings.severity_word('formula')} value.",
         )
     for symbol, term_name in expected_terms.items():
+        if symbol == "nsigma" and optional_nsigma:
+            continue
         if term_name == name:
             continue
         term_entry = term_entries.get(symbol, {})
@@ -418,6 +465,9 @@ def validate_model_level(
             # Missing bounds is already reported; avoid a cascade per factor.
             return var
         actual_bounds_terms = parse_formula_terms(ncattr(bounds_var, "formula_terms"))
+        optional_bounds_nsigma = _allow_optional_nsigma(
+            findings, ds, level, actual_bounds_terms, expected_bounds_terms, expected_terms
+        )
         if actual_bounds_terms != expected_bounds_terms:
             findings.add(
                 "formula",
@@ -426,6 +476,8 @@ def validate_model_level(
                 f"{findings.severity_word('formula')} value.",
             )
         for symbol, term_name in expected_bounds_terms.items():
+            if symbol == "nsigma" and optional_bounds_nsigma:
+                continue
             if term_name == bounds_var.name:
                 continue
             term_entry = bounds_term_entries.get(symbol, {})

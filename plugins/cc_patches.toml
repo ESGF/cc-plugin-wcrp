@@ -1,0 +1,47 @@
+# Temporary fixes for compliance-checker's own checks (plugins/cc_patches.py).
+#
+# Applies to all WCRP plugins and to the compliance-checker "cf" suite
+# whenever cc-plugin-wcrp is installed.
+#
+# Per fix:
+#   enabled      apply the fix at all (true/false)
+#   min_version  first compliance-checker release the fix is applied to
+#   max_version  last compliance-checker release the fix is applied to
+# Both versions are inclusive and may be omitted for an open end.
+# Development builds count as newer than the release they start from, e.g.
+# 6.1.1.dev3 is outside a range ending at max_version = "6.1.0".
+#
+# tests/test_cc_patches.py fails if a fix is active for a release whose
+# upstream code was not reviewed or no longer shows the bug, or if a fix is
+# inactive for a release where upstream still shows the bug.
+
+[patches.geographic_region]
+# CF 6.1.1: CF1_6Check.check_geographic_region crashes for labeled axes with
+# several region names (e.g. the basin axis of hfbasin, htovgyre, sltovgyre),
+# does not remove NUL padding from fixed-width names, and uses an outdated
+# list of region names (missing e.g. atlantic_arctic_ocean); the fix uses the
+# CF standardized region list version 5.
+enabled = true
+min_version = "6.1.0"
+max_version = "6.1.0"
+
+[patches.cell_boundaries_interval]
+# CF 7.1: CF1_7Check.check_cell_boundaries_interval reads complete coordinate
+# and bounds arrays at once and runs out of memory for large (unstructured)
+# grids.
+enabled = true
+min_version = "6.1.0"
+max_version = "6.1.0"
+
+[patches.main_variable_vertical_positive]
+# CF 4.3: CF1_6Check.check_dimensional_vertical_coordinate treats a main data
+# variable with standard_name depth/height/altitude as a vertical coordinate
+# and requires a "positive" attribute (HIGH), which a data variable must not
+# have. Drops only that requirement, only for the variables listed here, only
+# if the variable is the file's variable_id and not used as a coordinate, and
+# only in files with all of the global attributes given below.
+enabled = true
+min_version = "6.1.0"
+max_version = "6.1.0"
+variables = ["depthsl"]
+global_attributes = { mip_era = "CMIP7" }

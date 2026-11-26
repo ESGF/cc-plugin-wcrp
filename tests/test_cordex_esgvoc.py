@@ -829,12 +829,8 @@ def test_cordex_drs_uses_project_templates(tmp_path, monkeypatch):
     with Dataset(tmp_path / "tas.nc", "w") as dataset:
         checker.check_DRS(dataset)
 
-    path001_delegated = checker._global_attributes_owning(
-        checker.get_severity(drs.attributes_vs_directory.severity)
-    )
-    path002_delegated = checker._global_attributes_owning(
-        checker.get_severity(drs.filename_vs_directory.severity)
-    )
+    path001_delegated = checker._global_attributes_owning()
+    path002_delegated = checker._global_attributes_owning()
     assert captured == [
         {
             "project_id": "cordex-cmip6",

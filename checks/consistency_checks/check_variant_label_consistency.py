@@ -19,7 +19,6 @@ import re
 
 from compliance_checker.base import TestCtx
 
-from checks.utils import severity_ordered
 
 _SELECTOR_OWNER_PRIORITY = {
     "check_variant_vs_realization_index": 0,
@@ -191,7 +190,7 @@ def check_variant_label_consistency_group(
     missing_attributes_delegated=(),
     attribute_severities=None,
 ):
-    """Run index comparisons with one severity-aware selector-error owner."""
+    """Run index comparisons with the first enabled selector-error owner."""
     if not configured_checks:
         return []
     results = []
@@ -201,26 +200,20 @@ def check_variant_label_consistency_group(
             configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
         ),
     )
-    owner_entry = severity_ordered(
-        configured_checks,
-        severity=lambda configured: configured[1],
-        priority=lambda configured: _SELECTOR_OWNER_PRIORITY.get(
-            configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
-        ),
-    )[0]
+    owner_entry = hierarchy[0]
     owner = owner_entry[0]
     delegated = set(missing_attributes_delegated)
     attribute_severities = attribute_severities or {}
 
-    def attribute_owns(name, consumer_severity):
+    def attribute_owns(name):
         if name in delegated:
             return True
         owner_severity = attribute_severities.get(name)
-        return owner_severity is not None and owner_severity >= consumer_severity
+        return owner_severity is not None
 
     _parsed, selector_error = _parsed_variant_indices(ds)
     if selector_error:
-        if attribute_owns("variant_label", owner_entry[1]):
+        if attribute_owns("variant_label"):
             return []
         return owner(
             ds,
@@ -247,9 +240,9 @@ def check_variant_label_consistency_group(
                 ds,
                 severity,
                 report_selector_error=(
-                    check is owner and not attribute_owns("variant_label", severity)
+                    check is owner and not attribute_owns("variant_label")
                 ),
-                report_missing=not attribute_owns(index_name, severity),
+                report_missing=not attribute_owns(index_name),
             )
         )
     return results

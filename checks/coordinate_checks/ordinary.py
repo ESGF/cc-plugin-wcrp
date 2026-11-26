@@ -38,6 +38,47 @@ def listed_coordinates(data_var) -> list[str]:
     return value.split() if isinstance(value, str) else []
 
 
+def _identity_fallbacks(entry: dict, kind: str) -> tuple[str, ...]:
+    """Return only result families which consume this coordinate definition."""
+    fallbacks = ["attributes", "missing_value_integrity"]
+    data_type = str(entry.get("data_type") or "")
+    bounds_name_recommendation = False
+
+    if kind == "standard_1d":
+        if data_type == "character":
+            fallbacks.append("missing_value_prohibited")
+        else:
+            fallbacks.append("direction")
+        if entry.get("valid_min") is not None or entry.get("valid_max") is not None:
+            fallbacks.append("valid_range")
+        if values(entry):
+            fallbacks.append("requested_values")
+        if entry.get("bounds_required") is True:
+            fallbacks.extend(("bounds", "bounds_name"))
+            bounds_name_recommendation = True
+        fallbacks.append("dimension_order")
+    elif kind == "scalar":
+        fallbacks.append("missing_value_prohibited")
+        if entry.get("valid_min") is not None or entry.get("valid_max") is not None:
+            fallbacks.append("valid_range")
+        if values(entry):
+            fallbacks.append("requested_values")
+        if entry.get("bounds_required") is True:
+            fallbacks.extend(("bounds", "bounds_name"))
+            bounds_name_recommendation = True
+        fallbacks.append("associations")
+    elif kind == "auxiliary":
+        fallbacks.extend(("missing_value_prohibited", "associations"))
+        if values(entry):
+            fallbacks.append("requested_values")
+
+    # Long-name and unprescribed-attribute advice is deliberately last.
+    fallbacks.append("recommendations")
+    if bounds_name_recommendation:
+        fallbacks.append("bounds_name_recommendations")
+    return tuple(dict.fromkeys(fallbacks))
+
+
 def validate_horizontal_coordinate_associations(
     findings,
     ds,
@@ -101,6 +142,8 @@ def validate_standard_1d(
                 "configured dependent coordinate checks could not be evaluated."
             ),
             issue=("missing_coordinate", name),
+            fallbacks=_identity_fallbacks(entry, "standard_1d"),
+            include_default_fallbacks=False,
         )
         return None
     var = ds.variables[name]
@@ -244,6 +287,8 @@ def validate_scalar(
                 "not be evaluated."
             ),
             issue=("missing_coordinate", name),
+            fallbacks=_identity_fallbacks(entry, "scalar"),
+            include_default_fallbacks=False,
         )
         return None
     var = ds.variables[name]
@@ -344,6 +389,8 @@ def validate_text_auxiliary(findings, ds, data_var, entry_id, entry):
                 "configured dependent coordinate checks could not be evaluated."
             ),
             issue=("missing_coordinate", name),
+            fallbacks=_identity_fallbacks(entry, "auxiliary"),
+            include_default_fallbacks=False,
         )
         return None
     var = ds.variables[name]
@@ -403,6 +450,8 @@ def validate_unstructured_latitude_longitude(
                 "checks may be incomplete."
             ),
             issue=("missing_dimension", dimension_name),
+            fallbacks=("associations", "attributes", "dimension_order"),
+            include_default_fallbacks=False,
         )
     if data_var is None:
         return

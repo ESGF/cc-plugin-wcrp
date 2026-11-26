@@ -11,7 +11,7 @@ dependencies:
   - cdo
   - python-cdo
   - pooch
-  - compliance-checker>=5.1.2
+  - compliance-checker==6.1.0
 # Fot testing
   - pytest
   - pytest-cov

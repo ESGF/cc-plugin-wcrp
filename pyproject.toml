@@ -19,7 +19,8 @@ authors = [
 maintainers = [{name = "Ayoub Nachite", email = "anachite@ipsl.fr"}]
 requires-python = ">=3.10"
 dependencies = [
-  "compliance-checker>=5.1.2",
+  "compliance-checker==6.1.0",  # see also plugins/cc_patches.toml
+  "packaging",
   "netCDF4",
   "cftime",
   "toml",

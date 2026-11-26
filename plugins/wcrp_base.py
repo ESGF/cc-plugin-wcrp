@@ -20,12 +20,20 @@ from checks.attribute_checks.check_global_attributes_esgvoc import (
     get_global_attribute_names,
     get_global_attribute_validator,
 )
-from checks.utils import infer_frequency, sanitize, severity_ordered
+from checks.coordinate_checks.consistency import (
+    coordinate_ids_for_summary,
+    dimension_metadata_for_summary,
+)
+from checks.utils import infer_frequency, sanitize
 
 # Compliance Checker 6 moved these helpers from compliance_checker.cfutil.
 if not hasattr(cfutil, "get_geophysical_variables"):
     from compliance_checker import cfutil
 
+# Temporary fixes for compliance-checker CF checks (see cc_patches).
+from plugins.cc_patches import apply_patches as _apply_cc_patches
+
+_apply_cc_patches()
 
 FORMULA_TERM_PATTERN = re.compile(r"(\w+)\s*:\s*([^\s]+)")
 
@@ -289,6 +297,11 @@ class WCRPBaseCheck(BaseCheck):
             if isinstance(value, str) and value in self.varname:
                 preferred.append(value)
         self.varname = preferred + [v for v in self.varname if v not in preferred]
+        # CF standard_name heuristics can mistake the main field (e.g. depthsl)
+        # for a coordinate. Prefer an explicitly selected, existing data field.
+        main = self._expected_data_variable_name(self.dataset)
+        if main in self.dataset.variables and main not in self.dataset.dimensions:
+            self.varname = [main] + [v for v in self.varname if v != main]
 
     def _load_project_config(self):
         """Loads the project-specific TOML configuration file using self.project_config_path."""
@@ -338,20 +351,17 @@ class WCRPBaseCheck(BaseCheck):
                 return self.get_severity(rule.severity)
         return None
 
-    def _global_attribute_owns(self, attribute_name, consumer_severity):
-        """Whether ATTR is an equal- or higher-severity prerequisite owner."""
+    def _global_attribute_owns(self, attribute_name):
+        """Whether the attribute's dedicated prerequisite owner is enabled."""
         attribute_severity = self._global_attribute_severity(attribute_name)
-        return (
-            attribute_severity is not None
-            and attribute_severity >= int(consumer_severity)
-        )
+        return attribute_severity is not None
 
-    def _global_attributes_owning(self, consumer_severity):
-        """Return attributes whose ATTR checks outrank one dependent check."""
+    def _global_attributes_owning(self):
+        """Return attributes handled by enabled dedicated ATTR checks."""
         return {
             name
             for name in self._enabled_global_attribute_names()
-            if self._global_attribute_owns(name, consumer_severity)
+            if self._global_attribute_owns(name)
         }
 
     def _expected_data_variable_name(self, ds):
@@ -381,22 +391,18 @@ class WCRPBaseCheck(BaseCheck):
         ]
         return max(severities, default=BaseCheck.HIGH)
 
-    def _variable_existence_owns(self, consumer_severity):
-        """Whether VAR001 is an equal- or higher-severity prerequisite owner."""
+    def _variable_existence_owns(self):
+        """Whether the dedicated VAR001 prerequisite owner is enabled."""
         variable = getattr(self.config, "variable", None) if self.config else None
         rule = variable.existence if variable is not None else None
-        return bool(
-            rule is not None
-            and self.get_severity(rule.severity) >= int(consumer_severity)
-        )
+        return rule is not None
 
-    def _variable_registry_owns(self, consumer_severity):
+    def _variable_registry_owns(self):
         """Whether an enabled variable rule owns registry lookup failures."""
         variable = getattr(self.config, "variable", None) if self.config else None
         rules = (variable.attributes or {}).values() if variable is not None else ()
         return any(
             rule.cv_source_term_key
-            and self.get_severity(rule.severity) >= int(consumer_severity)
             for rule in rules
         )
 
@@ -413,7 +419,6 @@ class WCRPBaseCheck(BaseCheck):
         if (
             variable is not None
             and variable.existence is not None
-            and self.get_severity(variable.existence.severity) >= int(severity)
         ):
             from checks.variable_checks.check_variable_existence import (
                 check_variable_existence,
@@ -491,14 +496,16 @@ class WCRPBaseCheck(BaseCheck):
                 required.add(str(rule.name.variable_name if rule.name else name))
         return required
 
-    def _coordinate_rule_enabled_for_axis(
-        self, axis, rule_name, minimum_severity=None
-    ):
-        """Whether a sufficiently severe rule applies to a catalogue axis."""
+    def _coordinate_rule_enabled_for_axis(self, axis, rule_name):
+        """Whether an enabled rule applies to this specific catalogue axis."""
+        return self._coordinate_rule_for_axis(axis, rule_name) is not None
+
+    def _coordinate_rule_for_axis(self, axis, rule_name):
+        """Find the configured rule for the requested catalogue axis, if any."""
         coordinates = getattr(self.config, "coordinates", None) if self.config else None
         catalog = getattr(self, "_coordinate_catalog", None)
         if coordinates is None or catalog is None:
-            return False
+            return None
 
         coordinate_names = set()
         for identifier in catalog.coordinate_ids:
@@ -515,22 +522,21 @@ class WCRPBaseCheck(BaseCheck):
                 continue
             if configured_rule is None:
                 continue
-            if minimum_severity is not None and self.get_severity(
-                configured_rule.severity
-            ) < int(minimum_severity):
-                continue
-            return True
-        return False
+            return configured_rule
+        # TIME002 uses the catalogue's actual T-axis name, while its policy
+        # lives under the conventional "time" configuration section. Other
+        # checks still need their configured variable to match the axis.
+        if axis == "T" and rule_name == "coverage" and coordinate_names:
+            time_rule = (coordinates.variables or {}).get("time")
+            return time_rule.coverage if time_rule is not None else None
+        return None
 
-    def _coordinate_registry_owns(self, family, consumer_severity):
-        """Whether one COORD family outranks a dependent prerequisite check."""
+    def _coordinate_registry_owns(self, family):
+        """Whether the dedicated COORD prerequisite family is enabled."""
         coordinates = getattr(self.config, "coordinates", None) if self.config else None
         registry = coordinates.registry if coordinates is not None else None
         rule = getattr(registry, family, None) if registry is not None else None
-        return bool(
-            rule is not None
-            and self.get_severity(rule.severity) >= int(consumer_severity)
-        )
+        return rule is not None
 
     def _drs_directory_structure_owner(self, drs):
         """Select one enabled owner for an unusable DRS directory structure."""
@@ -551,19 +557,13 @@ class WCRPBaseCheck(BaseCheck):
         ]
         if not candidates:
             return None
-        return severity_ordered(
-            candidates,
-            severity=lambda candidate: self.get_severity(candidate[1].severity),
-        )[0][0]
+        return candidates[0][0]
 
-    def _drs_rule_owns(self, rule_name, consumer_severity):
-        """Whether one DRS check outranks a dependent structural check."""
+    def _drs_rule_owns(self, rule_name):
+        """Whether the dedicated DRS prerequisite owner is enabled."""
         drs = getattr(self.config, "drs", None) if self.config else None
         rule = getattr(drs, rule_name, None) if drs is not None else None
-        return bool(
-            rule is not None
-            and self.get_severity(rule.severity) >= int(consumer_severity)
-        )
+        return rule is not None
 
     def _check_global_attributes(self, dataset):
         """Run ESGVoc validation, then TOML rules absent from ESGVoc."""
@@ -763,6 +763,9 @@ class WCRPBaseCheck(BaseCheck):
         ]
 
     def _initialize_coords_info(self):
+        main = self._expected_data_variable_name(self.dataset)
+        if main in self.dataset.dimensions:
+            main = None
         """Get information about the infile coordinates."""
         self.coords_redundant = {}
         self.bounds_redundant = {}
@@ -793,6 +796,8 @@ class WCRPBaseCheck(BaseCheck):
             ),
         }
         for key, candidates in coordinate_groups.items():
+            candidates = [name for name in candidates if name != main]
+            coordinate_groups[key] = candidates
             candidates = list(dict.fromkeys(candidates))
             if len(candidates) > 1:
                 self.coords_redundant[key] = candidates
@@ -835,6 +840,7 @@ class WCRPBaseCheck(BaseCheck):
                 coord_names.update(terms.values())
 
         coord_names.difference_update(self.bounds)
+        coord_names.discard(main)
         self.coords = [name for name in self.dataset.variables if name in coord_names]
 
         # Get the external variables
@@ -1050,6 +1056,12 @@ class WCRPBaseCheck(BaseCheck):
         var_dtypes = {
             name: str(var.dtype) for name, var in self.dataset.variables.items()
         }
+        coordinate_ids = coordinate_ids_for_summary(
+            self.dataset, getattr(self, "_coordinate_catalog", None), coord_checksums
+        )
+        dimension_ids, string_dimensions = dimension_metadata_for_summary(
+            self.dataset, coordinate_ids
+        )
         return {
             "global_attributes": file_attrs_req,
             "global_attributes_non_required": file_attrs_nreq,
@@ -1059,6 +1071,9 @@ class WCRPBaseCheck(BaseCheck):
             "variable_dtypes": var_dtypes,
             "dimensions": dims,
             "coordinates": coord_checksums,
+            "coordinate_ids": coordinate_ids,
+            "dimension_ids": dimension_ids,
+            "string_length_dimensions": string_dimensions,
             "time_info": time_info,
         }
 

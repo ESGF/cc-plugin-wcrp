@@ -183,7 +183,7 @@ def test_long_hourly_axis_does_not_accumulate_epoch_cancellation_error(tmp_path)
         assert messages(check_time_squareness(dataset)) == []
 
 
-def test_climatology_uses_multi_year_bounds_midpoints(tmp_path):
+def test_climatology_uses_representative_month_midpoints(tmp_path):
     path = tmp_path / "tas_Amon_model_exp_r1i1p1f1_gn_200001-210012.nc"
     bounds = np.asarray([[0.0, 36030.0], [30.0, 36060.0]])
     with make_time_file(
@@ -194,9 +194,9 @@ def test_climatology_uses_multi_year_bounds_midpoints(tmp_path):
         bounds=bounds,
         climatology=True,
     ) as dataset:
-        # An ordinary monthly reconstruction would expect [15, 45]. TIME001
-        # must instead accept the centers of the multi-year climatology bounds.
-        assert messages(check_time_squareness(dataset)) == []
+        # The representative year is free; these happen to fall in the correct
+        # months as well as at the envelope midpoint for this 360-day fixture.
+        assert messages(check_time_squareness(dataset, climatology_type="monthly_climatology")) == []
 
 
 def test_climatology_reports_non_midpoint_time(tmp_path):
@@ -209,8 +209,8 @@ def test_climatology_reports_non_midpoint_time(tmp_path):
         bounds=[[0.0, 36030.0], [30.0, 36060.0]],
         climatology=True,
     ) as dataset:
-        found = messages(check_time_squareness(dataset))
-    assert any("midpoint of its climatology interval" in message for message in found)
+        found = messages(check_time_squareness(dataset, climatology_type="monthly_climatology"))
+    assert any("midpoint of its monthly climatology interval" in message for message in found)
 
 
 def test_time001_reports_count_numeric_and_decoded_first_incident(tmp_path):

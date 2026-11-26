@@ -26,7 +26,6 @@ from checks.utils import (
     _as_list,
     _lower_str_list,
     resolve_experiment_term,
-    severity_ordered,
 )
 
 _SELECTOR_OWNER_PRIORITY = {
@@ -274,7 +273,7 @@ def check_experiment_id_vs_sub_experiment_id(
 def check_experiment_consistency_group(
     ds, project_id, configured_checks, *, selector_error_delegated=False
 ):
-    """Run comparisons with one severity-aware selector-error owner."""
+    """Run comparisons with the first enabled selector-error owner."""
     if not configured_checks:
         return []
     results = []
@@ -284,13 +283,7 @@ def check_experiment_consistency_group(
             configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
         ),
     )
-    owner = severity_ordered(
-        configured_checks,
-        severity=lambda configured: configured[1],
-        priority=lambda configured: _SELECTOR_OWNER_PRIORITY.get(
-            configured[0].__name__, len(_SELECTOR_OWNER_PRIORITY)
-        ),
-    )[0][0]
+    owner = hierarchy[0][0]
     for check, severity, kwargs in hierarchy:
         results.extend(
             check(

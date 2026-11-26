@@ -18,6 +18,7 @@ from checks.coordinate_checks.esgvoc import (
     require_supported_version,
 )
 from checks.coordinate_checks.grid import (
+    _reduced_grid_guidance,
     _horizontal_label_for_grid_guidance,
     check_grid_cell_count,
     check_grid_label_recommendation,
@@ -535,6 +536,9 @@ def test_default_grid_topology_mapping_is_loaded_from_toml():
         ("hm", "sh"): "g012",
         ("hs", "glb"): "g013",
         ("ht", "glb"): "g014",
+        ("hm", "30S-90S"): "g015",
+        ("hm", "grl"): "g016",
+        ("hm", "ata"): "g017",
     }
     assert config.accepted_grid_labels_by_horizontal_label_and_region == {}
     assert config.recommended_grid_types_by_horizontal_label == {
@@ -2234,6 +2238,93 @@ def test_text_auxiliary_requires_sector_but_accepts_extra_unordered_labels(nc):
     )
 
 
+@pytest.mark.parametrize("padding", [" ", "\0"])
+@pytest.mark.parametrize("labels,missing", [
+    (["indian", "atlantic", "pacific"], False),
+    (["indian", "atlantic", "atlantic"], False),
+    (["indian", "pacific", "arctic"], True),
+])
+def test_text_auxiliary_padding_and_required_label_membership(nc, padding, labels, missing):
+    nc.createDimension("basin", 3)
+    nc.createDimension("strlen", 8)
+    sector = nc.createVariable("sector", "S1", ("basin", "strlen"))
+    sector[:] = np.asarray([list(label.ljust(8, padding)) for label in labels], dtype="S1")
+    sector.standard_name = "region"
+    nc.createVariable("ta", "f4", ("basin",)).coordinates = "sector"
+    entry = coordinate("basin", "auxiliary", "basin", data_type="character",
+                       cf_standard_name="region", coordinate_values=["atlantic", "indian"])
+    results = check_coordinate_catalog(nc, catalog({"basin": entry}), severities=FAMILIES)
+    found = messages(results)
+    if missing:
+        assert len(found) == 1
+        assert "missing requested label(s) ['atlantic']" in found[0]
+    else:
+        assert found == []
+
+
+@pytest.mark.parametrize("dimensions,dtype,family", [
+    (("strlen", "basin"), "S1", "COORD001"),
+    (("basin",), "S1", "COORD001"),
+    (("basin", "strlen"), "f8", "COORD001"),
+    (("basin", "text_length"), "S1", "COORD004"),
+])
+def test_text_auxiliary_structure_and_string_dimension(nc, dimensions, dtype, family):
+    for dim, size in (("basin", 2), ("strlen", 8), ("text_length", 8)):
+        nc.createDimension(dim, size)
+    nc.createVariable("sector", dtype, dimensions)
+    nc.createVariable("ta", "f4", ("basin",)).coordinates = "sector"
+    entry = coordinate("basin", "auxiliary", "basin", data_type="character")
+    results = check_coordinate_catalog(nc, catalog({"basin": entry}), severities=FAMILIES)
+    assert any(family in result.name and result.msgs for result in results)
+
+
+@pytest.mark.parametrize("role", ["latitude", "longitude"])
+@pytest.mark.parametrize("problem", [None, "wrong-dimension", "scalar", "two-dimensional", "wrong-units", "missing-variable"])
+def test_site_pair_reports_individual_coordinate_problems(nc, role, problem):
+    # Deliberately use neither 'site' nor conventional lat/lon variable names.
+    nc.createDimension("station", 2)
+    nc.createDimension("other", 2)
+    data = nc.createVariable("ta", "f4", ("station",))
+    data.coordinates = "northing easting"
+    for current, name, units in (("latitude", "northing", "degrees_north"),
+                                  ("longitude", "easting", "degrees_east")):
+        affected = current == role
+        if affected and problem == "missing-variable":
+            continue
+        dimensions = ("station",)
+        if affected:
+            dimensions = {"wrong-dimension": ("other",), "scalar": (),
+                          "two-dimensional": ("station", "other")}.get(problem, dimensions)
+        var = nc.createVariable(name, "f8", dimensions)
+        var[...] = 10.
+        var.standard_name = current
+        var.units = "m" if affected and problem == "wrong-units" else units
+    entry = coordinate("site", "site", "station", data_type="integer")
+    results = check_coordinate_catalog(
+        nc, catalog({"site": entry}), severities=FAMILIES,
+        unstructured_latitude_longitude_for=("site",),
+    )
+    found = messages(results)
+    if problem is None:
+        assert found == []
+        return
+    assert len(found) == 1, found
+    assert role in found[0]
+    assert_coordinate_families_pass(results, "COORD005", "COORD006", "COORD008")
+
+
+def test_missing_text_auxiliary_reports_one_prerequisite(nc):
+    nc.createDimension("basin", 2)
+    nc.createVariable("ta", "f4", ("basin",)).coordinates = "sector"
+    entry = coordinate("basin", "auxiliary", "basin", data_type="character",
+                       coordinate_values=["atlantic", "indian"])
+    results = check_coordinate_catalog(nc, catalog({"basin": entry}), severities=FAMILIES)
+    found = messages(results)
+    assert len(found) == 1
+    assert "'sector'" in found[0] and "absent" in found[0]
+    assert_coordinate_families_pass(results, "COORD007", "COORD010")
+
+
 def test_site_requires_linked_latitude_and_longitude(nc):
     nc.createDimension("site", 2)
     ta = nc.createVariable("ta", "f4", ("site",))
@@ -2743,8 +2834,9 @@ def test_g190_hm_recommends_canonical_registered_global_mean_grid(nc):
     assert len(failures) == 1
     assert failures[0].weight == BaseCheck.MEDIUM
     assert failures[0].msgs == [
-        "The file uses grid_label='g190', but for horizontal_label='hm' and "
-        "region='glb' it is recommended to use the registered grid_label='g010'."
+        "The file uses grid_label='g190' for horizontal_label='hm' and "
+        "region='glb'. Reusing the parent grid_label is permitted for this reduced output. "
+        "It is, however, recommended to use the registered grid_label='g010'."
     ]
 
 
@@ -2828,6 +2920,54 @@ def test_registered_grid_region_accepts_matching_or_unavailable_values(
     assert not result.msgs
 
 
+@pytest.mark.parametrize("label,dimensions,reduced", [
+    ("hm", ("time",), True),
+    ("hy", ("latitude", "time"), True),
+    ("hyb", ("latitude", "basin", "time"), True),
+    ("ht", ("gridlatitude", "basin", "time"), True),
+    ("hs", ("site", "time"), True),
+    ("ht", ("oline", "time"), True),
+    ("hxy", ("longitude", "latitude", "time"), False),
+])
+@pytest.mark.parametrize("severity,word", [(BaseCheck.MEDIUM, "recommended"), (BaseCheck.HIGH, "required"), (BaseCheck.LOW, "alternative")])
+def test_grid_region_guidance_acknowledges_parent_labels(nc, label, dimensions, reduced, severity, word):
+    nc.region = "nh"
+    nc.horizontal_label = label
+    config = load_grid_topology_config(
+        Path(__file__).parents[1] / "plugins/cmip7/config/wcrp/mappings/grid_topology.toml"
+    )
+    findings = Findings({"grid_region_consistency": severity})
+    check_grid_region_consistency(
+        findings, nc, {"id": "parent", "region": {"drs_name": "glb"}},
+        catalog=catalog({}, dimensions=dimensions), grid_topology_config=config,
+    )
+    result = findings.results()[0]
+    assert result.weight == severity
+    assert len(result.msgs) == 1
+    assert ("Reusing the parent grid_label is permitted" in result.msgs[0]) is (reduced and severity != BaseCheck.HIGH)
+    if reduced:
+        assert word in result.msgs[0]
+    else:
+        assert "make the region and grid_label selections consistent" in result.msgs[0]
+
+
+@pytest.mark.parametrize("family,action", [
+    ("grid_label_recommendation", "use the registered grid_label='g010'"),
+    ("grid_label_recommendation", "register and/or use a grid_label with grid_type='basin_by_latitude'"),
+    ("grid_label_recommendation", "register and/or use a grid_label with grid_type='regular_latitude_longitude'"),
+    ("grid_cell_count_consistency", "register or select a separate grid_label describing the reduced output"),
+    ("grid_region_consistency", "register or select a grid_label describing the output region"),
+])
+@pytest.mark.parametrize("severity", [BaseCheck.HIGH, BaseCheck.MEDIUM, BaseCheck.LOW])
+def test_reduced_grid_guidance_respects_each_result_severity(family, action, severity):
+    message = _reduced_grid_guidance(Findings({family: severity}), family, action)
+    assert action in message
+    assert ("permitted" in message) is (severity != BaseCheck.HIGH)
+    assert ("required" in message) is (severity == BaseCheck.HIGH)
+    assert ("however, recommended" in message) is (severity == BaseCheck.MEDIUM)
+    assert ("An alternative" in message) is (severity == BaseCheck.LOW)
+
+
 def test_registered_grid_region_rejects_conflicting_file_value(nc):
     nc.region = "nh"
     findings = Findings({"grid_region_consistency": BaseCheck.MEDIUM})
@@ -2871,7 +3011,7 @@ def _cell_count_results(
     )
 
 
-def test_missing_registered_grid_cell_count_uses_consistency_severity(nc):
+def test_missing_registered_grid_cell_count_uses_availability_severity(nc):
     _rectilinear_cell_count_file(nc)
 
     results = _cell_count_results(nc, {"id": "g100", "n_cells": None})
@@ -2883,10 +3023,11 @@ def test_missing_registered_grid_cell_count_uses_consistency_severity(nc):
         result for result in results if result.name.endswith("grid cell count")
     )
     assert availability.weight == BaseCheck.LOW
-    assert availability.value == (1, 1)
+    assert availability.value == (0, 1)
+    assert "does not define n_cells" in availability.msgs[0]
     assert consistency.weight == BaseCheck.MEDIUM
-    assert consistency.value == (0, 1)
-    assert "does not define n_cells" in consistency.msgs[0]
+    assert consistency.value == (1, 1)
+    assert consistency.msgs == []
 
 
 @pytest.mark.parametrize(("registered", "passes"), [(6, True), (12, False)])
@@ -2940,6 +3081,9 @@ def test_grid_cell_count_guidance_uses_configured_horizontal_layout(
     message = consistency.msgs[0]
     assert "register and/or use an appropriate grid_label" in message
     assert ("For reduced spatial output" in message) is reduced
+    assert ("Reusing the parent grid_label is permitted" in message) is reduced
+    if reduced:
+        assert "recommended to register or select a separate grid_label describing the reduced output" in message
 
 
 @pytest.mark.parametrize(
@@ -2975,6 +3119,7 @@ def test_special_layout_recommends_grid_label_without_cell_count(
     result = findings.results()[0]
     assert result.value == (0, 1)
     assert f"registered grid_label='{expected}'" in result.msgs[0]
+    assert "Reusing the parent grid_label is permitted" in result.msgs[0]
 
 
 def test_configured_alternative_grid_label_suppresses_canonical_recommendation(
@@ -3156,6 +3301,7 @@ def test_basin_layout_recommends_basin_by_latitude_grid_type(
     assert "registered grid_type='regular_latitude_longitude'" in result.msgs[0]
     assert f"horizontal_label='{expected_label}'" in result.msgs[0]
     assert "grid_type='basin_by_latitude'" in result.msgs[0]
+    assert "Reusing the parent grid_label is permitted for this reduced output." in result.msgs[0]
     assert "g014" not in result.msgs[0]
 
 
@@ -3191,6 +3337,7 @@ def test_zonal_mean_recommends_regular_latitude_longitude_grid_type(
     if expected_failures:
         assert "horizontal_label='hy'" in result.msgs[0]
         assert "grid_type='regular_latitude_longitude'" in result.msgs[0]
+        assert "Reusing the parent grid_label is permitted" in result.msgs[0]
     else:
         assert not result.msgs
 
@@ -3707,6 +3854,38 @@ def test_basin_by_latitude_cell_count_reports_neither_permitted_interpretation(n
         "either 4 latitude-axis cells or 12 latitude-by-basin/sector positions"
         in consistency.msgs[0]
     )
+
+
+def test_basin_by_latitude_missing_cell_count_remains_low_availability(nc):
+    cv, data_var, config = _basin_by_latitude_cell_count_case(nc, "latitude")
+    findings = Findings(
+        {
+            "grid_cell_count_availability": BaseCheck.LOW,
+            "grid_cell_count_consistency": BaseCheck.MEDIUM,
+        }
+    )
+
+    check_grid_cell_count(
+        findings,
+        nc,
+        cv,
+        data_var,
+        topology=None,
+        registered_grid_metadata={
+            "id": "g262",
+            "grid_type": {"id": "basin_by_latitude"},
+            "n_cells": None,
+        },
+        grid_topology_config=config,
+        allow_standard_name_fallback=False,
+    )
+
+    availability, consistency = findings.results()
+    assert availability.weight == BaseCheck.LOW
+    assert availability.value == (0, 1)
+    assert "Registered grid 'g262' does not define n_cells" in availability.msgs[0]
+    assert consistency.weight == BaseCheck.MEDIUM
+    assert consistency.value == (1, 1)
 
 
 @pytest.mark.parametrize("axis_identifier", ["latitude", "gridlatitude"])

@@ -19,9 +19,6 @@ from checks.coordinate_checks.utils import (
     values,
 )
 from checks.utils import (
-    severity_ordered,
-)
-from checks.utils import (
     severity_word as configured_severity_word,
 )
 
@@ -33,43 +30,28 @@ _LONGITUDE_PERIOD = 360.0
 # owner's semantic checks: it only prevents an enabled dependent check from
 # disappearing without explaining why it could not run.
 PREREQUISITE_FALLBACKS = {
-    "identity": (
-        "attributes",
-        "missing_value_integrity",
-        "missing_value_prohibited",
-        "missing_value_attributes",
-        "recommendations",
-        "direction",
-        "valid_range",
-        "requested_values",
-        "bounds",
-        "bounds_name",
-        "bounds_name_recommendations",
-        "associations",
-        "formula",
-        "dimension_order",
-    ),
     "grid": (
+        "grid_geometry_missing_values",
         "missing_value_integrity",
         "missing_value_prohibited",
         "missing_value_attributes",
-        "grid_geometry_missing_values",
+        "attributes",
+        "direction",
         "grid_latitude_valid_range",
         "grid_longitude_valid_range",
         "grid_longitude_single_cycle",
-        "attributes",
-        "recommendations",
-        "direction",
         "valid_range",
-        "requested_values",
         "bounds",
         "bounds_name",
-        "bounds_name_recommendations",
         "associations",
-        "formula",
         "dimension_order",
+        "recommendations",
+        "bounds_name_recommendations",
     ),
 }
+
+
+from checks.units import exponent_spelling_severity, exponent_spelling_message
 
 
 class Findings:
@@ -84,8 +66,10 @@ class Findings:
         climatology_bounds_name: str = "climatology_bnds",
         time_bounds_delegated: bool = False,
         missing_value_attribute_policy=None,
+        unit_exponent_policy=None,
     ):
         self.severities = severities
+        self.unit_exponent_policy = unit_exponent_policy
         self.messages: dict[str, list[str]] = {key: [] for key in severities}
         self.bounds_dimension_name = bounds_dimension_name
         self.vertices_dimension_name = vertices_dimension_name
@@ -106,22 +90,25 @@ class Findings:
         *,
         issue: object | None = None,
         fallbacks=(),
+        include_default_fallbacks: bool = True,
     ) -> str | None:
         """Report one unusable prerequisite through the best enabled owner.
 
-        The highest configured severity wins.  The hard-coded hierarchy is a
-        stable tie-breaker.  ``issue`` deduplicates a shared root cause when
-        several dependent validators encounter it.
+        The first enabled family in the declared hierarchy owns the finding,
+        at its own configured severity. Disabled owners do not transfer severity.
+        ``issue`` deduplicates a shared root cause when several dependent
+        validators encounter it.
         """
-        candidates = (owner, *fallbacks, *PREREQUISITE_FALLBACKS.get(owner, ()))
+        defaults = (
+            PREREQUISITE_FALLBACKS.get(owner, ())
+            if include_default_fallbacks
+            else ()
+        )
+        candidates = (owner, *fallbacks, *defaults)
         enabled = list(
             dict.fromkeys(name for name in candidates if name in self.messages)
         )
-        ordered = severity_ordered(
-            enabled,
-            severity=lambda name: self.severities[name],
-        )
-        family = ordered[0] if ordered else None
+        family = enabled[0] if enabled else None
         if family is None:
             return None
         rendered = message(family) if callable(message) else message
@@ -137,11 +124,7 @@ class Findings:
         enabled = list(
             dict.fromkeys(name for name in families if name in self.messages)
         )
-        ordered = severity_ordered(
-            enabled,
-            severity=lambda name: self.severities[name],
-        )
-        family = ordered[0] if ordered else None
+        family = enabled[0] if enabled else None
         if family is None or issue in self._reported_prerequisites:
             return family
         self._reported_prerequisites.add(issue)
@@ -168,6 +151,7 @@ class Findings:
             "identity": "[COORD001] Coordinate identity and structure",
             "dimension_order": "[COORD002] Data-variable coordinate order",
             "attributes": "[COORD003] Coordinate metadata",
+            "unit_exponent_spelling": "[COORD003] Coordinate units exponent spelling",
             "missing_value_attributes": (
                 "[COORD003] Coordinate missing-value attributes"
             ),
@@ -532,7 +516,14 @@ def check_attributes(
             actual_units,
             expected_units,
             qualifier=findings.severity_word("attributes"),
+            normalize_exponents=exponent_spelling_severity(findings.unit_exponent_policy) is not None,
         )
+        if matches and actual_units != expected_units and "?" not in expected_units and "attributes" in findings.severities:
+            family = "unit_exponent_spelling"
+            findings.severities = dict(findings.severities)
+            findings.severities[family] = exponent_spelling_severity(findings.unit_exponent_policy)
+            findings.messages.setdefault(family, [])
+            findings.add(family, f"'{name}': {exponent_spelling_message(actual_units, expected_units)}")
         if not matches:
             findings.add("attributes", f"'{name}' {detail}.")
     else:
@@ -666,9 +657,12 @@ def _unwrap_longitude_pairs(
         references = coordinates.reshape(-1, 1)
     else:
         references = pairs[:, :1]
-    offsets = (pairs - references + 0.5 * _LONGITUDE_PERIOD) % _LONGITUDE_PERIOD
-    offsets -= 0.5 * _LONGITUDE_PERIOD
-    unwrapped = references + offsets
+    cycles = np.floor((pairs - references + 0.5 * _LONGITUDE_PERIOD) / _LONGITUDE_PERIOD)
+    # If necessary, shift the value to the longitude range of the parent value
+    # (i.e. the value of the grid cell center). Also, shift only by whole cycles.
+    # If no shift is required, leave the values untouched to not introduce rounding
+    # errors.
+    unwrapped = pairs - cycles * _LONGITUDE_PERIOD
     raw_spans = pairs[:, 1] - pairs[:, 0]
     full_cycle = (
         np.abs(np.abs(raw_spans) - _LONGITUDE_PERIOD)
@@ -1080,9 +1074,34 @@ def check_bounds(
         if pairs.shape[0] > 1:
             interval_low = lower
             interval_high = upper
-            overlap = np.maximum(interval_low[:-1], interval_low[1:]) < np.minimum(
-                interval_high[:-1], interval_high[1:]
+            overlap_width = np.minimum(interval_high[:-1], interval_high[1:]) - np.maximum(
+                interval_low[:-1], interval_low[1:]
             )
+            allowance = np.zeros_like(overlap_width)
+            if _is_longitude(coord_var, entry):
+                # Bounds may be shifted by whole multiples of 360 degrees to place them
+                # around their parent coordinate. This may introduce rounding errors.
+                # Therefore we have to allow a minimal numerical slack when testing for an overlap of
+                # bounds. The numerical allowance is set to two float64 rounding steps per
+                # shifted bound, using the largest magnitude of the original bound, the
+                # shift, or the result. This also covers rounding when the result is near
+                # zero. Unshifted bounds receive no such allowance.
+                scale = np.maximum.reduce((
+                    np.abs(pairs), np.abs(comparison_pairs),
+                    np.abs(comparison_pairs - pairs),
+                ))
+                errors = np.where(
+                    comparison_pairs != pairs, 2 * np.spacing(scale), 0.0
+                )
+                forward = comparison_pairs[:, 0] <= comparison_pairs[:, 1]
+                low_error = np.where(forward, errors[:, 0], errors[:, 1])
+                high_error = np.where(forward, errors[:, 1], errors[:, 0])
+                allowance = np.where(
+                    interval_low[:-1] >= interval_low[1:], low_error[:-1], low_error[1:]
+                ) + np.where(
+                    interval_high[:-1] <= interval_high[1:], high_error[:-1], high_error[1:]
+                )
+            overlap = overlap_width > allowance
             if np.any(overlap):
                 findings.add(
                     "bounds", f"Adjacent cells in '{declared}' have overlapping bounds."
