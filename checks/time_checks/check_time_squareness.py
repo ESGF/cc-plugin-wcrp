@@ -288,7 +288,19 @@ def _check_declared_bounds_midpoints(
         usable &= np.isfinite(expected)
     rounded_actual = _round(actual, NDECIMALS)
     rounded_expected = _round(expected, NDECIMALS)
-    bad = np.where(usable & (rounded_actual != rounded_expected))[0]
+    midpoint_matches = rounded_actual == rounded_expected
+    if climatology_type == "monthly_climatology":
+        # CF requires a representative climatological timestamp rather than a
+        # particular midpoint algorithm. A whole-envelope midpoint is also
+        # representative when it remains in the contributing month; reject it
+        # when the multi-year span places it in another part of the year.
+        midpoint_matches |= _monthly_envelope_midpoint_matches(
+            actual,
+            bounds,
+            time_var.units,
+            getattr(time_var, "calendar", "standard"),
+        )
+    bad = np.where(usable & ~midpoint_matches)[0]
     if climatology_type:
         bad = np.union1d(
             bad, np.where(usable & ((actual < bounds[:, 0]) | (actual > bounds[:, 1])))[0]
@@ -367,6 +379,27 @@ def _climatology_midpoints(actual, bounds, units, calendar, kind, ctx):
             f"Reason: {reason}. Midpoint verification was skipped for these intervals."
         )
     return np.asarray(result)
+
+
+def _monthly_envelope_midpoint_matches(actual, bounds, units, calendar):
+    """Accept an envelope midpoint only if it still represents the requested month."""
+    envelope_midpoints = np.mean(bounds, axis=1)
+    numeric_matches = (
+        _round(actual, NDECIMALS) == _round(envelope_midpoints, NDECIMALS)
+    )
+    result = np.zeros(len(actual), dtype=bool)
+    for index in np.flatnonzero(numeric_matches):
+        try:
+            month = cftime.num2date(
+                envelope_midpoints[index], units=units, calendar=calendar
+            ).month
+            required_month = cftime.num2date(
+                bounds[index, 0], units=units, calendar=calendar
+            ).month
+        except (ValueError, OverflowError, TypeError):
+            continue
+        result[index] = month == required_month
+    return result
 
 
 def _contributing_midpoints(actual, bounds, units, calendar, kind):

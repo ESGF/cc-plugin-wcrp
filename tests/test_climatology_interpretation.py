@@ -227,10 +227,80 @@ def test_monthly_climatology_representative_year(tmp_path, calendar, year):
             expected_is_climatology=True, climatology_type="monthly_climatology"
         )
         assert not messages(check_time_squareness(ds, **options))
-        # The old whole-envelope midpoint must fail, including the reported
-        # January example whose envelope midpoint lies in July.
+        # An envelope midpoint must fail when the multi-year span moves it
+        # outside the contributing month, as happens here for January.
         ds.variables["time"][:] = bounds.mean(axis=1)
         assert messages(check_time_squareness(ds, **options))
+
+
+@pytest.mark.parametrize("calendar", CALENDARS)
+def test_monthly_climatology_accepts_representative_envelope_midpoint(
+    tmp_path, calendar
+):
+    """An envelope midpoint is valid when it remains in the contributing month."""
+    units = "days since 1850-01-01"
+    date = lambda year, month: cftime.datetime(
+        year, month, 1, calendar=calendar
+    )
+    next_month = lambda year, month: date(year + (month == 12), month % 12 + 1)
+    bounds = np.asarray(
+        [
+            cftime.date2num(
+                [date(1850, month), next_month(1954, month)], units, calendar
+            )
+            for month in range(1, 13)
+        ]
+    )
+    times = bounds.mean(axis=1)
+    with make_time_file(
+        tmp_path / "pfull_185001-195412.nc",
+        frequency="mon",
+        table_id="Amon",
+        times=times,
+        bounds=bounds,
+        climatology=True,
+    ) as ds:
+        ds.variables["time"].units = units
+        ds.variables["time"].calendar = calendar
+        assert not messages(
+            check_time_squareness(
+                ds,
+                expected_is_climatology=True,
+                climatology_type="monthly_climatology",
+            )
+        )
+
+
+@pytest.mark.parametrize("calendar", CALENDARS)
+def test_monthly_climatology_rejects_envelope_midpoint_in_wrong_month(
+    tmp_path, calendar
+):
+    """A multi-year envelope midpoint must still represent the contributing month."""
+    units = "days since 1850-01-01"
+    date = lambda year, month: cftime.datetime(
+        year, month, 1, calendar=calendar
+    )
+    bounds = np.asarray(
+        [cftime.date2num([date(1850, 1), date(1859, 2)], units, calendar)]
+    )
+    with make_time_file(
+        tmp_path / "pfull_185001-185812.nc",
+        frequency="mon",
+        table_id="Amon",
+        times=bounds.mean(axis=1),
+        bounds=bounds,
+        climatology=True,
+    ) as ds:
+        ds.variables["time"].units = units
+        ds.variables["time"].calendar = calendar
+        found = messages(
+            check_time_squareness(
+                ds,
+                expected_is_climatology=True,
+                climatology_type="monthly_climatology",
+            )
+        )
+        assert any("does not match the midpoint" in message for message in found)
 
 
 @pytest.mark.parametrize("calendar", CALENDARS)
